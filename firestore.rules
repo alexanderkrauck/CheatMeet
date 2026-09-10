@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owns(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+    match /users/{userId}/reports/{reportId} {
+      allow read, delete: if owns(userId);
+      allow create, update: if owns(userId)
+        && request.resource.data.id == reportId
+        && request.resource.data.title is string
+        && request.resource.data.date is string
+        && request.resource.data.get('summary', '') is string
+        && request.resource.data.get('transcription', '') is string
+        && request.resource.data.get('todos', []) is list
+        && request.resource.data.get('takeaways', []) is list;
+    }
+    match /users/{userId}/settings/preferences {
+      allow read, delete: if owns(userId);
+      allow create, update: if owns(userId)
+        && request.resource.data.keys().hasOnly(['summaryPrompt'])
+        && request.resource.data.summaryPrompt is string;
+    }
+    match /users/{userId}/settings/drive {
+      allow read, delete: if owns(userId);
+      allow create, update: if owns(userId)
+        && request.resource.data.keys().hasOnly(['folder'])
+        && request.resource.data.folder.keys().hasOnly(['id', 'name'])
+        && request.resource.data.folder.id is string
+        && request.resource.data.folder.name is string;
+    }
+    // Deny every other collection, including the original unauthenticated layout.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

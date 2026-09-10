@@ -1,0 +1,111 @@
+name: Checks
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  promotion-policy:
+    name: promotion-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Require a tested development commit for main
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (pr.head.ref !== 'development' || pr.head.repo?.full_name !== context.payload.repository.full_name) {
+              core.setFailed('Only this repository’s development branch can be promoted to main. Open your work against development first.');
+              return;
+            }
+
+            // Validate the source commit itself, not this PR’s synthetic merge
+            // commit or an older green run. Push runs take no part in this gate,
+            // so waiting for development cannot create a dependency cycle.
+            for (let attempt = 0; attempt <= 30; attempt++) {
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                ...context.repo,
+                workflow_id: 'ci.yml',
+                branch: 'development',
+                event: 'push',
+                head_sha: pr.head.sha,
+                per_page: 100,
+              });
+              const runs = data.workflow_runs.filter(run =>
+                run.head_sha === pr.head.sha &&
+                run.head_branch === 'development' &&
+                run.event === 'push' &&
+                run.id !== context.runId
+              ).sort((a, b) => b.id - a.id);
+              const run = runs[0];
+              if (run?.status === 'completed') {
+                if (run.conclusion === 'success') {
+                  core.info(`Development checks passed for ${pr.head.sha}: ${run.html_url}`);
+                  return;
+                }
+                core.setFailed(`Development checks must succeed before promotion. Latest run: ${run.html_url} (${run.conclusion}). Fix or rerun those checks, then rerun this policy check.`);
+                return;
+              }
+              if (attempt < 30) {
+                core.info(`Waiting for development push checks on ${pr.head.sha} (${attempt + 1}/30)…`);
+                await new Promise(resolve => setTimeout(resolve, 10000));
+              }
+            }
+            core.setFailed('No successful development push check completed for this exact commit within five minutes. Wait for Checks on development, then rerun this policy check.');
+      - name: No promotion gate needed for this event
+        if: github.event_name != 'pull_request' || github.base_ref != 'main'
+        run: echo "Promotion policy applies only to pull requests targeting main."
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        installer: [npm, bun]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.installer == 'bun'
+        with:
+          bun-version: 1.3.10
+      - run: npm ci
+        if: matrix.installer == 'npm'
+      - run: bun install --frozen-lockfile
+        if: matrix.installer == 'bun'
+      - run: npm run lint
+      - run: npm test
+      - run: npm run test:pwa
+      - run: git diff --exit-code -- package.json package-lock.json bun.lock
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify safe Cloud Run candidate configuration
+        run: python3 -m unittest discover -s tests -p 'test_deploy_config.py'
+      - name: Build and smoke-test the production container
+        run: |
+          docker build --tag baudoku:check .
+          docker run --detach --name baudoku-check -p 8080:8080 -e PORT=8080 -e GEMINI_API_KEY=ci-smoke-test baudoku:check
+          trap 'docker rm -f baudoku-check' EXIT
+          node scripts/smoke-deployment.mjs http://localhost:8080
+  deploy:
+    needs: [verify, promotion-policy, container]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    uses: ./.github/workflows/deploy.yml

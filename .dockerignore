@@ -1,0 +1,8 @@
+.git
+node_modules
+dist
+output
+.playwright-cli
+.env*
+gha-creds-*.json
+*.log

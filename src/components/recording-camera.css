@@ -1,0 +1,161 @@
+.walk-camera-view {
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: #14291e;
+  color: white;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.walk-camera-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+}
+.walk-camera-header span {
+  font-size: 9px;
+  letter-spacing: 1.7px;
+  color: #b7c7b3;
+}
+.walk-camera-header h2 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 2px 0 0;
+}
+.walk-camera-header button {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 50%;
+  background: #2b4133;
+  color: white;
+}
+.walk-camera-preview {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: #09160f;
+  overflow: hidden;
+}
+.walk-camera-preview video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+.walk-camera-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 14px;
+}
+.walk-camera-error {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  margin: auto;
+  max-width: 480px;
+  background: #fff6e9;
+  color: #704422;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 13px;
+}
+.walk-camera-controls {
+  flex-shrink: 0;
+  padding: 10px 18px 16px;
+}
+.walk-camera-controls > p {
+  text-align: center;
+  font-size: 12px;
+  color: #c2cfbb;
+  margin: 0 0 12px;
+}
+.walk-camera-controls > div {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+}
+.walk-camera-library,
+.walk-camera-balance {
+  width: 76px;
+  flex-shrink: 0;
+}
+.walk-camera-library {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  color: #e4ecd9;
+  background: transparent;
+  font-size: 10px;
+}
+.walk-camera-shutter {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #d9edbe;
+  color: #253e2c;
+  border: 4px solid #14291e;
+  outline: 2px solid #d9edbe;
+  flex-shrink: 0;
+}
+.walk-camera-view button:disabled {
+  opacity: 0.45;
+}
+.walk-camera-view button:focus-visible {
+  outline: 3px solid #c4e397;
+  outline-offset: 4px;
+}
+@media (max-height: 480px) and (orientation: landscape) {
+  .walk-camera-view {
+    padding-right: calc(114px + env(safe-area-inset-right));
+  }
+  .walk-camera-header {
+    padding: 4px 12px;
+  }
+  .walk-camera-header h2 {
+    font-size: 14px;
+  }
+  .walk-camera-header span {
+    display: none;
+  }
+  .walk-camera-controls {
+    position: absolute;
+    right: env(safe-area-inset-right);
+    top: env(safe-area-inset-top);
+    bottom: env(safe-area-inset-bottom);
+    width: 114px;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .walk-camera-controls > p,
+  .walk-camera-balance {
+    display: none;
+  }
+  .walk-camera-controls > div {
+    flex-direction: column-reverse;
+    gap: 24px;
+  }
+}
