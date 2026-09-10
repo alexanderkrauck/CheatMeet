@@ -53,6 +53,7 @@ describe("analysis endpoints", () => {
         maxFileBytes: 1024,
         maxSegmentBytes: 1024,
         processingAttempts: 2,
+        retryAttempts: 3,
         sleep: async () => {},
       }),
     );
@@ -146,6 +147,19 @@ describe("analysis endpoints", () => {
         { text: "Wir starten mit dem Roadmap-Update." },
       ]);
       expect(request.config.responseJsonSchema).toBeDefined();
+    });
+
+    it("never sets temperature, which Gemini 3 ignores and warns can cause looping", async () => {
+      await post("analyze", analyzeBody({ transcription: "Text" }));
+      client.models.generateContent.mockResolvedValueOnce({
+        text: "Abschnitt",
+      });
+      await post("transcribe-segment", segmentBody());
+      for (const [request] of client.models.generateContent.mock.calls) {
+        expect(request.config).not.toHaveProperty("temperature");
+        expect(request.config).not.toHaveProperty("topP");
+        expect(request.config).not.toHaveProperty("topK");
+      }
     });
 
     it("keeps the supplied transcript instead of a shortened echo", async () => {
@@ -328,6 +342,17 @@ describe("analysis endpoints", () => {
       );
     });
 
+    it("uses shallow thinking for verbatim transcription and stitching", async () => {
+      client.models.generateContent
+        .mockResolvedValueOnce(transcript("Abschnitt"))
+        .mockResolvedValueOnce(
+          transcript(JSON.stringify({ continuation: "Abschnitt" })),
+        );
+      await post("transcribe-segment", segmentBody({ previous: "vorher" }));
+      for (const [request] of client.models.generateContent.mock.calls)
+        expect(request.config.thinkingConfig).toEqual({ thinkingLevel: "LOW" });
+    });
+
     it("returns only the continuation when the segment overlaps the previous one", async () => {
       client.models.generateContent
         .mockResolvedValueOnce(transcript("bis später. Neuer Punkt: Budget."))
@@ -402,6 +427,79 @@ describe("analysis endpoints", () => {
         (await post("transcribe-segment", segmentBody(options))).status,
       ).toBe(status);
       expect(client.files.upload).not.toHaveBeenCalled();
+    });
+
+    it("retries a segment through a transient provider overload", async () => {
+      const overloaded = Object.assign(new Error("UNAVAILABLE"), { status: 503 });
+      client.models.generateContent
+        .mockRejectedValueOnce(overloaded)
+        .mockResolvedValueOnce(transcript("endlich da"));
+      const response = await post("transcribe-segment", segmentBody());
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ text: "endlich da" });
+      expect(client.models.generateContent).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports exhausted quota as retryable rather than a generic failure", async () => {
+      client.models.generateContent.mockRejectedValue(
+        Object.assign(new Error("RESOURCE_EXHAUSTED"), { status: 429 }),
+      );
+      const response = await post("transcribe-segment", segmentBody());
+      expect(response.status).toBe(503);
+      expect((await response.json()).error).toMatch(/überlastet|Kontingent/);
+    });
+
+    it("gives up after the retry budget instead of retrying forever", async () => {
+      client.models.generateContent.mockRejectedValue(
+        Object.assign(new Error("UNAVAILABLE"), { status: 503 }),
+      );
+      expect((await post("transcribe-segment", segmentBody())).status).toBe(503);
+      expect(client.models.generateContent).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not retry a request the provider rejected as invalid", async () => {
+      client.models.generateContent.mockRejectedValue(
+        Object.assign(new Error("INVALID_ARGUMENT"), { status: 400 }),
+      );
+      await post("transcribe-segment", segmentBody());
+      expect(client.models.generateContent).toHaveBeenCalledOnce();
+    });
+
+    it("retries a segment through a transient provider overload", async () => {
+      client.models.generateContent
+        .mockRejectedValueOnce(
+          Object.assign(new Error("UNAVAILABLE"), { status: 503 }),
+        )
+        .mockResolvedValueOnce(transcript("endlich da"));
+      const response = await post("transcribe-segment", segmentBody());
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ text: "endlich da" });
+      expect(client.models.generateContent).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports exhausted quota as retryable rather than a generic failure", async () => {
+      client.models.generateContent.mockRejectedValue(
+        Object.assign(new Error("RESOURCE_EXHAUSTED"), { status: 429 }),
+      );
+      const response = await post("transcribe-segment", segmentBody());
+      expect(response.status).toBe(503);
+      expect((await response.json()).error).toMatch(/überlastet|Kontingent/);
+    });
+
+    it("gives up after the retry budget instead of retrying forever", async () => {
+      client.models.generateContent.mockRejectedValue(
+        Object.assign(new Error("UNAVAILABLE"), { status: 503 }),
+      );
+      expect((await post("transcribe-segment", segmentBody())).status).toBe(503);
+      expect(client.models.generateContent).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not retry a request the provider rejected as invalid", async () => {
+      client.models.generateContent.mockRejectedValue(
+        Object.assign(new Error("INVALID_ARGUMENT"), { status: 400 }),
+      );
+      await post("transcribe-segment", segmentBody());
+      expect(client.models.generateContent).toHaveBeenCalledOnce();
     });
 
     it("runs alongside a busy analysis instead of competing for its slot", async () => {

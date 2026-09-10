@@ -23,6 +23,7 @@ import {
 } from "../lib/liveTranscription";
 import { mergeAudioStreams, type MergedAudio } from "../lib/audioMerge";
 import RecordingSheet from "../components/RecordingSheet";
+import LiveMeeting from "../components/LiveMeeting";
 import { savedDriveFolder } from "../lib/driveSettings";
 import "./record.css";
 import { useRecordingLifecycle } from "../lib/useRecordingLifecycle";
@@ -787,53 +788,12 @@ export default function RecordPage() {
                   </button>
                 </>
               ) : recording ? (
-                <>
-                  <div className="walk-project-name">
-                    {draft.report.title || "Deine Meeting"}
-                  </div>
-                  <div
-                    className={`walk-live ${state === "paused" ? "is-paused" : ""}`}
-                  >
-                    <span className="walk-live-status">
-                      <i />
-                      {state === "paused"
-                        ? "Aufnahme pausiert"
-                        : "Aufnahme läuft"}
-                    </span>
-                    <div className="walk-timer" aria-label="Aufnahmedauer">
-                      {formatTime(duration)}
-                    </div>
-                    <div className="walk-wave" aria-hidden="true">
-                      {Array.from({ length: 29 }, (_, i) => (
-                        <i
-                          key={i}
-                          style={{
-                            height: `${8 + ((i * 17 + 9) % 34)}px`,
-                            animationDelay: `${i * 0.04}s`,
-                          }}
-                        />
-                      ))}
-                    </div>
-                    {draft.report.transcription ? (
-                      <div className="walk-live-transcript">
-                        <p>{draft.report.transcription}</p>
-                      </div>
-                    ) : (
-                      <p>
-                        {state === "paused"
-                          ? "Durchatmen. Weiter, wenn du bereit bist."
-                          : "Die Transkription läuft automatisch mit."}
-                      </p>
-                    )}
-                    <p className="walk-transcript-status">
-                      {state === "paused"
-                        ? "Transkription pausiert"
-                        : transcribing > 0
-                          ? `Transkription läuft · ${transcribing} Abschnitt(e) in Arbeit`
-                          : "Transkription aktuell"}
-                    </p>
-                  </div>
-                  </>
+                <LiveMeeting
+                  transcript={draft.report.transcription}
+                  pending={transcribing}
+                  paused={state === "paused"}
+                  timer={formatTime(duration)}
+                />
               ) : (
                 <>
                   <div className="walk-review-intro">

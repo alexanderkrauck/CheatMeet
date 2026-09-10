@@ -2,16 +2,25 @@ import express from "express";
 import multer from "multer";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { GoogleGenAI, type File as GeminiFile, type Part } from "@google/genai";
+import {
+  GoogleGenAI,
+  ThinkingLevel,
+  type File as GeminiFile,
+  type Part,
+} from "@google/genai";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import firebaseConfig from "../firebase-applet-config.json";
 import {
+  MAX_ASSIST_CONTEXT_CHARS,
   MAX_FILE_BYTES,
+  MAX_QUESTION_CHARS,
   MAX_SEGMENT_BYTES,
   MAX_TRANSCRIPT_CONTEXT_CHARS,
+  insightsSchema,
   isAudioMimeType,
   reportSchema,
   validateAnalysis,
+  validateInsights,
 } from "../shared/analysis";
 
 const keys = createRemoteJWKSet(
@@ -44,6 +53,7 @@ type Options = {
   maxFileBytes?: number;
   maxSegmentBytes?: number;
   processingAttempts?: number;
+  retryAttempts?: number;
   uploadRoot?: string;
 };
 
@@ -56,9 +66,12 @@ class RequestError extends Error {
   }
 }
 
-const analysisModel = () => process.env.GEMINI_MODEL || "gemini-3.6-flash";
+const DEFAULT_MODEL = "gemini-3.7-flash";
+const analysisModel = () => process.env.GEMINI_MODEL || DEFAULT_MODEL;
+// Follows GEMINI_MODEL unless a separate model is configured for the segment
+// path, which runs twice per 60s segment.
 const fastModel = () =>
-  process.env.GEMINI_FAST_MODEL || process.env.GEMINI_MODEL || "gemini-3.6-flash";
+  process.env.GEMINI_FAST_MODEL || process.env.GEMINI_MODEL || DEFAULT_MODEL;
 
 const continuationSchema = {
   type: "object",
@@ -114,7 +127,10 @@ export function createAnalysisRouter(options: Options = {}) {
           reject(
             (error as { code?: string }).code === "LIMIT_FILE_SIZE"
               ? new RequestError(413, "Die Audiodatei ist zu groß.")
-              : new RequestError(400, "Der Upload konnte nicht gelesen werden."),
+              : new RequestError(
+                  400,
+                  "Der Upload konnte nicht gelesen werden.",
+                ),
           );
         }),
       );
@@ -146,7 +162,10 @@ export function createAnalysisRouter(options: Options = {}) {
       track(remote);
     }
     if (remote.state !== "ACTIVE" || !remote.uri)
-      throw new RequestError(502, "Die KI konnte die Mediendatei nicht verarbeiten.");
+      throw new RequestError(
+        502,
+        "Die KI konnte die Mediendatei nicht verarbeiten.",
+      );
     return remote;
   }
 
@@ -160,16 +179,121 @@ export function createAnalysisRouter(options: Options = {}) {
     return file;
   }
 
+  // Provider overload and rate limiting are routine on shared quota. Losing a
+  // segment to one costs ~50s of speech, so transient failures are retried.
+  const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
+  async function withRetry<T>(operation: () => Promise<T>): Promise<T> {
+    const attempts = options.retryAttempts ?? 3;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        const status = (error as { status?: number })?.status;
+        if (attempt >= attempts || !RETRYABLE.has(status ?? 0)) throw error;
+        await sleep(Math.min(8000, 400 * 2 ** attempt));
+      }
+    }
+  }
+
+  /** Text-only assistant calls share auth, retry and context trimming. */
+  async function assist<T>(
+    req: express.Request,
+    read: (body: Record<string, string>) => { prompt: string; schema?: object },
+    parse: (text: string) => T,
+  ): Promise<T> {
+    await authenticate(req);
+    const body = req.body as Record<string, string>;
+    const transcript = String(body.transcript || "").trim();
+    if (!transcript)
+      throw new RequestError(400, "Es liegt noch kein Transkript vor.");
+    const { prompt, schema } = read({
+      ...body,
+      transcript: transcript.slice(-MAX_ASSIST_CONTEXT_CHARS),
+    });
+    const client = getAi();
+    const response = await withRetry(() =>
+      client.models.generateContent({
+        model: fastModel(),
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          ...(schema
+            ? {
+                responseMimeType: "application/json",
+                responseJsonSchema: schema,
+              }
+            : {}),
+        },
+      }),
+    );
+    return parse(response.text || "");
+  }
+
+  // Answers a question using only what has been said so far. This is the live
+  // "cheat" during a meeting, so it must never stall on a long transcript.
+  router.post("/ask", express.json({ limit: "1mb" }), async (req, res) => {
+    try {
+      const answer = await assist(
+        req,
+        ({ transcript, question }) => {
+          const asked = String(question || "").trim();
+          if (!asked) throw new RequestError(400, "Bitte eine Frage eingeben.");
+          return {
+            prompt: `Du bist ein Assistent in einem laufenden Meeting. Beantworte die Frage ausschließlich auf Basis des bisherigen Transkripts. Wenn das Transkript die Antwort nicht hergibt, sage das offen und rate nicht. Antworte kurz, auf Deutsch und ohne Einleitung.\n\nTranskript:\n"""\n${transcript}\n"""\n\nFrage: ${asked.slice(0, MAX_QUESTION_CHARS)}`,
+          };
+        },
+        (text) => text.trim(),
+      );
+      res.json({ answer });
+    } catch (error) {
+      fail(res, error, "Ask error");
+    }
+  });
+
+  // Rolling situational awareness: what was asked of the user, what they agreed
+  // to, what was decided, and which jargon just went past them.
+  router.post("/insights", express.json({ limit: "1mb" }), async (req, res) => {
+    try {
+      const insights = await assist(
+        req,
+        ({ transcript }) => ({
+          prompt: `Analysiere das bisherige Meeting-Transkript und extrahiere den aktuellen Stand. Gib zurück: offene Fragen, die an die aufnehmende Person gerichtet wurden und noch nicht beantwortet sind; Aufgaben, zu denen sich die aufnehmende Person verpflichtet hat; getroffene Entscheidungen; sowie Fachbegriffe oder Abkürzungen aus dem Gespräch mit einer knappen Erklärung. Erfinde nichts. Lasse Listen leer, wenn es nichts gibt. Fasse jeden Punkt in einem kurzen Satz auf Deutsch.\n\nTranskript:\n"""\n${transcript}\n"""`,
+          schema: insightsSchema,
+        }),
+        (text) => {
+          try {
+            return validateInsights(JSON.parse(text));
+          } catch {
+            return validateInsights({});
+          }
+        },
+      );
+      res.json(insights);
+    } catch (error) {
+      fail(res, error, "Insights error");
+    }
+  });
+
   function fail(res: express.Response, error: unknown, context: string) {
-    if (!(error instanceof RequestError)) console.error(`${context}:`, error);
-    res
-      .status(error instanceof RequestError ? error.status : 500)
-      .json({
+    const providerStatus = (error as { status?: number })?.status;
+    if (
+      !(error instanceof RequestError) &&
+      RETRYABLE.has(providerStatus ?? 0)
+    ) {
+      console.error(`${context}: provider unavailable (${providerStatus})`);
+      res.status(503).json({
         error:
-          error instanceof RequestError
-            ? error.message
-            : "Die Verarbeitung ist fehlgeschlagen.",
+          "Die KI ist gerade überlastet oder das Kontingent ist aufgebraucht. Bitte später erneut versuchen.",
       });
+      return;
+    }
+    if (!(error instanceof RequestError)) console.error(`${context}:`, error);
+    res.status(error instanceof RequestError ? error.status : 500).json({
+      error:
+        error instanceof RequestError
+          ? error.message
+          : "Die Verarbeitung ist fehlgeschlagen.",
+    });
   }
 
   // Each segment overlaps the previous one, so the model is asked to return only
@@ -192,27 +316,33 @@ export function createAnalysisRouter(options: Options = {}) {
 
       ai = getAi();
       remote = await uploadMedia(ai, file, (f) => (remote = f));
+      const client = ai;
       const raw = (
-        await ai.models.generateContent({
-          model: fastModel(),
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  fileData: {
-                    fileUri: remote.uri!,
-                    mimeType: remote.mimeType || file.mimetype,
+        await withRetry(() =>
+          client.models.generateContent({
+            model: fastModel(),
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    fileData: {
+                      fileUri: remote.uri!,
+                      mimeType: remote.mimeType || file.mimetype,
+                    },
                   },
-                },
-                {
-                  text: "Transkribiere diese Audioaufnahme wortgetreu. Gib ausschließlich das Transkript aus, ohne Einleitung, Zeitstempel oder Erklärungen.",
-                },
-              ],
-            },
-          ],
-          config: { temperature: 0 },
-        })
+                  {
+                    text: "Transkribiere diese Audioaufnahme wortgetreu. Gib ausschließlich das Transkript aus, ohne Einleitung, Zeitstempel oder Erklärungen.",
+                  },
+                ],
+              },
+            ],
+            // Gemini 3 ignores temperature and warns that lowering it can make
+            // the model loop -- a visible failure when transcribing. Depth is
+            // controlled with thinkingLevel instead, kept low for verbatim work.
+            config: { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } },
+          }),
+        )
       ).text?.trim();
 
       if (!raw) {
@@ -224,24 +354,26 @@ export function createAnalysisRouter(options: Options = {}) {
         return;
       }
 
-      const glued = await ai.models.generateContent({
-        model: fastModel(),
-        contents: [
-          {
-            role: "user",
-            parts: [
-              {
-                text: `Bisheriges Transkript (Ende):\n"""\n${previous}\n"""\n\nNeues Transkript des nächsten Abschnitts, dessen Anfang sich mit dem Ende des bisherigen Transkripts überschneidet:\n"""\n${raw}\n"""\n\nGib ausschließlich den Teil des neuen Abschnitts zurück, der noch nicht im bisherigen Transkript enthalten ist. Entferne die Überschneidung vollständig, korrigiere offensichtliche Transkriptionsfehler und ändere sonst nichts am Wortlaut. Wenn der Abschnitt nichts Neues enthält, gib einen leeren Text zurück.`,
-              },
-            ],
+      const glued = await withRetry(() =>
+        client.models.generateContent({
+          model: fastModel(),
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: `Bisheriges Transkript (Ende):\n"""\n${previous}\n"""\n\nNeues Transkript des nächsten Abschnitts, dessen Anfang sich mit dem Ende des bisherigen Transkripts überschneidet:\n"""\n${raw}\n"""\n\nGib ausschließlich den Teil des neuen Abschnitts zurück, der noch nicht im bisherigen Transkript enthalten ist. Entferne die Überschneidung vollständig, korrigiere offensichtliche Transkriptionsfehler und ändere sonst nichts am Wortlaut. Wenn der Abschnitt nichts Neues enthält, gib einen leeren Text zurück.`,
+                },
+              ],
+            },
+          ],
+          config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            responseMimeType: "application/json",
+            responseJsonSchema: continuationSchema,
           },
-        ],
-        config: {
-          temperature: 0,
-          responseMimeType: "application/json",
-          responseJsonSchema: continuationSchema,
-        },
-      });
+        }),
+      );
 
       let continuation: string;
       try {
@@ -289,7 +421,10 @@ export function createAnalysisRouter(options: Options = {}) {
       const transcription = String(req.body.transcription || "").trim();
       const preferences = String(req.body.preferences || "").trim();
       if (!transcription && !req.file)
-        throw new RequestError(400, "Weder Audio noch Transkription vorhanden.");
+        throw new RequestError(
+          400,
+          "Weder Audio noch Transkription vorhanden.",
+        );
 
       let systemInstruction =
         "Du erstellst professionelle Meeting-Zusammenfassungen. Extrahiere einen passenden Titel, ein ausführliches Transkript (falls nicht bereits vorhanden), eine umfassende Zusammenfassung, konkrete Aufgaben (todos) und die wichtigsten Erkenntnisse (takeaways).";
@@ -314,16 +449,20 @@ export function createAnalysisRouter(options: Options = {}) {
       }
 
       if (!ai) ai = getAi();
-      const response = await ai.models.generateContent({
-        model: analysisModel(),
-        contents: [{ role: "user", parts }],
-        config: {
-          systemInstruction,
-          temperature: 0.2,
-          responseMimeType: "application/json",
-          responseJsonSchema: reportSchema,
-        },
-      });
+      const client = ai;
+      const response = await withRetry(() =>
+        client.models.generateContent({
+          model: analysisModel(),
+          contents: [{ role: "user", parts }],
+          config: {
+            systemInstruction,
+            // Summarising is the one reasoning-heavy call; leave thinking depth
+            // at the model's default.
+            responseMimeType: "application/json",
+            responseJsonSchema: reportSchema,
+          },
+        }),
+      );
 
       let result;
       try {

@@ -49,7 +49,7 @@ async function startServer() {
   }
   const port = Number(process.env.PORT || 3000);
   const server = app.listen(port, "0.0.0.0", () =>
-    console.log(`BauDoku running on port ${port}`),
+    console.log(`CheatMeet running on port ${port}`),
   );
   server.requestTimeout = 5 * 60 * 1000;
 }

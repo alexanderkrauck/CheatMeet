@@ -12,7 +12,7 @@
 }
 .walk-frame {
   height: 100%;
-  width: min(100%, 620px);
+  width: min(100%, 1180px);
   margin: auto;
   display: flex;
   flex-direction: column;
@@ -884,4 +884,235 @@
   border: 1px solid #cfdcf7;
   border-radius: 10px;
   padding: 9px 12px;
+}
+
+/* --- Live meeting surface -------------------------------------------------
+   The transcript is the content; the clock is a status detail, not a hero. */
+.live {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 10px;
+}
+.live-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+  padding: 9px 13px;
+  border-radius: 11px;
+  background: #1e40af;
+  color: #dbe6fb;
+  font-size: 12px;
+}
+.live-bar strong {
+  font-weight: 600;
+  font-size: 12px;
+}
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f3aa83;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+.live-dot.is-paused {
+  background: #9fbbe4;
+  animation: none;
+}
+@keyframes live-pulse {
+  50% { opacity: 0.25; }
+}
+.live-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.live-sync {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: #a8bde0;
+  text-align: right;
+}
+.live-tabs {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.live-tabs button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px;
+  border-radius: 9px;
+  background: #e3edfb;
+  color: #3f6099;
+  font-size: 12.5px;
+  font-weight: 550;
+  position: relative;
+}
+.live-tabs button.active {
+  background: #2563eb;
+  color: #fff;
+}
+.live-badge {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f3aa83;
+}
+.live-panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+}
+.live-pane {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  border-radius: 13px;
+  border: 1px solid #cfdcf7;
+  background: #fff;
+}
+.live-transcript {
+  overflow-y: auto;
+  padding: 15px 17px;
+  -webkit-overflow-scrolling: touch;
+}
+.live-transcript p {
+  font-size: 15px;
+  line-height: 1.72;
+  color: #1e3a5f;
+  white-space: pre-wrap;
+}
+.live-assist {
+  display: flex;
+  flex-direction: column;
+  background: #f5f9ff;
+}
+.live-insights {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.live-empty {
+  font-size: 12.5px;
+  color: #7b899e;
+  line-height: 1.6;
+}
+.live-thinking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #5b7cb5;
+}
+.insight-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: #5b7cb5;
+  margin-bottom: 7px;
+  font-weight: 650;
+}
+.insight-group ul {
+  margin: 0;
+  padding-left: 17px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.insight-group li,
+.insight-group dd {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: #1e3a5f;
+}
+.insight-group dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.insight-group dt {
+  font-size: 13px;
+  font-weight: 650;
+  color: #1e40af;
+}
+.insight-group dd {
+  margin: 2px 0 0;
+}
+.live-exchange {
+  border-top: 1px solid #dbe6f7;
+  padding-top: 11px;
+}
+.live-question {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e40af;
+  margin-bottom: 5px;
+}
+.live-answer {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #1e3a5f;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.live-answer.is-error {
+  color: #b4472f;
+}
+.live-ask {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid #dbe6f7;
+}
+.live-ask input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 13px;
+  border-radius: 9px;
+  border: 1px solid #c3d5f2;
+  background: #fff;
+  font-size: 16px;
+  color: #1e3a5f;
+}
+.live-ask button {
+  width: 46px;
+  border-radius: 9px;
+  background: #2563eb;
+  color: #fff;
+  display: grid;
+  place-items: center;
+}
+.live-error {
+  padding: 0 12px 10px;
+  font-size: 11.5px;
+  color: #b4472f;
+}
+
+/* One pane at a time until there is room for both. */
+@media (max-width: 819px) {
+  .live-panes > .live-pane { display: none; }
+  .live-panes[data-tab="transcript"] > .live-transcript { display: block; }
+  .live-panes[data-tab="assist"] > .live-assist { display: flex; }
+}
+@media (min-width: 820px) {
+  .live-tabs { display: none; }
+  .live-panes > .live-pane { display: block; }
+  .live-panes > .live-assist { display: flex; }
 }

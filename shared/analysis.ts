@@ -89,3 +89,67 @@ export function audioExtension(mime: string) {
               ? "mp3"
               : "webm";
 }
+
+/** The assistant only ever reasons over the recent part of a long meeting. */
+export const MAX_ASSIST_CONTEXT_CHARS = 12000;
+export const MAX_QUESTION_CHARS = 500;
+
+export interface MeetingInsights {
+  /** Questions that were put to the user and are still unanswered. */
+  questions: string[];
+  /** Things the user appears to have committed to. */
+  actions: string[];
+  decisions: string[];
+  /** Jargon or acronyms used in the meeting, with a short gloss. */
+  terms: { term: string; explanation: string }[];
+}
+
+export const insightsSchema = {
+  type: "object",
+  required: ["questions", "actions", "decisions", "terms"],
+  properties: {
+    questions: { type: "array", items: { type: "string" } },
+    actions: { type: "array", items: { type: "string" } },
+    decisions: { type: "array", items: { type: "string" } },
+    terms: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["term", "explanation"],
+        properties: {
+          term: { type: "string" },
+          explanation: { type: "string" },
+        },
+      },
+    },
+  },
+};
+
+const stringList = (value: unknown, limit = 8): string[] =>
+  Array.isArray(value)
+    ? value
+        .map((item) => String(item).trim())
+        .filter(Boolean)
+        .slice(0, limit)
+    : [];
+
+export function validateInsights(value: unknown): MeetingInsights {
+  const v = (value ?? {}) as Record<string, unknown>;
+  return {
+    questions: stringList(v.questions),
+    actions: stringList(v.actions),
+    decisions: stringList(v.decisions),
+    terms: Array.isArray(v.terms)
+      ? v.terms
+          .map((item) => {
+            const t = (item ?? {}) as Record<string, unknown>;
+            return {
+              term: String(t.term ?? "").trim(),
+              explanation: String(t.explanation ?? "").trim(),
+            };
+          })
+          .filter((t) => t.term && t.explanation)
+          .slice(0, 8)
+      : [],
+  };
+}

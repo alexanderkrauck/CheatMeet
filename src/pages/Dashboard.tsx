@@ -5,7 +5,6 @@ import {
   ArrowRight,
   FileText,
   LogOut,
-  Plus,
   Search,
   Settings2,
   Mic,
@@ -65,14 +64,30 @@ export default function Dashboard() {
       setSyncing(false);
     }
   }
+  // Past meetings are only useful if you can find what was said in them, so
+  // the transcript and extracted items are searchable too.
+  const needle = search.trim().toLowerCase();
+  const haystack = (r: ReportData) =>
+    [r.title, r.summary, r.transcription, ...(r.todos || []), ...(r.takeaways || [])]
+      .join(" ")
+      .toLowerCase();
   const visible = reports.filter(
     (r) =>
       (filter === "all" ||
         (filter === "completed"
           ? r.status === "completed"
           : r.status !== "completed")) &&
-      `${r.title} ${r.summary}`.toLowerCase().includes(search.toLowerCase()),
+      (!needle || haystack(r).includes(needle)),
   );
+  /** The snippet around the match, so a transcript hit is legible in the list. */
+  const excerpt = (r: ReportData) => {
+    if (!needle) return r.summary || "Aufnahme prüfen und einen Bericht erstellen.";
+    const text = r.transcription || r.summary || "";
+    const at = text.toLowerCase().indexOf(needle);
+    if (at < 0) return r.summary || "Treffer in Titel oder Aufgaben.";
+    const from = Math.max(0, at - 60);
+    return `${from > 0 ? "… " : ""}${text.slice(from, at + needle.length + 90).trim()} …`;
+  };
   return (
     <Shell
       actions={
@@ -104,17 +119,24 @@ export default function Dashboard() {
           <Preferences />
         </div>
       )}
-      <div className="page-heading">
+      <div className="home-hero">
         <div>
-          <span className="eyebrow">DEINE MEETINGS</span>
-          <h1>
-            CheatMeet<span className="accent">.</span>
-          </h1>
-          <p className="muted">Jedes Gespräch. Jedes Detail. An einem Ort.</p>
+          <span className="eyebrow">CHEATMEET</span>
+          <h1>Bereit, wenn das Meeting startet.</h1>
+          <p className="muted">
+            Live mitlesen, jederzeit nachfragen, danach den fertigen Bericht in
+            Google Drive.
+          </p>
         </div>
-        <Link to="/record?new=1" className="btn btn-primary">
-          <Plus size={20} />
-          Neues Meeting
+        <Link to="/record?new=1" className="home-start">
+          <span className="home-start-icon">
+            <Mic size={26} />
+          </span>
+          <span>
+            <strong>Meeting aufnehmen</strong>
+            <small>Startet sofort · ein Tipp</small>
+          </span>
+          <ArrowRight size={20} />
         </Link>
       </div>
       {error && <Notice>{error}</Notice>}
@@ -144,7 +166,7 @@ export default function Dashboard() {
           </span>
           <div>
             <strong>{draft.report.title || "Deine Aufnahme wartet"}</strong>
-            <p>Lokaler Entwurf · noch sichern &amp; analysieren</p>
+            <p>Nicht abgeschlossen · fortsetzen, sichern &amp; analysieren</p>
           </div>
           <ArrowRight />
         </Link>
@@ -193,8 +215,8 @@ export default function Dashboard() {
         <label className="search">
           <Search size={17} />
           <input
-            aria-label="Berichte durchsuchen"
-            placeholder="Meeting suchen …"
+            aria-label="Meetings und Transkripte durchsuchen"
+            placeholder="In allen Transkripten suchen …"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -215,9 +237,7 @@ export default function Dashboard() {
                   <Status report={r} local={dirty.includes(r.id)} />
                 </div>
                 <h2>{r.title || "Unbenanntes Meeting"}</h2>
-                <p>
-                  {r.summary || "Aufnahme prüfen und einen Bericht erstellen."}
-                </p>
+                <p>{excerpt(r)}</p>
                 <span className="small muted">
                   {r.todos?.length || 0} To-Dos · {r.takeaways?.length || 0}{" "}
                   Erkenntnisse
@@ -232,7 +252,7 @@ export default function Dashboard() {
           <div className="empty-icon">
             <FileText size={32} />
           </div>
-          <span className="eyebrow">HIER BEGINNT DEINE DOKUMENTATION</span>
+          <span className="eyebrow">DEIN MEETING-GEDÄCHTNIS</span>
           <h2>
             {search || filter !== "all"
               ? "Keine passenden Meetings"
@@ -240,7 +260,7 @@ export default function Dashboard() {
           </h2>
           <p className="muted">
             {search || filter !== "all"
-              ? "Versuche einen anderen Suchbegriff oder Filter."
+              ? "Kein Meeting enthält diesen Begriff. Durchsucht werden Titel, Zusammenfassung, Transkript und Aufgaben."
               : "Starte eine Aufnahme. CheatMeet transkribiert live und erstellt im Anschluss eine smarte Zusammenfassung."}
           </p>
           {!search && filter === "all" && (

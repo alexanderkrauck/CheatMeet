@@ -1680,3 +1680,66 @@ textarea {
   flex-wrap: wrap;
   gap: 6px;
 }
+
+/* --- Home: get into a meeting fast, then find what was said ---------------- */
+.home-hero {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  flex-wrap: wrap;
+  margin-bottom: 26px;
+}
+.home-hero > div {
+  flex: 1;
+  min-width: 260px;
+}
+.home-hero h1 {
+  font-size: clamp(28px, 4.2vw, 42px);
+  line-height: 1.12;
+  letter-spacing: -1.4px;
+  font-weight: 600;
+  margin: 6px 0 10px;
+}
+.home-hero .muted {
+  max-width: 46ch;
+  font-size: 14px;
+}
+.home-start {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 17px 21px;
+  border-radius: 15px;
+  background: #2563eb;
+  color: #fff;
+  min-width: 265px;
+  box-shadow: 0 10px 30px #2563eb33;
+  transition: transform 0.12s ease;
+}
+.home-start:hover {
+  transform: translateY(-2px);
+}
+.home-start-icon {
+  display: grid;
+  place-items: center;
+  width: 50px;
+  height: 50px;
+  border-radius: 13px;
+  background: #ffffff26;
+  flex-shrink: 0;
+}
+.home-start > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.home-start strong {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+}
+.home-start small {
+  display: block;
+  font-size: 11.5px;
+  opacity: 0.82;
+  margin-top: 2px;
+}
