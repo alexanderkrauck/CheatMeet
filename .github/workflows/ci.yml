@@ -101,11 +101,16 @@ jobs:
           docker run --detach --name baudoku-check -p 8080:8080 -e PORT=8080 -e GEMINI_API_KEY=ci-smoke-test baudoku:check
           trap 'docker rm -f baudoku-check' EXIT
           node scripts/smoke-deployment.mjs http://localhost:8080
-  deploy:
-    needs: [verify, promotion-policy, container]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-      id-token: write
-      actions: read
-    uses: ./.github/workflows/deploy.yml
+  # Production deployment is temporarily disabled: pushes to main must not
+  # release to Cloud Run until the rebuilt transcription pipeline has been
+  # exercised against the live Gemini and Google accounts. Restore this job to
+  # re-enable automatic deployment; .github/workflows/deploy.yml is unchanged.
+  #
+  # deploy:
+  #   needs: [verify, promotion-policy, container]
+  #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  #   permissions:
+  #     contents: read
+  #     id-token: write
+  #     actions: read
+  #   uses: ./.github/workflows/deploy.yml
