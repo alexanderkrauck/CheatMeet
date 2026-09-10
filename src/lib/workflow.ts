@@ -1,6 +1,6 @@
-import { prepareAnalysisPhotos } from "./analysisMedia";
+import { doc, getDoc } from "firebase/firestore";
 import { getRootFolder } from "./driveSettings";
-import { auth } from "./firebase";
+import { auth, db } from "./firebase";
 import { saveReport, uid } from "./reports";
 import { putDraft, putLocal } from "./local";
 import {
@@ -40,48 +40,49 @@ function localRevision(report: ReportData) {
   ).toISOString();
 }
 
-export async function analyzeDraft(draft: Draft): Promise<ReportData> {
-  const { run } = ownedOperation();
-  if (!draft.report.transcription && !draft.audio) throw new Error("Weder Transkript noch Audio vorhanden.");
-  
-  const token = await run(() => auth.currentUser!.getIdToken());
-  const uid = auth.currentUser!.uid;
-  
-  // Try to get preferences from Firestore, or use default empty string
-  let preferences = "";
+/** The summary prompt is optional; a missing or unreadable setting is not an error. */
+async function summaryPreferences(owner: string): Promise<string> {
   try {
-    const db = await import("firebase/firestore").then(m => m.getFirestore());
-    const docRef = await import("firebase/firestore").then(m => m.doc(db, "users", uid, "settings", "preferences"));
-    const docSnap = await import("firebase/firestore").then(m => m.getDoc(docRef));
-    if (docSnap.exists()) {
-      preferences = docSnap.data().summaryPrompt || "";
-    }
-  } catch (e) {
-    console.warn("Could not load preferences", e);
+    const snapshot = await getDoc(
+      doc(db, "users", owner, "settings", "preferences"),
+    );
+    return snapshot.exists() ? snapshot.data().summaryPrompt || "" : "";
+  } catch (error) {
+    console.warn("Could not load summary preferences", error);
+    return "";
   }
+}
+
+export async function analyzeDraft(draft: Draft): Promise<ReportData> {
+  const { owner, run } = ownedOperation();
+  const transcription = draft.report.transcription?.trim() || "";
+  if (!transcription && !draft.audio)
+    throw new Error("Weder Transkript noch Audio vorhanden.");
+
+  const token = await run(() => auth.currentUser!.getIdToken());
+  const preferences = await run(() => summaryPreferences(owner));
 
   const formData = new FormData();
-  if (draft.report.transcription) {
-    formData.append("transcription", draft.report.transcription);
-  }
-  if (draft.audio && !draft.report.transcription) {
-    formData.append("audio", draft.audio, "recording" + audioExtension(draft.audio.type));
-  }
-  if (preferences) {
-    formData.append("preferences", preferences);
-  }
+  // The recording already produced a transcript; re-uploading the audio would
+  // pay for transcribing the whole meeting a second time.
+  if (transcription) formData.append("transcription", transcription);
+  else
+    formData.append(
+      "audio",
+      draft.audio!,
+      `recording.${audioExtension(draft.audio!.type)}`,
+    );
+  if (preferences) formData.append("preferences", preferences);
 
   const response = await run(() =>
     fetch("/api/analyze", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`
-      },
+      headers: { Authorization: `Bearer ${token}` },
       body: formData,
-      signal: AbortSignal.timeout(300000), // 5 minutes since audio transcription can take time
+      signal: AbortSignal.timeout(300_000),
     }),
   );
-  
+
   const data = await run(() =>
     response.json().catch(() => ({
       error: "Der Server hat keine gültige Antwort geliefert.",
@@ -141,34 +142,7 @@ export async function backupDraft(
     );
     await checkpoint();
   }
-  report.photos ||= draft.photos.map((p) => ({
-    id: p.id,
-    relativeTimeMs: p.relativeTimeMs,
-  }));
-  for (let i = 0; i < draft.photos.length; i++) {
-    const photo = draft.photos[i];
-    let meta = report.photos.find((p) => p.id === photo.id);
-    if (!meta) {
-      meta = { id: photo.id, relativeTimeMs: photo.relativeTimeMs };
-      report.photos.push(meta);
-    }
-    if (!meta.driveId) {
-      progress(`Foto ${i + 1} von ${draft.photos.length} sichern …`);
-      meta.driveId = await run(() =>
-        uploadFileToFolder(
-          photo.blob,
-          `${photo.id}.${photo.blob.type.includes("png") ? "png" : photo.blob.type.includes("webp") ? "webp" : "jpg"}`,
-          photo.blob.type,
-          report.driveFolderId!,
-          token,
-        ),
-      );
-      await checkpoint();
-    }
-  }
   assertOwner();
-  report.rawPhotoUrls = report.photos.map((p) => p.driveId || "");
-  await checkpoint();
   return report;
 }
 export async function syncReport(report: ReportData, token: string) {
@@ -250,28 +224,6 @@ export async function restoreDraft(
     throw new Error(
       "Keine Audioaufnahme in Drive vorhanden. Bitte den lokalen Entwurf öffnen.",
     );
-  const photos =
-    report.photos ||
-    (report.rawPhotoUrls || []).map((driveId, i) => ({
-      id: `photo_${i}`,
-      relativeTimeMs: null,
-      driveId,
-    }));
   const audio = await run(() => downloadDriveFile(report.rawAudioUrl!, token));
-  const restoredPhotos = await run(() =>
-    Promise.all(
-      photos.map(async (p) => {
-        if (!p.driveId)
-          throw new Error(
-            "Ein Foto ist noch nicht in Drive gesichert. Bitte den lokalen Entwurf öffnen.",
-          );
-        return {
-          id: p.id,
-          relativeTimeMs: p.relativeTimeMs,
-          blob: await run(() => downloadDriveFile(p.driveId!, token)),
-        };
-      }),
-    ),
-  );
-  return { report, audio, photos: restoredPhotos };
+  return { report, audio };
 }

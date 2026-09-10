@@ -1,13 +1,15 @@
 import express from "express";
 import multer from "multer";
-import { mkdtemp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import path from "node:path";
 import { GoogleGenAI, type File as GeminiFile, type Part } from "@google/genai";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import firebaseConfig from "../firebase-applet-config.json";
 import {
   MAX_FILE_BYTES,
+  MAX_SEGMENT_BYTES,
+  MAX_TRANSCRIPT_CONTEXT_CHARS,
+  isAudioMimeType,
   reportSchema,
   validateAnalysis,
 } from "../shared/analysis";
@@ -40,9 +42,11 @@ type Options = {
   createClient?: () => Client;
   sleep?: (ms: number) => Promise<void>;
   maxFileBytes?: number;
+  maxSegmentBytes?: number;
   processingAttempts?: number;
   uploadRoot?: string;
 };
+
 class RequestError extends Error {
   constructor(
     public status: number,
@@ -51,19 +55,16 @@ class RequestError extends Error {
     super(message);
   }
 }
-const audioTypes = new Set([
-  "audio/webm",
-  "audio/mp4",
-  "audio/m4a",
-  "audio/x-m4a",
-  "audio/ogg",
-  "audio/wav",
-  "audio/x-wav",
-  "audio/mpeg",
-  "audio/aac",
-  "audio/flac",
-  "audio/x-flac",
-]);
+
+const analysisModel = () => process.env.GEMINI_MODEL || "gemini-3.6-flash";
+const fastModel = () =>
+  process.env.GEMINI_FAST_MODEL || process.env.GEMINI_MODEL || "gemini-3.6-flash";
+
+const continuationSchema = {
+  type: "object",
+  required: ["continuation"],
+  properties: { continuation: { type: "string" } },
+};
 
 export function createAnalysisRouter(options: Options = {}) {
   const router = express.Router();
@@ -71,8 +72,13 @@ export function createAnalysisRouter(options: Options = {}) {
   const sleep =
     options.sleep ||
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const maxFileBytes = options.maxFileBytes ?? MAX_FILE_BYTES;
+  const maxSegmentBytes = options.maxSegmentBytes ?? MAX_SEGMENT_BYTES;
+  // One expensive analysis per user at a time; segment transcription is already
+  // serialized by the recording client and must not be blocked by it.
+  const analysing = new Set<string>();
 
-  const getAi = () => {
+  const getAi = (): Client => {
     if (!options.createClient && !process.env.GEMINI_API_KEY)
       throw new RequestError(
         503,
@@ -86,151 +92,230 @@ export function createAnalysisRouter(options: Options = {}) {
         });
   };
 
-  const uploadChunkMiddleware = multer({
-    dest: options.uploadRoot || tmpdir(),
-    limits: { fileSize: 50 * 1024 * 1024 }
-  }).single("audio");
-
-  router.post("/transcribe-full", async (req, res) => {
-    let uid: string;
+  async function authenticate(req: express.Request): Promise<string> {
+    const match = /^Bearer (\S+)$/i.exec(req.headers.authorization || "");
+    if (!match) throw new RequestError(401, "Bitte erneut anmelden.");
     try {
-      const match = /^Bearer (\S+)$/i.exec(req.headers.authorization || "");
-      if (!match) throw new Error("Missing token");
-      uid = await verifyToken(match[1]);
+      return await verifyToken(match[1]);
     } catch {
-      res.status(401).json({ error: "Bitte erneut anmelden." });
-      return;
+      throw new RequestError(401, "Bitte erneut anmelden.");
     }
+  }
 
+  const receive = (limit: number) => {
+    const middleware = multer({
+      dest: options.uploadRoot || tmpdir(),
+      limits: { fileSize: limit },
+    }).single("audio");
+    return (req: express.Request, res: express.Response) =>
+      new Promise<void>((resolve, reject) =>
+        middleware(req, res, (error) => {
+          if (!error) return resolve();
+          reject(
+            (error as { code?: string }).code === "LIMIT_FILE_SIZE"
+              ? new RequestError(413, "Die Audiodatei ist zu groß.")
+              : new RequestError(400, "Der Upload konnte nicht gelesen werden."),
+          );
+        }),
+      );
+  };
+
+  /**
+   * Hands a local audio file to Gemini and waits until it is usable. The remote
+   * handle is reported as soon as it exists so that a file which never becomes
+   * active is still deleted rather than left behind on the provider.
+   */
+  async function uploadMedia(
+    ai: Client,
+    file: Express.Multer.File,
+    track: (remote: GeminiFile) => void,
+  ): Promise<GeminiFile> {
+    let remote = await ai.files.upload({
+      file: file.path,
+      config: { mimeType: file.mimetype },
+    });
+    track(remote);
+    for (
+      let attempt = 0;
+      remote.state === "PROCESSING" &&
+      attempt < (options.processingAttempts ?? 60);
+      attempt++
+    ) {
+      await sleep(1000);
+      remote = await ai.files.get({ name: remote.name });
+      track(remote);
+    }
+    if (remote.state !== "ACTIVE" || !remote.uri)
+      throw new RequestError(502, "Die KI konnte die Mediendatei nicht verarbeiten.");
+    return remote;
+  }
+
+  function requireAudio(
+    file: Express.Multer.File | undefined,
+  ): Express.Multer.File {
+    if (!file || !file.size)
+      throw new RequestError(400, "Eine Audioaufnahme ist erforderlich.");
+    if (!isAudioMimeType(file.mimetype))
+      throw new RequestError(415, "Dieses Audioformat wird nicht unterstützt.");
+    return file;
+  }
+
+  function fail(res: express.Response, error: unknown, context: string) {
+    if (!(error instanceof RequestError)) console.error(`${context}:`, error);
+    res
+      .status(error instanceof RequestError ? error.status : 500)
+      .json({
+        error:
+          error instanceof RequestError
+            ? error.message
+            : "Die Verarbeitung ist fehlgeschlagen.",
+      });
+  }
+
+  // Each segment overlaps the previous one, so the model is asked to return only
+  // the part that is genuinely new. Returning a continuation instead of a rewritten
+  // full transcript keeps this call's cost flat as the meeting grows.
+  router.post("/transcribe-segment", async (req, res) => {
     let ai: Client | undefined;
     let remote: GeminiFile | undefined;
     let filePath: string | undefined;
-
     try {
-      await new Promise<void>((resolve, reject) => {
-        uploadChunkMiddleware(req, res, (err) => err ? reject(err) : resolve());
-      });
+      await authenticate(req);
+      await receive(maxSegmentBytes)(req, res);
+      // Record the temporary path before validating, so a rejected upload is
+      // still removed from disk.
+      if (req.file) filePath = req.file.path;
+      const file = requireAudio(req.file);
+      const previous = String(req.body.previousTranscript || "").slice(
+        -MAX_TRANSCRIPT_CONTEXT_CHARS,
+      );
 
       ai = getAi();
-      const file = req.file;
+      remote = await uploadMedia(ai, file, (f) => (remote = f));
+      const raw = (
+        await ai.models.generateContent({
+          model: fastModel(),
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  fileData: {
+                    fileUri: remote.uri!,
+                    mimeType: remote.mimeType || file.mimetype,
+                  },
+                },
+                {
+                  text: "Transkribiere diese Audioaufnahme wortgetreu. Gib ausschließlich das Transkript aus, ohne Einleitung, Zeitstempel oder Erklärungen.",
+                },
+              ],
+            },
+          ],
+          config: { temperature: 0 },
+        })
+      ).text?.trim();
 
-      if (!file || file.size === 0) {
-        throw new RequestError(400, "Eine Audioaufnahme ist erforderlich.");
+      if (!raw) {
+        res.json({ text: "" });
+        return;
+      }
+      if (!previous) {
+        res.json({ text: raw });
+        return;
       }
 
-      filePath = file.path;
-      remote = await ai.files.upload({
-        file: file.path,
-        config: { mimeType: file.mimetype }
-      });
-      
-      for (let attempt = 0; remote.state === "PROCESSING" && attempt < (options.processingAttempts ?? 60); attempt++) {
-        await sleep(1000);
-        remote = await ai.files.get({ name: remote.name });
-      }
-      
-      if (remote.state !== "ACTIVE" || !remote.uri) {
-        throw new RequestError(502, "Die KI konnte die Mediendatei nicht verarbeiten.");
-      }
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+      const glued = await ai.models.generateContent({
+        model: fastModel(),
         contents: [
-          { 
-            role: "user", 
+          {
+            role: "user",
             parts: [
-              { fileData: { fileUri: remote.uri, mimeType: remote.mimeType || file.mimetype } },
-              { text: "Bitte erstelle ein detailliertes und vollständiges Transkript des bisherigen Meetings. Schreibe einfach nur das Transkript auf, ohne Metatext oder Erklärungen." }
-            ] 
-          }
+              {
+                text: `Bisheriges Transkript (Ende):\n"""\n${previous}\n"""\n\nNeues Transkript des nächsten Abschnitts, dessen Anfang sich mit dem Ende des bisherigen Transkripts überschneidet:\n"""\n${raw}\n"""\n\nGib ausschließlich den Teil des neuen Abschnitts zurück, der noch nicht im bisherigen Transkript enthalten ist. Entferne die Überschneidung vollständig, korrigiere offensichtliche Transkriptionsfehler und ändere sonst nichts am Wortlaut. Wenn der Abschnitt nichts Neues enthält, gib einen leeren Text zurück.`,
+              },
+            ],
+          },
         ],
         config: {
-          temperature: 0.1,
-        }
+          temperature: 0,
+          responseMimeType: "application/json",
+          responseJsonSchema: continuationSchema,
+        },
       });
 
-      res.json({ transcript: response.text?.trim() || "" });
+      let continuation: string;
+      try {
+        const parsed = JSON.parse(glued.text || "");
+        if (typeof parsed?.continuation !== "string") throw new Error("shape");
+        continuation = parsed.continuation;
+      } catch {
+        // Losing the overlap is recoverable for the reader; losing speech is not.
+        console.error("Segment glue returned unusable output:", glued.text);
+        continuation = raw;
+      }
+      res.json({ text: continuation.trim() });
     } catch (error) {
-      console.error("Transcribe full error:", error);
-      res.status(500).json({ error: "Transkription fehlgeschlagen." });
+      fail(res, error, "Transcribe segment error");
     } finally {
-      if (remote?.name && ai) {
+      if (remote?.name && ai)
         await ai.files.delete({ name: remote.name }).catch(() => {});
-      }
-      if (filePath) {
-        await rm(filePath, { force: true }).catch(() => {});
-      }
+      if (filePath) await rm(filePath, { force: true }).catch(() => {});
     }
   });
 
-  const uploadMiddleware = multer({
-    dest: options.uploadRoot || tmpdir(),
-    limits: { fileSize: 25 * 1024 * 1024 }
-  }).single("audio");
-
+  // The report is normally built from the transcript the recording already
+  // assembled. Audio is only uploaded when there is no transcript at all,
+  // which is the case for an imported file.
   router.post("/analyze", async (req, res) => {
-    let uid: string;
-    try {
-      const match = /^Bearer (\S+)$/i.exec(req.headers.authorization || "");
-      if (!match) throw new Error("Missing token");
-      uid = await verifyToken(match[1]);
-    } catch {
-      res.status(401).json({ error: "Bitte erneut anmelden." });
-      return;
-    }
-
+    let uid: string | undefined;
+    let acquired = false;
     let ai: Client | undefined;
     let remote: GeminiFile | undefined;
     let filePath: string | undefined;
-
     try {
-      await new Promise<void>((resolve, reject) => {
-        uploadMiddleware(req, res, (err) => err ? reject(err) : resolve());
-      });
+      uid = await authenticate(req);
+      await receive(maxFileBytes)(req, res);
+      if (req.file) filePath = req.file.path;
 
-      ai = getAi();
-      const transcription = req.body.transcription;
-      const preferences = req.body.preferences || "";
-      const file = req.file;
+      // Only the request that actually took the slot may release it.
+      if (analysing.has(uid))
+        throw new RequestError(
+          429,
+          "Es läuft bereits eine Analyse. Bitte kurz warten.",
+        );
+      analysing.add(uid);
+      acquired = true;
 
-      if (!transcription && !file) {
+      const transcription = String(req.body.transcription || "").trim();
+      const preferences = String(req.body.preferences || "").trim();
+      if (!transcription && !req.file)
         throw new RequestError(400, "Weder Audio noch Transkription vorhanden.");
-      }
 
-      let systemInstruction = "Du erstellst professionelle Meeting-Zusammenfassungen. Extrahiere einen passenden Titel, ein ausführliches Transkript (falls nicht bereits vorhanden), eine umfassende Zusammenfassung, konkrete Aufgaben (todos) und die wichtigsten Erkenntnisse (takeaways).";
-      if (preferences) {
+      let systemInstruction =
+        "Du erstellst professionelle Meeting-Zusammenfassungen. Extrahiere einen passenden Titel, ein ausführliches Transkript (falls nicht bereits vorhanden), eine umfassende Zusammenfassung, konkrete Aufgaben (todos) und die wichtigsten Erkenntnisse (takeaways).";
+      if (preferences)
         systemInstruction += `\nBeachte diese Nutzer-Präferenzen für die Zusammenfassung: ${preferences}`;
-      }
 
       const parts: Part[] = [];
-      if (transcription) {
-        parts.push({ text: transcription });
-      }
-
-      if (file) {
-        filePath = file.path;
-        remote = await ai.files.upload({
-          file: file.path,
-          config: { mimeType: file.mimetype }
+      if (transcription) parts.push({ text: transcription });
+      if (!transcription) {
+        const file = requireAudio(req.file);
+        ai = getAi();
+        remote = await uploadMedia(ai, file, (f) => (remote = f));
+        parts.push({
+          fileData: {
+            fileUri: remote.uri!,
+            mimeType: remote.mimeType || file.mimetype,
+          },
         });
-        
-        for (let attempt = 0; remote.state === "PROCESSING" && attempt < (options.processingAttempts ?? 60); attempt++) {
-          await sleep(1000);
-          remote = await ai.files.get({ name: remote.name });
-        }
-        
-        if (remote.state !== "ACTIVE" || !remote.uri) {
-          throw new RequestError(502, "Die KI konnte die Mediendatei nicht verarbeiten.");
-        }
-        
-        parts.push({ fileData: { fileUri: remote.uri, mimeType: remote.mimeType || file.mimetype } });
-        if (!transcription) {
-          parts.push({ text: "Analysiere dieses Meeting-Audio. Erstelle ein detailliertes Transkript und extrahiere die wichtigsten Informationen wie oben beschrieben." });
-        }
+        parts.push({
+          text: "Analysiere dieses Meeting-Audio. Erstelle ein detailliertes Transkript und extrahiere die wichtigsten Informationen wie oben beschrieben.",
+        });
       }
 
+      if (!ai) ai = getAi();
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: analysisModel(),
         contents: [{ role: "user", parts }],
         config: {
           systemInstruction,
@@ -243,22 +328,25 @@ export function createAnalysisRouter(options: Options = {}) {
       let result;
       try {
         result = validateAnalysis(JSON.parse(response.text || ""));
-      } catch (e) {
-        console.error("JSON validation failed:", response.text);
-        throw new RequestError(502, "Die KI hat keinen vollständigen Bericht geliefert.");
+      } catch {
+        console.error("Analysis validation failed:", response.text);
+        throw new RequestError(
+          502,
+          "Die KI hat keinen vollständigen Bericht geliefert.",
+        );
       }
-      res.json(result);
+      // A transcript supplied by the recording is authoritative over any
+      // shortened version the summarising model may echo back.
+      res.json(transcription ? { ...result, transcription } : result);
     } catch (error) {
-      console.error("Analyze error:", error);
-      res.status(error instanceof RequestError ? error.status : 500).json({ error: error instanceof RequestError ? error.message : "Analyse fehlgeschlagen." });
+      fail(res, error, "Analyze error");
     } finally {
-      if (remote?.name && ai) {
+      if (uid && acquired) analysing.delete(uid);
+      if (remote?.name && ai)
         await ai.files.delete({ name: remote.name }).catch(() => {});
-      }
-      if (filePath) {
-        await rm(filePath, { force: true }).catch(() => {});
-      }
+      if (filePath) await rm(filePath, { force: true }).catch(() => {});
     }
   });
+
   return router;
 }

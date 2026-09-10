@@ -7,27 +7,23 @@ import path from "node:path";
 import { createAnalysisRouter } from "../server/analysis";
 
 const report = {
-  title: "Begehung",
-  summary: "Baustelle",
-  rooms: [
-    {
-      name: "Keller",
-      transcription: "Wir sind im Keller.",
-      summary: "Trocken",
-      photoIds: ["photo-1.jpg"],
-      tags: ["Fortschritt"],
-    },
-  ],
+  title: "Weekly Sync",
+  summary: "Roadmap besprochen.",
+  transcription: "Wir starten mit dem Roadmap-Update.",
+  todos: ["Angebot senden"],
+  takeaways: ["Launch verschiebt sich"],
 };
-describe("authenticated analysis endpoint", () => {
+
+describe("analysis endpoints", () => {
   let server: Server;
   let base: string;
   let root: string;
   let client: any;
   const verifyToken = vi.fn();
+
   beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), "baudoku-test-"));
-    verifyToken.mockReset().mockImplementation(async (token) => {
+    root = await mkdtemp(path.join(tmpdir(), "cheatmeet-test-"));
+    verifyToken.mockReset().mockImplementation(async (token: string) => {
       if (token !== "valid-token") throw new Error("Invalid");
       return "user-1";
     });
@@ -55,6 +51,7 @@ describe("authenticated analysis endpoint", () => {
         verifyToken,
         uploadRoot: root,
         maxFileBytes: 1024,
+        maxSegmentBytes: 1024,
         processingAttempts: 2,
         sleep: async () => {},
       }),
@@ -63,6 +60,7 @@ describe("authenticated analysis endpoint", () => {
     await new Promise<void>((resolve) => server.once("listening", resolve));
     base = `http://127.0.0.1:${(server.address() as any).port}`;
   });
+
   afterEach(async () => {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
@@ -71,228 +69,356 @@ describe("authenticated analysis endpoint", () => {
     await vi.waitFor(async () => expect(await readdir(root)).toEqual([]));
     await rm(root, { recursive: true, force: true });
   });
-  function body({
-    photo = true,
-    metadata = JSON.stringify([{ id: "photo-1.jpg", relativeTimeMs: 3000 }]),
-    audio = true,
-    size = 8,
-    mime = "audio/webm",
-  } = {}) {
-    const form = new FormData();
-    if (audio)
-      form.append(
-        "audio",
-        new Blob([new Uint8Array(size)], { type: mime }),
-        "recording.webm",
-      );
-    if (photo)
-      form.append(
-        "photos",
-        new Blob(["image"], { type: "image/jpeg" }),
-        "photo-1.jpg",
-      );
-    form.append("photoTimestamps", photo ? metadata : "[]");
-    return form;
-  }
-  const send = (form: FormData, token = "valid-token") =>
-    fetch(`${base}/api/analyze`, {
+
+  const audioBlob = (size = 8, mime = "audio/webm") =>
+    new Blob([new Uint8Array(size)], { type: mime });
+
+  const post = (route: string, form: FormData, token = "valid-token") =>
+    fetch(`${base}/api/${route}`, {
       method: "POST",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: form,
     });
 
-  it("authenticates, passes MIME config and exact photo IDs, returns a report, cleans all files", async () => {
-    const response = await send(body());
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual(report);
-    expect(verifyToken).toHaveBeenCalledWith("valid-token");
-    expect(client.files.upload).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ config: { mimeType: "audio/webm" } }),
-    );
-    expect(client.files.upload).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ config: { mimeType: "image/jpeg" } }),
-    );
-    const request = client.models.generateContent.mock.calls[0][0];
-    expect(request.config.responseJsonSchema).toBeDefined();
-    expect(request.contents[0].parts[1].text).toContain("photo-1.jpg");
-    expect(request.contents[0].parts[1].text).toContain("3 Sekunden");
-    await vi.waitFor(() =>
-      expect(client.files.delete).toHaveBeenCalledTimes(2),
-    );
-  });
-  it.each(["", "expired-token"])(
-    "rejects missing or invalid identity before uploading (%s)",
-    async (token) => {
-      const response = await send(body(), token);
-      expect(response.status).toBe(401);
-      expect(client.files.upload).not.toHaveBeenCalled();
-    },
-  );
-  it.each([
-    "{broken",
-    '[{"id":"wrong.jpg","relativeTimeMs":3000}]',
-    '[{"id":"photo-1.jpg","relativeTimeMs":-1}]',
-  ])(
-    "rejects malformed timestamp metadata and cleans local uploads",
-    async (metadata) => {
-      const response = await send(body({ metadata }));
-      expect(response.status).toBe(400);
-      expect(client.files.upload).not.toHaveBeenCalled();
-    },
-  );
-  it("rejects missing audio and cleans uploaded photos", async () => {
-    expect((await send(body({ audio: false }))).status).toBe(400);
-  });
-  it.each([
-    { options: { size: 1025 }, status: 413 },
-    { options: { mime: "text/html" }, status: 415 },
-  ])("enforces upload restrictions ($status)", async ({ options, status }) => {
-    // Each case has its own router. A response may arrive before asynchronous
-    // cleanup releases the per-user concurrency guard.
-    expect((await send(body(options))).status).toBe(status);
-    expect(client.files.upload).not.toHaveBeenCalled();
-  });
-  it("accepts the full supported photo count and rejects one extra", async () => {
-    for (const count of [30, 31]) {
-      const form = new FormData();
-      form.append(
-        "audio",
-        new Blob(["audio"], { type: "audio/webm" }),
-        "audio.webm",
-      );
-      const metadata = Array.from({ length: count }, (_, index) => ({
-        id: `photo-${index}.jpg`,
-        relativeTimeMs: index * 1000,
-      }));
-      for (const photo of metadata)
-        form.append(
-          "photos",
-          new Blob(["image"], { type: "image/jpeg" }),
-          photo.id,
+  function analyzeBody({
+    transcription,
+    audio,
+    preferences,
+    size = 8,
+    mime = "audio/webm",
+  }: {
+    transcription?: string;
+    audio?: boolean;
+    preferences?: string;
+    size?: number;
+    mime?: string;
+  }) {
+    const form = new FormData();
+    if (transcription !== undefined)
+      form.append("transcription", transcription);
+    if (audio) form.append("audio", audioBlob(size, mime), "recording.webm");
+    if (preferences) form.append("preferences", preferences);
+    return form;
+  }
+
+  function segmentBody({
+    audio = true,
+    previous,
+    size = 8,
+    mime = "audio/webm",
+  }: {
+    audio?: boolean;
+    previous?: string;
+    size?: number;
+    mime?: string;
+  } = {}) {
+    const form = new FormData();
+    if (audio) form.append("audio", audioBlob(size, mime), "segment.webm");
+    if (previous !== undefined) form.append("previousTranscript", previous);
+    return form;
+  }
+
+  describe("POST /analyze", () => {
+    it.each(["", "expired-token"])(
+      "rejects missing or invalid identity before any model call (%s)",
+      async (token) => {
+        const response = await post(
+          "analyze",
+          analyzeBody({ audio: true }),
+          token,
         );
-      form.append("photoTimestamps", JSON.stringify(metadata));
-      const response = await send(form);
-      expect(response.status).toBe(count === 30 ? 200 : 400);
-      await vi.waitFor(async () => expect(await readdir(root)).toEqual([]));
-    }
-  });
-  it("waits for processing media to become active", async () => {
-    client.files.upload.mockResolvedValueOnce({
-      name: "files/pending",
-      state: "PROCESSING",
-    });
-    client.files.get
-      .mockResolvedValueOnce({ name: "files/pending", state: "PROCESSING" })
-      .mockResolvedValueOnce({
-        name: "files/pending",
-        state: "ACTIVE",
-        uri: "https://example.test/active",
-      });
-    expect((await send(body({ photo: false }))).status).toBe(200);
-    expect(client.files.get).toHaveBeenCalledTimes(2);
-    expect(client.files.delete).toHaveBeenCalledWith({ name: "files/pending" });
-  });
-  it("labels legacy unknown photo timestamps explicitly without fabricating time", async () => {
-    const response = await send(
-      body({
-        metadata: JSON.stringify([{ id: "photo-1.jpg", relativeTimeMs: null }]),
-      }),
+        expect(response.status).toBe(401);
+        expect(client.models.generateContent).not.toHaveBeenCalled();
+        expect(client.files.upload).not.toHaveBeenCalled();
+      },
     );
-    expect(response.status).toBe(200);
-    expect(
-      client.models.generateContent.mock.calls[0][0].contents[0].parts[1].text,
-    ).toContain("Aufnahmezeit unbekannt");
-  });
-  it("filters unknown tags and keeps valid grounded room timing", async () => {
-    client.models.generateContent.mockResolvedValueOnce({
-      text: JSON.stringify({
-        ...report,
-        rooms: [
-          {
-            ...report.rooms[0],
-            tags: ["Mangel", "invented", "Mangel"],
-            startTimeMs: 1000,
-            endTimeMs: 3000,
-          },
-        ],
-      }),
-    });
-    const response = await send(body());
-    expect((await response.json()).rooms[0]).toMatchObject({
-      tags: ["Mangel"],
-      startTimeMs: 1000,
-      endTimeMs: 3000,
-    });
-  });
-  it("rejects failed media and still removes remote and local files", async () => {
-    client.files.upload.mockResolvedValueOnce({
-      name: "files/failed",
-      state: "FAILED",
-    });
-    expect((await send(body())).status).toBe(502);
-    expect(client.models.generateContent).not.toHaveBeenCalled();
-    expect(client.files.delete).toHaveBeenCalledWith({ name: "files/failed" });
-  });
-  it("cleans earlier remote uploads when a later upload fails", async () => {
-    client.files.upload
-      .mockResolvedValueOnce({
-        name: "files/audio",
-        state: "ACTIVE",
-        uri: "https://example.test/audio",
-      })
-      .mockRejectedValueOnce(new Error("Provider down"));
-    const response = await send(body());
-    expect(response.status).toBe(502);
-    expect(JSON.stringify(await response.json())).not.toContain(
-      "Provider down",
-    );
-    expect(client.files.delete).toHaveBeenCalledWith({ name: "files/audio" });
-  });
-  it.each([
-    "invalid json",
-    "{}",
-    '{"title":"Empty","summary":"No content","rooms":[]}',
-  ])(
-    "rejects invalid model output instead of saving an error report",
-    async (text) => {
-      client.models.generateContent.mockResolvedValueOnce({ text });
-      expect((await send(body())).status).toBe(502);
-      await vi.waitFor(() =>
-        expect(client.files.delete).toHaveBeenCalledTimes(2),
+
+    it("summarises a supplied transcript without uploading any audio", async () => {
+      const response = await post(
+        "analyze",
+        analyzeBody({ transcription: "Wir starten mit dem Roadmap-Update." }),
       );
-    },
-  );
-  it("removes unknown and duplicate model photo assignments", async () => {
-    client.models.generateContent.mockResolvedValueOnce({
-      text: JSON.stringify({
-        ...report,
-        rooms: [
-          {
-            ...report.rooms[0],
-            photoIds: ["photo-1.jpg", "invented.jpg", "photo-1.jpg"],
-          },
-        ],
-      }),
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(report);
+      expect(client.files.upload).not.toHaveBeenCalled();
+      const request = client.models.generateContent.mock.calls[0][0];
+      expect(request.contents[0].parts).toEqual([
+        { text: "Wir starten mit dem Roadmap-Update." },
+      ]);
+      expect(request.config.responseJsonSchema).toBeDefined();
     });
-    const response = await send(body());
-    expect((await response.json()).rooms[0].photoIds).toEqual(["photo-1.jpg"]);
-  });
-  it("prevents concurrent analyses for one user", async () => {
-    let finish!: (value: { text: string }) => void;
-    client.models.generateContent.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
+
+    it("keeps the supplied transcript instead of a shortened echo", async () => {
+      client.models.generateContent.mockResolvedValueOnce({
+        text: JSON.stringify({ ...report, transcription: "gekürzt" }),
+      });
+      const response = await post(
+        "analyze",
+        analyzeBody({ transcription: "Das vollständige Transkript." }),
+      );
+      expect((await response.json()).transcription).toBe(
+        "Das vollständige Transkript.",
+      );
+    });
+
+    it("uploads audio only when no transcript exists and cleans both copies", async () => {
+      const response = await post("analyze", analyzeBody({ audio: true }));
+      expect(response.status).toBe(200);
+      expect(client.files.upload).toHaveBeenCalledWith(
+        expect.objectContaining({ config: { mimeType: "audio/webm" } }),
+      );
+      expect(
+        client.models.generateContent.mock.calls[0][0].contents[0].parts[0],
+      ).toHaveProperty("fileData.fileUri", "https://example.test/1");
+      await vi.waitFor(() =>
+        expect(client.files.delete).toHaveBeenCalledWith({ name: "files/1" }),
+      );
+    });
+
+    it("forwards the user's summary preferences to the model", async () => {
+      await post(
+        "analyze",
+        analyzeBody({ transcription: "Text", preferences: "Immer auf Englisch" }),
+      );
+      expect(
+        client.models.generateContent.mock.calls[0][0].config.systemInstruction,
+      ).toContain("Immer auf Englisch");
+    });
+
+    it("rejects a request with neither transcript nor audio", async () => {
+      expect((await post("analyze", analyzeBody({}))).status).toBe(400);
+      expect(client.models.generateContent).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { options: { audio: true, size: 1025 }, status: 413 },
+      { options: { audio: true, mime: "text/html" }, status: 415 },
+    ])("enforces upload restrictions ($status)", async ({ options, status }) => {
+      expect((await post("analyze", analyzeBody(options))).status).toBe(status);
+      expect(client.files.upload).not.toHaveBeenCalled();
+    });
+
+    it("waits for processing media to become active", async () => {
+      client.files.upload.mockResolvedValueOnce({
+        name: "files/pending",
+        state: "PROCESSING",
+      });
+      client.files.get
+        .mockResolvedValueOnce({ name: "files/pending", state: "PROCESSING" })
+        .mockResolvedValueOnce({
+          name: "files/pending",
+          state: "ACTIVE",
+          uri: "https://example.test/active",
+        });
+      expect((await post("analyze", analyzeBody({ audio: true }))).status).toBe(
+        200,
+      );
+      expect(client.files.get).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() =>
+        expect(client.files.delete).toHaveBeenCalledWith({
+          name: "files/pending",
         }),
+      );
+    });
+
+    it("rejects media the provider could not process and still cleans up", async () => {
+      client.files.upload.mockResolvedValueOnce({
+        name: "files/failed",
+        state: "FAILED",
+      });
+      expect((await post("analyze", analyzeBody({ audio: true }))).status).toBe(
+        502,
+      );
+      expect(client.models.generateContent).not.toHaveBeenCalled();
+      await vi.waitFor(() =>
+        expect(client.files.delete).toHaveBeenCalledWith({
+          name: "files/failed",
+        }),
+      );
+    });
+
+    it.each(["invalid json", "{}", '{"title":"","summary":"x"}'])(
+      "rejects unusable model output instead of saving an empty report",
+      async (text) => {
+        client.models.generateContent.mockResolvedValueOnce({ text });
+        expect(
+          (await post("analyze", analyzeBody({ transcription: "Text" })))
+            .status,
+        ).toBe(502);
+      },
     );
-    const first = send(body());
-    await vi.waitFor(() =>
-      expect(client.models.generateContent).toHaveBeenCalledOnce(),
+
+    it("does not leak provider error details to the client", async () => {
+      client.models.generateContent.mockRejectedValueOnce(
+        new Error("Provider down: key sk-secret"),
+      );
+      const response = await post(
+        "analyze",
+        analyzeBody({ transcription: "Text" }),
+      );
+      expect(response.status).toBe(500);
+      expect(JSON.stringify(await response.json())).not.toContain("sk-secret");
+    });
+
+    it("prevents concurrent analyses for one user and frees the slot afterwards", async () => {
+      let finish!: (value: { text: string }) => void;
+      client.models.generateContent.mockImplementationOnce(
+        () => new Promise((resolve) => (finish = resolve)),
+      );
+      const first = post("analyze", analyzeBody({ transcription: "Erst" }));
+      await vi.waitFor(() =>
+        expect(client.models.generateContent).toHaveBeenCalledOnce(),
+      );
+      expect(
+        (await post("analyze", analyzeBody({ transcription: "Zweit" }))).status,
+      ).toBe(429);
+      finish({ text: JSON.stringify(report) });
+      expect((await first).status).toBe(200);
+      expect(
+        (await post("analyze", analyzeBody({ transcription: "Danach" })))
+          .status,
+      ).toBe(200);
+    });
+
+    it("keeps the slot of a running analysis when a rejected request fails", async () => {
+      let finish!: (value: { text: string }) => void;
+      client.models.generateContent.mockImplementationOnce(
+        () => new Promise((resolve) => (finish = resolve)),
+      );
+      const first = post("analyze", analyzeBody({ transcription: "Erst" }));
+      await vi.waitFor(() =>
+        expect(client.models.generateContent).toHaveBeenCalledOnce(),
+      );
+      // An oversized request must not release the running analysis's slot.
+      expect(
+        (await post("analyze", analyzeBody({ audio: true, size: 1025 })))
+          .status,
+      ).toBe(413);
+      expect(
+        (await post("analyze", analyzeBody({ transcription: "Zweit" }))).status,
+      ).toBe(429);
+      finish({ text: JSON.stringify(report) });
+      expect((await first).status).toBe(200);
+    });
+  });
+
+  describe("POST /transcribe-segment", () => {
+    const transcript = (text: string) => ({ text });
+
+    it.each(["", "expired-token"])(
+      "rejects missing or invalid identity (%s)",
+      async (token) => {
+        expect((await post("transcribe-segment", segmentBody(), token)).status).toBe(
+          401,
+        );
+        expect(client.files.upload).not.toHaveBeenCalled();
+      },
     );
-    expect((await send(body())).status).toBe(429);
-    finish({ text: JSON.stringify(report) });
-    expect((await first).status).toBe(200);
+
+    it("returns the first segment verbatim without a glue call", async () => {
+      client.models.generateContent.mockResolvedValueOnce(
+        transcript("Guten Morgen zusammen."),
+      );
+      const response = await post("transcribe-segment", segmentBody());
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ text: "Guten Morgen zusammen." });
+      expect(client.models.generateContent).toHaveBeenCalledOnce();
+      await vi.waitFor(() =>
+        expect(client.files.delete).toHaveBeenCalledWith({ name: "files/1" }),
+      );
+    });
+
+    it("returns only the continuation when the segment overlaps the previous one", async () => {
+      client.models.generateContent
+        .mockResolvedValueOnce(transcript("bis später. Neuer Punkt: Budget."))
+        .mockResolvedValueOnce(
+          transcript(JSON.stringify({ continuation: "Neuer Punkt: Budget." })),
+        );
+      const response = await post(
+        "transcribe-segment",
+        segmentBody({ previous: "Wir machen Pause bis später." }),
+      );
+      expect(await response.json()).toEqual({ text: "Neuer Punkt: Budget." });
+      const glue = client.models.generateContent.mock.calls[1][0];
+      expect(glue.contents[0].parts[0].text).toContain(
+        "Wir machen Pause bis später.",
+      );
+      expect(glue.contents[0].parts[0].text).toContain("Neuer Punkt: Budget.");
+    });
+
+    it("sends only the tail of a long transcript as glue context", async () => {
+      const previous = "x".repeat(9000);
+      client.models.generateContent
+        .mockResolvedValueOnce(transcript("neuer Text"))
+        .mockResolvedValueOnce(
+          transcript(JSON.stringify({ continuation: "neuer Text" })),
+        );
+      await post("transcribe-segment", segmentBody({ previous }));
+      const context =
+        client.models.generateContent.mock.calls[1][0].contents[0].parts[0].text;
+      expect(context.length).toBeLessThan(previous.length);
+    });
+
+    it("keeps the raw segment rather than losing speech when glue output is unusable", async () => {
+      client.models.generateContent
+        .mockResolvedValueOnce(transcript("vollständiger Abschnitt"))
+        .mockResolvedValueOnce(transcript("not json at all"));
+      const response = await post(
+        "transcribe-segment",
+        segmentBody({ previous: "vorher" }),
+      );
+      expect(await response.json()).toEqual({ text: "vollständiger Abschnitt" });
+    });
+
+    it("accepts an empty continuation when the segment adds nothing new", async () => {
+      client.models.generateContent
+        .mockResolvedValueOnce(transcript("schon bekannt"))
+        .mockResolvedValueOnce(
+          transcript(JSON.stringify({ continuation: "" })),
+        );
+      const response = await post(
+        "transcribe-segment",
+        segmentBody({ previous: "schon bekannt" }),
+      );
+      expect(await response.json()).toEqual({ text: "" });
+    });
+
+    it("returns empty text for silence without calling the glue step", async () => {
+      client.models.generateContent.mockResolvedValueOnce(transcript("   "));
+      const response = await post(
+        "transcribe-segment",
+        segmentBody({ previous: "vorher" }),
+      );
+      expect(await response.json()).toEqual({ text: "" });
+      expect(client.models.generateContent).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      { options: { size: 1025 }, status: 413 },
+      { options: { mime: "text/html" }, status: 415 },
+      { options: { audio: false }, status: 400 },
+    ])("enforces segment upload restrictions ($status)", async ({ options, status }) => {
+      expect(
+        (await post("transcribe-segment", segmentBody(options))).status,
+      ).toBe(status);
+      expect(client.files.upload).not.toHaveBeenCalled();
+    });
+
+    it("runs alongside a busy analysis instead of competing for its slot", async () => {
+      let finish!: (value: { text: string }) => void;
+      client.models.generateContent.mockImplementationOnce(
+        () => new Promise((resolve) => (finish = resolve)),
+      );
+      const analysis = post("analyze", analyzeBody({ transcription: "Text" }));
+      await vi.waitFor(() =>
+        expect(client.models.generateContent).toHaveBeenCalledOnce(),
+      );
+      client.models.generateContent.mockResolvedValueOnce(
+        transcript("Segmenttext"),
+      );
+      expect((await post("transcribe-segment", segmentBody())).status).toBe(200);
+      finish({ text: JSON.stringify(report) });
+      expect((await analysis).status).toBe(200);
+    });
   });
 });

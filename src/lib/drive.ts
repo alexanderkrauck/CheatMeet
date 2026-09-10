@@ -192,63 +192,22 @@ export async function listDriveReports(
           typeof report.id !== "string" ||
           typeof report.title !== "string" ||
           typeof report.date !== "string" ||
-          !Number.isFinite(Date.parse(report.date)) ||
-          !Array.isArray(report.rooms)
+          !Number.isFinite(Date.parse(report.date))
         )
           throw new Error("Ungültige Berichtsdaten");
         // Validate fields rendered by report views before admitting external JSON.
-        if (
-          !report.rooms.every(
-            (room: any) =>
-              typeof room.name === "string" &&
-              typeof room.summary === "string" &&
-              typeof room.transcription === "string" &&
-              (!room.tags ||
-                (Array.isArray(room.tags) &&
-                  room.tags.every(
-                    (tag: unknown) => typeof tag === "string",
-                  ))) &&
-              (!room.photoUrls ||
-                (Array.isArray(room.photoUrls) &&
-                  room.photoUrls.every(
-                    (id: unknown) => typeof id === "string",
-                  ))) &&
-              (!room.photoIds ||
-                (Array.isArray(room.photoIds) &&
-                  room.photoIds.every(
-                    (id: unknown) => typeof id === "string",
-                  ))),
-          )
-        )
-          throw new Error("Ungültige Raumdaten");
-        for (const field of ["rawPhotoUrls"])
+        for (const field of ["todos", "takeaways"])
           if (
             report[field] !== undefined &&
             (!Array.isArray(report[field]) ||
-              !report[field].every((id: unknown) => typeof id === "string"))
+              !report[field].every((item: unknown) => typeof item === "string"))
           )
-            throw new Error("Ungültige Dateiverweise");
+            throw new Error("Ungültige Berichtsinhalte");
         if (
           report.rawAudioUrl !== undefined &&
           typeof report.rawAudioUrl !== "string"
         )
           throw new Error("Ungültige Audioreferenz");
-        if (
-          report.photos !== undefined &&
-          (!Array.isArray(report.photos) ||
-            !report.photos.every(
-              (photo: any) =>
-                photo &&
-                typeof photo.id === "string" &&
-                (photo.driveId === undefined ||
-                  typeof photo.driveId === "string") &&
-                (photo.relativeTimeMs === null ||
-                  (typeof photo.relativeTimeMs === "number" &&
-                    Number.isFinite(photo.relativeTimeMs) &&
-                    photo.relativeTimeMs >= 0)),
-            ))
-        )
-          throw new Error("Ungültige Fotodaten");
         if (
           report.updatedAt !== undefined &&
           (typeof report.updatedAt !== "string" ||
@@ -264,10 +223,10 @@ export async function listDriveReports(
         if (typeof report.error !== "string") delete report.error;
         report.summary =
           typeof report.summary === "string" ? report.summary : "";
-        report.rooms = report.rooms.map((room: any) => ({
-          ...room,
-          photoIds: room.photoIds || [],
-        }));
+        report.transcription =
+          typeof report.transcription === "string" ? report.transcription : "";
+        report.todos = report.todos || [];
+        report.takeaways = report.takeaways || [];
         reports.push({
           ...report,
           driveFolderId: folder.id,

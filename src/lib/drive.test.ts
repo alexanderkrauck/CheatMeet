@@ -33,36 +33,70 @@ describe("Drive storage", () => {
     );
     expect(rememberToken).toHaveBeenCalledWith(undefined);
   });
-  it("rejects malformed imported room tags before they reach report rendering", async () => {
+  it.each([
+    { field: "todos", value: "not-an-array" },
+    { field: "takeaways", value: [{ text: "object instead of string" }] },
+    { field: "rawAudioUrl", value: 42 },
+  ])(
+    "rejects a malformed imported $field before it reaches report rendering",
+    async ({ field, value }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(
+            response({ files: [{ id: "folder", name: "Broken" }] }),
+          )
+          .mockResolvedValueOnce(
+            response({ files: [{ id: "json", name: "bericht_daten.json" }] }),
+          )
+          .mockResolvedValueOnce(
+            response({
+              id: "bad",
+              title: "Report",
+              date: "2026-09-10",
+              [field]: value,
+            }),
+          ),
+      );
+      const result = await listDriveReports("token", "root");
+      expect(result.reports).toHaveLength(0);
+      expect(result.warnings).toHaveLength(1);
+    },
+  );
+
+  it("imports a meeting report and fills in absent optional fields", async () => {
     vi.stubGlobal(
       "fetch",
       vi
         .fn()
         .mockResolvedValueOnce(
-          response({ files: [{ id: "folder", name: "Broken" }] }),
+          response({ files: [{ id: "folder", name: "Sync" }] }),
         )
         .mockResolvedValueOnce(
           response({ files: [{ id: "json", name: "bericht_daten.json" }] }),
         )
         .mockResolvedValueOnce(
           response({
-            id: "bad",
-            title: "Report",
+            id: "r1",
+            title: "Weekly Sync",
             date: "2026-09-10",
-            rooms: [
-              {
-                name: "Room",
-                summary: "",
-                transcription: "",
-                tags: "not-an-array",
-              },
-            ],
+            todos: ["Angebot senden"],
           }),
         ),
     );
     const result = await listDriveReports("token", "root");
-    expect(result.reports).toHaveLength(0);
-    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings).toHaveLength(0);
+    expect(result.reports[0]).toMatchObject({
+      id: "r1",
+      todos: ["Angebot senden"],
+      takeaways: [],
+      transcription: "",
+      summary: "",
+      status: "pending",
+      driveFolderId: "folder",
+      driveReportId: "json",
+    });
   });
   it("recovers reports across folder pages and reports malformed exports", async () => {
     const fetchMock = vi
@@ -80,7 +114,7 @@ describe("Drive storage", () => {
         response({ files: [{ id: "json1", name: "bericht_daten.json" }] }),
       )
       .mockResolvedValueOnce(
-        response({ id: "r1", title: "Report", date: "2026-09-10", rooms: [] }),
+        response({ id: "r1", title: "Report", date: "2026-09-10" }),
       )
       .mockResolvedValueOnce(
         response({ files: [{ id: "json2", name: "bericht_daten.json" }] }),

@@ -6,6 +6,12 @@ export type RecordingWakeLockState =
 
 type LifecycleOptions = {
   recorder: MediaRecorder;
+  /**
+   * Tracks to watch for interruptions. When system audio is mixed in, the
+   * recorder's own stream is a synthetic AudioContext destination whose track
+   * never mutes or ends, so the real capture devices must be passed instead.
+   */
+  tracks?: MediaStreamTrack[];
   document: Pick<
     Document,
     "visibilityState" | "addEventListener" | "removeEventListener"
@@ -18,7 +24,7 @@ type LifecycleOptions = {
 /** Keep lifecycle handling separate so interruptions can be exercised without a microphone. */
 export function observeRecordingLifecycle(options: LifecycleOptions) {
   const { recorder, document: page, window: browser } = options;
-  const tracks = recorder.stream.getAudioTracks();
+  const tracks = options.tracks ?? recorder.stream.getAudioTracks();
   let previousInterruption: RecordingInterruption | undefined;
   const interrupt = (reason: RecordingInterruption) => {
     if (previousInterruption === reason) return;
@@ -84,11 +90,13 @@ export function observeRecordingLifecycle(options: LifecycleOptions) {
 /** Prevent automatic screen sleep where supported; manual locking remains under OS control. */
 export function useRecordingLifecycle({
   recorderRef,
+  tracksRef,
   active,
   onInterrupted,
   onVisibilityReturn,
 }: {
   recorderRef: RefObject<MediaRecorder | null>;
+  tracksRef?: RefObject<MediaStreamTrack[]>;
   active: boolean;
   onInterrupted: (reason: RecordingInterruption) => void;
   onVisibilityReturn?: () => void;
@@ -146,6 +154,7 @@ export function useRecordingLifecycle({
     };
     const stopObserving = observeRecordingLifecycle({
       recorder,
+      tracks: tracksRef?.current?.length ? tracksRef.current : undefined,
       document,
       window,
       onInterrupted: (reason) => callbacks.current.onInterrupted(reason),

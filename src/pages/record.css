@@ -282,6 +282,27 @@
   color: #a0acc0;
   text-align: center;
 }
+.walk-live-transcript {
+  width: 100%;
+  max-height: 34vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #ffffff14;
+  border: 1px solid #ffffff26;
+  text-align: left;
+  -webkit-overflow-scrolling: touch;
+}
+.walk-live-transcript p {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #eaf1ff;
+  text-align: left;
+}
+.walk-transcript-status {
+  font-size: 10px;
+  color: #a0acc0;
+}
 .walk-photo-strip {
   height: 65px;
   display: flex;
@@ -850,4 +871,17 @@
   .walk-live {
     min-height: 75px;
   }
+}
+
+.walk-busy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #1e40af;
+  background: #eaf1fd;
+  border: 1px solid #cfdcf7;
+  border-radius: 10px;
+  padding: 9px 12px;
 }

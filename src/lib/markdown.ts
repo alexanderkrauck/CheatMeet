@@ -68,35 +68,8 @@ export function reportToMarkdown(report: ReportData): string {
     });
   }
 
-  const photos =
-    report.photos ||
-    (report.rawPhotoUrls || [])
-      .map((driveId, index) => ({
-        id: `photo_${index}`,
-        driveId,
-        relativeTimeMs: null,
-      }))
-      .filter((photo) => photo.driveId);
-      
-  function photoLine(photo: {
-    id: string;
-    driveId?: string;
-    relativeTimeMs: number | null;
-  }) {
-    const label = heading(photo.id);
-    const reference = photo.driveId
-      ? `[${label}](${driveLink(photo.driveId)})`
-      : `${label} (noch nicht in Drive gesichert)`;
-    return `- ${reference} · ${photo.relativeTimeMs === null ? "Aufnahmezeit unbekannt" : time(photo.relativeTimeMs)}`;
-  }
-  
-  if (photos.length)
-    lines.push(
-      "",
-      "## Fotos/Screenshots",
-      "",
-      ...photos.map(photoLine),
-    );
-    
+  if (report.transcription.trim())
+    lines.push("", "## Transkript", "", verbatim(report.transcription));
+
   return `${lines.join("\n")}\n`;
 }

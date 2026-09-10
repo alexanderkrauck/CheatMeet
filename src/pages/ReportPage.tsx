@@ -1,26 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
-  Check,
   CloudUpload,
   Download,
   Edit3,
   Printer,
   RefreshCw,
   Save,
-  Trash2,
   WandSparkles,
-  MapPin,
-  FolderOpen
+  FolderOpen,
 } from "lucide-react";
 import { Busy, Notice, Shell, Status, dateLabel } from "../components/UI";
 import type { ReportData } from "../types";
-import { auth } from "../lib/firebase";
 import { connectGoogle, driveToken, errorMessage } from "../lib/session";
 import { saveReport, uid } from "../lib/reports";
 import { backupDraft, syncReport, analyzeDraft, restoreDraft } from "../lib/workflow";
-import { getDraft, putDraft } from "../lib/local";
+import { getDraft, getLocal, putDraft } from "../lib/local";
+import { clearJob, jobFor, subscribeJobs } from "../lib/pipeline";
 import { reportToMarkdown } from "../lib/markdown";
 
 function DriveLink({ id }: { id: string }) {
@@ -52,7 +49,6 @@ export default function ReportPage({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
-  const [token, setToken] = useState(driveToken());
 
   useEffect(() => {
     if (initialReport) return;
@@ -61,12 +57,19 @@ export default function ReportPage({
       try {
         const id = params.id!;
         const owner = uid();
-        const local = await getDraft(owner, id);
-        if (local && active) {
-          setReport(local.report);
-          setDirty(false);
-        } else if (active) {
-          setError("Bericht lokal nicht gefunden. Versuche ihn aus Drive zu laden.");
+        // A finished report is a saved report, not a draft: the draft is deleted
+        // once it has been analysed and exported.
+        const stored = await getLocal(owner, id);
+        const draft = stored ? undefined : await getDraft(owner, id);
+        if (!active) return;
+        if (stored) {
+          setReport(stored.report);
+          setDirty(stored.dirty);
+        } else if (draft) {
+          setReport(draft.report);
+          setDirty(true);
+        } else {
+          setError("Bericht auf diesem Gerät nicht gefunden.");
         }
       } catch (e) {
         if (active) setError(errorMessage(e));
@@ -79,12 +82,35 @@ export default function ReportPage({
   }, [initialReport, params.id]);
 
   const view = edited || report;
+  const job = useSyncExternalStore(subscribeJobs, () =>
+    params.id ? jobFor(params.id) : undefined,
+  );
+  const running = !!job && job.stage !== "done" && job.stage !== "error";
 
-  async function connect() {
-    setError("");
-    setToken(null);
-    try { setToken(await connectGoogle()); } catch (e) { setError(errorMessage(e)); }
-  }
+  // The background pipeline writes each step locally; mirror it into the view
+  // rather than leaving a stale report on screen.
+  useEffect(() => {
+    if (!job) return;
+    let active = true;
+    getLocal(uid(), job.reportId)
+      .then((stored) => {
+        if (!active || !stored) return;
+        setReport(stored.report);
+        setDirty(stored.dirty);
+      })
+      .catch(() => {});
+    if (job.stage === "done") {
+      setNotice(job.warning || "In Google Drive gespeichert.");
+      clearJob(job.reportId);
+    }
+    if (job.stage === "error") {
+      setError(job.error || "Der Vorgang ist fehlgeschlagen.");
+      clearJob(job.reportId);
+    }
+    return () => {
+      active = false;
+    };
+  }, [job]);
 
   async function save(syncDrive: boolean) {
     if (!view || busy) return;
@@ -108,7 +134,6 @@ export default function ReportPage({
         throw connected.error;
       }
       const t = connected.token;
-      if (t) setToken(t);
       if (t) {
         const result = await syncReport(next, t);
         setReport(result.report);
@@ -126,7 +151,6 @@ export default function ReportPage({
     setBusy("Lade...");
     try {
       const t = driveToken() || (await connectGoogle());
-      setToken(t);
       const local = await getDraft(owner, report.id);
       const d = local?.report.id === report.id && local.audio ? { ...local, report } : await restoreDraft(report, t);
       if (local?.report.id === report.id) await backupDraft(d, t, setBusy);
@@ -166,7 +190,7 @@ export default function ReportPage({
 
   return (
     <Shell actions={<Link className="btn btn-ghost" to="/dashboard"><ArrowLeft size={18} /> Übersicht</Link>}>
-      <fieldset disabled={!!busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+      <fieldset disabled={!!busy || running} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <div className="report-title">
           <div className="split">
             <span className="eyebrow">MEETING-ZUSAMMENFASSUNG / {dateLabel(view.date)}</span>
@@ -202,14 +226,27 @@ export default function ReportPage({
         {notice && <Notice kind="info">{notice}</Notice>}
         {busy && <Busy text={busy} />}
 
-        {view.status !== "completed" && (
-          <div className="analysis-recovery panel no-print">
+        {running ? (
+          <div className="analysis-progress panel no-print" role="status" aria-live="polite">
+            <RefreshCw size={18} className="spin" />
             <div>
-              <h2>Analyse erneut starten</h2>
-              <p className="muted">{view.error || "Starte die KI-Analyse."}</p>
+              <h2>{job!.message}</h2>
+              <p className="muted">
+                Du kannst weiterlesen und navigieren. Der Vorgang läuft in
+                diesem Tab weiter — bitte schließe ihn noch nicht.
+              </p>
             </div>
-            <button className="btn btn-primary" onClick={retry} disabled={!!busy || !!edited}><WandSparkles size={18} /> Bericht erstellen</button>
           </div>
+        ) : (
+          view.status !== "completed" && (
+            <div className="analysis-recovery panel no-print">
+              <div>
+                <h2>Analyse erneut starten</h2>
+                <p className="muted">{view.error || "Starte die KI-Analyse."}</p>
+              </div>
+              <button className="btn btn-primary" onClick={retry} disabled={!!busy || !!edited}><WandSparkles size={18} /> Bericht erstellen</button>
+            </div>
+          )
         )}
 
         <section className="summary-panel">

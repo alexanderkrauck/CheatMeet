@@ -144,10 +144,7 @@ export default function Dashboard() {
           </span>
           <div>
             <strong>{draft.report.title || "Deine Aufnahme wartet"}</strong>
-            <p>
-              Lokaler Entwurf · {draft.photos.length} Fotos · noch sichern &
-              analysieren
-            </p>
+            <p>Lokaler Entwurf · noch sichern &amp; analysieren</p>
           </div>
           <ArrowRight />
         </Link>
@@ -222,8 +219,8 @@ export default function Dashboard() {
                   {r.summary || "Aufnahme prüfen und einen Bericht erstellen."}
                 </p>
                 <span className="small muted">
-                  {r.todos?.length || 0} To-Dos ·{" "}
-                  {r.photos?.length || r.rawPhotoUrls?.length || 0} Screenshots
+                  {r.todos?.length || 0} To-Dos · {r.takeaways?.length || 0}{" "}
+                  Erkenntnisse
                 </span>
               </div>
               <ArrowRight className="report-arrow" />

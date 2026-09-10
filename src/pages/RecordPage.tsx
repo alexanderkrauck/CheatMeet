@@ -17,8 +17,11 @@ import {
   CloudUpload,
 } from "lucide-react";
 import { AudioPreview } from "../components/UI";
-import { LiveTranscriber } from "../lib/liveTranscription";
-import { mergeAudioStreams } from "../lib/audioMerge";
+import {
+  startLiveTranscription,
+  type LiveTranscription,
+} from "../lib/liveTranscription";
+import { mergeAudioStreams, type MergedAudio } from "../lib/audioMerge";
 import RecordingSheet from "../components/RecordingSheet";
 import { savedDriveFolder } from "../lib/driveSettings";
 import "./record.css";
@@ -26,21 +29,22 @@ import { useRecordingLifecycle } from "../lib/useRecordingLifecycle";
 import {
   getDraft,
   putDraft,
+  putLocal,
   deleteDraft,
   appendRecordingChunk,
 } from "../lib/local";
-import { uid, saveReport } from "../lib/reports";
+import { uid } from "../lib/reports";
 import { verifyDriveAccess } from "../lib/drive";
 import { errorMessage, connectGoogle, driveToken } from "../lib/session";
-import { analyzeDraft, backupDraft, syncReport } from "../lib/workflow";
+import { startProcessing } from "../lib/pipeline";
 import {
+  AUDIO_MIME_TYPES,
   MAX_FILE_BYTES,
-  MAX_PHOTOS,
   audioExtension,
 } from "../../shared/analysis";
 import type { Draft } from "../types";
 import DriveSettings from "../components/DriveSettings";
-import { RecordingClock } from "../lib/recording";
+import { RecordingClock, preferredRecordingMimeType } from "../lib/recording";
 const fresh = (): Draft => ({
   report: {
     id: crypto.randomUUID(),
@@ -52,7 +56,6 @@ const fresh = (): Draft => ({
     takeaways: [],
     status: "pending",
   },
-  photos: [],
 });
 export const formatTime = (ms: number) =>
   `${Math.floor(ms / 60000)
@@ -125,7 +128,16 @@ export default function RecordPage() {
     new Map<number, { blob: Blob; durationMs: number; reportId: string }>(),
   );
   const clock = useRef(new RecordingClock());
-  const liveTranscriber = useRef<LiveTranscriber | null>(null);
+  const live = useRef<LiveTranscription | null>(null);
+  const capture = useRef<{
+    mic?: MediaStream;
+    system?: MediaStream;
+    merged?: MergedAudio;
+  }>({});
+  const captureTracks = useRef<MediaStreamTrack[]>([]);
+  const transcriptionTicker = useRef<number | undefined>(undefined);
+  const transcriptionDone = useRef<Promise<string> | null>(null);
+  const [transcribing, setTranscribing] = useState(0);
   const operation = useRef(false);
   const revision = useRef(0);
   const queue = useRef(Promise.resolve());
@@ -133,6 +145,19 @@ export default function RecordPage() {
   const active = useRef(true);
   const audioInput = useRef<HTMLInputElement>(null);
   const elapsedNow = () => clock.current.read();
+  /**
+   * Releases every device this page opened. The recorder's own stream may be a
+   * mixing destination, so stopping it alone leaves the microphone and the
+   * screen-share indicator running.
+   */
+  const releaseCapture = () => {
+    const { mic, system, merged } = capture.current;
+    merged?.dispose();
+    for (const source of [mic, system])
+      source?.getTracks().forEach((track) => track.stop());
+    capture.current = {};
+    captureTracks.current = [];
+  };
   const flushChunks = async () => {
     for (const [sequence, chunk] of [...pendingChunks.current]) {
       await appendRecordingChunk(
@@ -197,6 +222,7 @@ export default function RecordPage() {
   };
   const { wakeLockState } = useRecordingLifecycle({
     recorderRef: recorder,
+    tracksRef: captureTracks,
     active: recording,
     onInterrupted: (reason) => {
       if (!active.current) return;
@@ -255,7 +281,11 @@ export default function RecordPage() {
         if (!cancelled) setLoading(false);
       });
     const timer = setInterval(() => {
-      if (recorder.current?.state === "recording") setDuration(elapsedNow());
+      if (recorder.current?.state !== "recording") return;
+      setDuration(elapsedNow());
+      // A visible tab gets exact segment boundaries; a throttled one falls back
+      // to the recorder's own data events.
+      live.current?.tick();
     }, 250);
     const unload = (e: BeforeUnloadEvent) => {
       if (
@@ -273,10 +303,13 @@ export default function RecordPage() {
       clearInterval(timer);
       window.removeEventListener("beforeunload", unload);
       clock.current.pause();
-      if (recorder.current) {
-        if (recorder.current.state !== "inactive") recorder.current.stop();
-        recorder.current.stream.getTracks().forEach((t) => t.stop());
-      }
+      if (transcriptionTicker.current !== undefined)
+        clearInterval(transcriptionTicker.current);
+      void live.current?.finish().catch(() => {});
+      live.current = null;
+      if (recorder.current && recorder.current.state !== "inactive")
+        recorder.current.stop();
+      releaseCapture();
     };
   }, []);
   async function authorizeDrive() {
@@ -322,45 +355,54 @@ export default function RecordPage() {
         }
       }
       if (!active.current || uid() !== accountId) return;
-      const isMac = navigator.userAgent.includes("Mac");
-      const hint = isMac ? "Bitte gib im folgenden Dialog den Tab frei (inkl. Systemaudio)." : "Bitte teile deinen Bildschirm oder ein Fenster und setze den Haken bei 'Systemaudio teilen'.";
-      setBusy(`Mikrofon und Systemaudio vorbereiten... ${hint}`);
       if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder)
         throw new Error(
           "Aufnahme wird in diesem Browser nicht unterstützt. Bitte eine Audiodatei importieren oder einen aktuellen Browser über HTTPS verwenden.",
         );
-      
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      setBusy("Mikrofon vorbereiten …");
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      capture.current.mic = micStream;
+
+      // Browsers only expose system audio through a display-capture prompt, and
+      // only alongside a video track. Declining it is a normal outcome: the
+      // meeting is then recorded from the microphone alone.
       let systemStream: MediaStream | undefined;
-      try {
-        systemStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-      } catch(e) {
-        console.warn("User cancelled system audio", e);
+      if (navigator.mediaDevices.getDisplayMedia) {
+        setBusy(
+          "Systemaudio freigeben … Teile den Tab oder Bildschirm und aktiviere „Audio teilen“. Ohne Freigabe wird nur das Mikrofon aufgenommen.",
+        );
+        try {
+          systemStream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: true,
+          });
+          capture.current.system = systemStream;
+          if (!systemStream.getAudioTracks().length)
+            setWarning(
+              "Die Freigabe enthält kein Systemaudio. Es wird nur das Mikrofon aufgenommen.",
+            );
+        } catch (e) {
+          console.warn("System audio was not shared", e);
+        }
       }
-      
-      stream = mergeAudioStreams(micStream, systemStream);
-      
+
+      const merged = mergeAudioStreams(micStream, systemStream);
+      capture.current.merged = merged;
+      stream = merged.stream;
+      captureTracks.current = [
+        ...micStream.getAudioTracks(),
+        ...(systemStream?.getAudioTracks() || []),
+      ];
+
       if (!active.current) {
-        micStream.getTracks().forEach((t) => t.stop());
-        systemStream?.getTracks().forEach((t) => t.stop());
+        releaseCapture();
         return;
       }
-      
-      liveTranscriber.current = new LiveTranscriber((newTranscript) => {
-        if (active.current) {
-          setDraft(prev => {
-            const next = { ...prev, report: { ...prev.report, transcription: newTranscript } };
-            current.current = next;
-            return next;
-          });
-        }
-      });
-      const mime = [
-        "audio/webm;codecs=opus",
-        "audio/mp4",
-        "audio/webm",
-        "audio/ogg;codecs=opus",
-      ].find((t) => MediaRecorder.isTypeSupported(t));
+
+      const mime = preferredRecordingMimeType();
       let rec: MediaRecorder;
       try {
         rec = new MediaRecorder(stream, {
@@ -368,22 +410,35 @@ export default function RecordPage() {
           audioBitsPerSecond: 64000,
         });
       } catch (e) {
-        stream.getTracks().forEach((t) => t.stop());
+        releaseCapture();
         throw e;
       }
       recorder.current = rec;
       chunks.current = [];
       chunkSequence.current = 0;
+      transcriptionDone.current = null;
       clock.current.reset();
       await persist({
         ...current.current,
         report: { ...current.current.report, captureState: "recording" },
       });
       if (!active.current) {
-        stream.getTracks().forEach((t) => t.stop());
+        releaseCapture();
         return;
       }
       void navigator.storage?.persist?.().catch(() => {});
+      live.current = startLiveTranscription(stream, elapsedNow, (transcription) => {
+        const next = {
+          ...current.current,
+          report: { ...current.current.report, transcription },
+        };
+        current.current = next;
+        if (active.current) setDraft(next);
+        void queueWrite(async () => {}).catch(() => {});
+      });
+      transcriptionTicker.current = window.setInterval(() => {
+        if (active.current) setTranscribing(live.current?.pendingSegments || 0);
+      }, 1000);
       rec.ondataavailable = (e) => {
         if (!e.data.size) return;
         chunks.current.push(e.data);
@@ -404,14 +459,9 @@ export default function RecordPage() {
           reportId: next.report.id,
         });
         void queueWrite(async () => {}).catch(() => {});
-        liveTranscriber.current?.addChunk(e.data);
-        if (audio.size > MAX_FILE_BYTES - 512000 && rec.state !== "inactive") {
-          if (active.current)
-            setWarning(
-              "Die maximale Aufnahmegröße ist erreicht. Die Aufnahme wurde beendet.",
-            );
-          stop();
-        }
+        // Media-pipeline driven, so segment boundaries survive a hidden tab
+        // whose timers are throttled.
+        live.current?.tick();
       };
       rec.onerror = () => {
         if (active.current)
@@ -421,15 +471,13 @@ export default function RecordPage() {
         if (rec.state !== "inactive") stop();
         else {
           clock.current.pause();
-          stream?.getTracks().forEach((t) => t.stop());
+          releaseCapture();
           if (active.current) setState("review");
         }
       };
       rec.onstop = () => {
         const finalDuration = clock.current.pause();
-        stream?.getTracks().forEach((t) => t.stop());
-        if (systemStream) systemStream.getTracks().forEach((t) => t.stop());
-        if (micStream) micStream.getTracks().forEach((t) => t.stop());
+        releaseCapture();
         if (current.current.audio)
           void persist({
             ...current.current,
@@ -444,12 +492,14 @@ export default function RecordPage() {
           setState("review");
         }
       };
-      rec.start(10000); // 30 second chunks for live transcription
+      // Journals the durable recording to IndexedDB; transcription segments are
+      // captured separately so they stay independently decodable.
+      rec.start(10_000);
       clock.current.resume();
       setState("recording");
       setDuration(0);
     } catch (e) {
-      stream?.getTracks().forEach((t) => t.stop());
+      releaseCapture();
       if (active.current)
         setError(
           (e as Error).name === "NotAllowedError"
@@ -468,6 +518,7 @@ export default function RecordPage() {
       const time = clock.current.pause();
       rec.pause();
       rec.requestData();
+      void live.current?.pause();
       setState("paused");
       setDuration(time);
       void persist({
@@ -475,16 +526,19 @@ export default function RecordPage() {
         report: { ...current.current.report, captureState: "paused" },
       }).catch(() => {});
     } else if (rec.state === "paused") {
+      // Check the real capture devices: when system audio is mixed in, the
+      // recorder's own track is synthetic and never reports a dead microphone.
       if (
-        rec.stream
-          .getAudioTracks()
-          .some((track) => track.muted || track.readyState === "ended")
+        captureTracks.current.some(
+          (track) => track.muted || track.readyState === "ended",
+        )
       ) {
         setWarning(
           "Das Mikrofon ist noch nicht verfügbar. Die Aufnahme bleibt pausiert.",
         );
         return;
       }
+      void live.current?.resume();
       setWarning("");
       clock.current.resume();
       rec.resume();
@@ -495,12 +549,44 @@ export default function RecordPage() {
       }).catch(() => {});
     }
   }
+  /**
+   * Transcribes the trailing segment and adopts the completed transcript.
+   * Analysis must not run against a transcript that stops seconds before the
+   * meeting did, so this resolves once every queued segment has been applied.
+   */
+  function finishTranscription(): Promise<string> {
+    const pipeline = live.current;
+    if (!pipeline)
+      return Promise.resolve(current.current.report.transcription || "");
+    transcriptionDone.current ||= pipeline.finish().then((transcription) => {
+      if (transcriptionTicker.current !== undefined)
+        clearInterval(transcriptionTicker.current);
+      const next = {
+        ...current.current,
+        report: { ...current.current.report, transcription },
+      };
+      current.current = next;
+      if (active.current) {
+        setDraft(next);
+        setTranscribing(0);
+        if (pipeline.failedSegments)
+          setWarning(
+            `${pipeline.failedSegments} Abschnitt(e) konnten nicht transkribiert werden. Das Transkript ist möglicherweise unvollständig; die Originalaufnahme ist vollständig.`,
+          );
+      }
+      void queueWrite(async () => {}).catch(() => {});
+      return transcription;
+    });
+    return transcriptionDone.current;
+  }
+
   function stop() {
     const rec = recorder.current;
     if (!rec || rec.state === "inactive") return;
     const time = clock.current.pause();
     if (active.current) setDuration(time);
     rec.stop();
+    void finishTranscription().catch(() => {});
   }
     async function importAudio(file?: File) {
     if (!file || operation.current) return;
@@ -508,19 +594,10 @@ export default function RecordPage() {
     if (
       file.size > MAX_FILE_BYTES ||
       !file.size ||
-      ![
-        "audio/webm",
-        "audio/mp4",
-        "audio/mpeg",
-        "audio/wav",
-        "audio/x-wav",
-        "audio/ogg",
-        "audio/aac",
-        "audio/flac",
-      ].includes(file.type)
+      !(AUDIO_MIME_TYPES as readonly string[]).includes(file.type)
     ) {
       setError(
-        "Bitte eine Audiodatei bis 25 MB wählen (WebM, M4A, MP3, WAV, Ogg, AAC oder FLAC).",
+        "Bitte eine Audiodatei wählen (WebM, M4A, MP3, WAV, Ogg, AAC oder FLAC).",
       );
       return;
     }
@@ -539,7 +616,7 @@ export default function RecordPage() {
     operation.current = true;
     setError("");
     setWarning("");
-    setBusy("Speichern vorbereiten …");
+    setBusy("Transkription abschließen …");
     try {
       // Saving never starts an unexpected OAuth popup.
       const token = driveToken();
@@ -550,52 +627,24 @@ export default function RecordPage() {
         );
       }
       if (!active.current || uid() !== accountId) return;
+      await finishTranscription().catch(() => {});
+      if (!active.current || uid() !== accountId) return;
+
       setBusy("Entwurf lokal sichern …");
       await queue.current.catch(() => {});
-      if (!active.current) return;
-      let d = current.current;
+      if (!active.current || uid() !== accountId) return;
+      const d = current.current;
       d.report.title ||= `Meeting vom ${new Date(d.report.date).toLocaleDateString("de-AT")}`;
+      d.report.status = analyze ? "analyzing" : d.report.status;
       await persist(d);
+      // The report must be readable before its page opens; the rest of the
+      // pipeline continues in the background.
+      await putLocal(accountId, d.report);
       if (!active.current || uid() !== accountId) return;
-      const cloudWarning = await saveReport(d.report);
-      if (cloudWarning) setWarning(cloudWarning);
-      if (!active.current || uid() !== accountId) return;
-      await backupDraft(d, token, setBusy);
-      await persist({ ...d });
-      if (!active.current) return;
-      if (analyze) {
-        setBusy(
-          "Dein Meeting analysieren …",
-        );
-        try {
-          const result = await analyzeDraft(d);
-          d = { ...d, report: result };
-          await persist(d);
-        } catch (e) {
-          d = {
-            ...d,
-            report: { ...d.report, status: "error", error: errorMessage(e) },
-          };
-          await persist(d);
-          if (!active.current || uid() !== accountId) throw e;
-          await saveReport(d.report);
-          try {
-            if (!active.current || uid() !== accountId) throw e;
-            await syncReport(d.report, token);
-          } catch {
-            /* primary analysis error remains visible */
-          }
-          throw e;
-        }
-      }
-      if (!active.current) return;
-      setBusy("Bericht in Google Drive speichern …");
-      const result = await syncReport(d.report, token);
-      await persist({ ...d, report: result.report });
-      if (result.warning) setWarning(result.warning);
-      await deleteDraft(accountId, result.report.id);
+
+      void startProcessing({ owner: accountId, draft: d, token, analyze });
       current.current = fresh();
-      if (active.current) navigate(`/report/${result.report.id}`);
+      navigate(`/report/${d.report.id}`);
     } catch (e) {
       if (active.current) setError(errorMessage(e));
     } finally {
@@ -687,15 +736,6 @@ export default function RecordPage() {
             <Loader2 className="spin" />
             <h1>Entwurf laden …</h1>
           </main>
-        ) : busy ? (
-          <main className="walk-progress" aria-live="polite" aria-busy="true">
-            <div className="walk-progress-icon">
-              <Loader2 className="spin" size={32} />
-            </div>
-            <span className="walk-step">BITTE DIESE SEITE GEÖFFNET LASSEN</span>
-            <h1>{busy}</h1>
-            <p>Du kommst direkt zum Bericht, sobald er bereit ist.</p>
-          </main>
         ) : (
           <>
             <main className="walk-content">
@@ -775,8 +815,8 @@ export default function RecordPage() {
                       ))}
                     </div>
                     {draft.report.transcription ? (
-                      <div className="walk-live-transcript" style={{ marginTop: 12, padding: "12px 16px", background: "#ffffff", borderRadius: 12, border: "1px solid #bfdbfe", maxHeight: "120px", overflowY: "auto", fontSize: 13, color: "#1e3a8a", textAlign: "left", lineHeight: 1.5 }}>
-                        {draft.report.transcription}
+                      <div className="walk-live-transcript">
+                        <p>{draft.report.transcription}</p>
                       </div>
                     ) : (
                       <p>
@@ -785,6 +825,13 @@ export default function RecordPage() {
                           : "Die Transkription läuft automatisch mit."}
                       </p>
                     )}
+                    <p className="walk-transcript-status">
+                      {state === "paused"
+                        ? "Transkription pausiert"
+                        : transcribing > 0
+                          ? `Transkription läuft · ${transcribing} Abschnitt(e) in Arbeit`
+                          : "Transkription aktuell"}
+                    </p>
                   </div>
                   </>
               ) : (
@@ -829,6 +876,12 @@ export default function RecordPage() {
               )}
             </main>
             <footer className="walk-dock">
+              {busy && (
+                <p className="walk-busy" role="status" aria-live="polite">
+                  <Loader2 className="spin" size={15} />
+                  {busy}
+                </p>
+              )}
               {recording ? (
                 <>
                   <div className="walk-capture-controls">
@@ -860,7 +913,11 @@ export default function RecordPage() {
                 </>
               ) : state === "ready" ? (
                 <>
-                  <button className="walk-primary" onClick={() => void start()}>
+                  <button
+                    className="walk-primary"
+                    disabled={!!busy}
+                    onClick={() => void start()}
+                  >
                     <Mic size={22} />
                     {online && !driveReady
                       ? "Google Drive freigeben"
@@ -897,7 +954,9 @@ export default function RecordPage() {
                   <button
                     ref={saveButton}
                     className="walk-primary"
-                    disabled={!online || !driveReady || !draft.audio?.size}
+                    disabled={
+                      !!busy || !online || !driveReady || !draft.audio?.size
+                    }
                     onClick={() => process(true)}
                   >
                     <WandSparkles size={21} />

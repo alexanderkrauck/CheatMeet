@@ -180,7 +180,7 @@ test("production Express serves the generated manifest, worker and deep-link she
   assert.equal(await worker.text(), source);
   assert.equal(
     (await (await fetch(`${base}/manifest.webmanifest`)).json()).short_name,
-    "Baudoku",
+    "CheatMeet",
   );
   const deepLink = await fetch(`${base}/report/example`);
   const html = await deepLink.text();

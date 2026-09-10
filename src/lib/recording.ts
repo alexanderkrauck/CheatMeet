@@ -1,5 +1,3 @@
-import type { CapturedPhoto, Draft } from "../types";
-
 /** Measure the recorded timeline independently of asynchronous MediaRecorder events. */
 export class RecordingClock {
   private accumulated = 0;
@@ -25,23 +23,17 @@ export class RecordingClock {
   }
 }
 
-/** A retry keeps existing uploads, but must not retain deleted or omit new photos. */
-export function reconcileDraftPhotos(
-  draft: Draft,
-  photos: CapturedPhoto[],
-): Draft {
-  const metadata = photos.map((photo) => ({
-    ...draft.report.photos?.find((p) => p.id === photo.id),
-    id: photo.id,
-    relativeTimeMs: photo.relativeTimeMs,
-  }));
-  return {
-    ...draft,
-    photos,
-    report: {
-      ...draft.report,
-      photos: metadata,
-      rawPhotoUrls: metadata.map((photo) => photo.driveId || ""),
-    },
-  };
+const CANDIDATE_MIME_TYPES = [
+  "audio/webm;codecs=opus",
+  "audio/mp4",
+  "audio/webm",
+  "audio/ogg;codecs=opus",
+];
+
+/** The container the full recording and every transcription segment share. */
+export function preferredRecordingMimeType(): string | undefined {
+  if (typeof MediaRecorder === "undefined") return undefined;
+  return CANDIDATE_MIME_TYPES.find((type) =>
+    MediaRecorder.isTypeSupported(type),
+  );
 }
