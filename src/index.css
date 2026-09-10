@@ -1806,3 +1806,89 @@ body {
   .panel, .report-card, .draft-banner, .notice, .search, .tabs,
   .stats > div, .app-header { backdrop-filter: none; background: #fff; }
 }
+
+/* A running meeting stays visible and controllable from every screen. */
+.recording-bar {
+  position: fixed;
+  z-index: 45;
+  left: 50%;
+  top: max(12px, env(safe-area-inset-top));
+  transform: translateX(-50%);
+  width: min(calc(100% - 24px), 460px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 6px;
+  border-radius: 999px;
+  background: linear-gradient(140deg, #b4232ce6, #8f1f5ee6);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid #ffffff33;
+  box-shadow:
+    inset 0 1px 0 #ffffff45,
+    0 14px 34px -16px #7f1d1d9e;
+  color: #fff;
+}
+.recording-bar > a {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: inherit;
+}
+.recording-bar strong {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+.recording-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+  font-size: 12px;
+}
+.recording-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  flex-shrink: 0;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+.recording-dot.is-paused {
+  animation: none;
+  opacity: 0.55;
+}
+.recording-bar button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #ffffff2b;
+  color: #fff;
+  flex-shrink: 0;
+}
+.recording-bar button:hover {
+  background: #ffffff40;
+}
+@keyframes live-pulse {
+  50% { opacity: 0.25; }
+}
+
+.title-suggestion {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #2563eb;
+  background: none;
+  padding: 0;
+  text-align: left;
+}
+.title-suggestion:hover {
+  text-decoration: underline;
+}

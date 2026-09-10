@@ -1216,3 +1216,65 @@
 @media (prefers-reduced-transparency: reduce) {
   .live-pane, .live-tabs button, .live-ask input { backdrop-filter: none; background: #fff; }
 }
+
+/* --- Chat transcript ------------------------------------------------------
+   Each time slice shows who was speaking: microphone on the right, whatever
+   came through the system audio on the left. */
+.chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 86%;
+  margin-bottom: 14px;
+}
+.chat-turn.is-mic {
+  margin-left: auto;
+  align-items: flex-end;
+}
+.chat-turn.is-system,
+.chat-turn.is-unknown {
+  margin-right: auto;
+  align-items: flex-start;
+}
+.chat-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: #5b7cb5;
+  padding: 0 4px;
+}
+.chat-bubble {
+  padding: 9px 13px;
+  border-radius: 15px;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  border: 1px solid #ffffff8f;
+  box-shadow: inset 0 1px 0 #ffffffb3;
+}
+.chat-turn.is-mic .chat-bubble {
+  background: linear-gradient(140deg, #2563ebeb, #4f46e5eb);
+  border-color: #ffffff30;
+  border-bottom-right-radius: 5px;
+  color: #fff;
+}
+.chat-turn.is-system .chat-bubble,
+.chat-turn.is-unknown .chat-bubble {
+  background: #ffffffad;
+  border-bottom-left-radius: 5px;
+  color: #1e3a5f;
+}
+
+.walk-gap {
+  margin-top: 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #8a5a1f;
+  background: #fef3c7ad;
+  border: 1px solid #fcd9a0;
+  border-radius: 9px;
+  padding: 9px 11px;
+}

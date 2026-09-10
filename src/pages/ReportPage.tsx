@@ -201,6 +201,14 @@ export default function ReportPage({
           ) : (
             <h1>{view.title}</h1>
           )}
+          {!edited && view.suggestedTitle && view.suggestedTitle !== view.title && (
+            <button
+              className="title-suggestion no-print"
+              onClick={() => setEdited({ ...view, title: view.suggestedTitle! })}
+            >
+              Vorschlag der KI übernehmen: „{view.suggestedTitle}“
+            </button>
+          )}
                   </div>
 
         <div className="report-actions no-print">

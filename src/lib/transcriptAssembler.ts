@@ -1,8 +1,17 @@
+/** Which capture a stretch of speech came from. */
+export type TranscriptSource = "mic" | "system";
+
 /** One appended stretch of speech and where it starts on the recording clock. */
 export interface TranscriptEntry {
   atMs: number;
+  source: TranscriptSource;
   text: string;
 }
+
+export const SOURCE_LABELS: Record<TranscriptSource, string> = {
+  mic: "Du",
+  system: "Andere",
+};
 
 export function formatTimestamp(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -15,11 +24,44 @@ export function formatTimestamp(ms: number): string {
     .join(":");
 }
 
-/** Renders entries as the persisted, human-readable transcript. */
+/**
+ * Renders entries as the persisted transcript. The `[time] (Speaker)` prefix is
+ * the storage format: it survives as a plain string through IndexedDB,
+ * Firestore and the Drive export, and is parsed back for the chat view.
+ */
 export function toTimestamped(entries: TranscriptEntry[]): string {
-  return entries
-    .map((entry) => `[${formatTimestamp(entry.atMs)}] ${entry.text}`)
+  return [...entries]
+    .sort((a, b) => a.atMs - b.atMs)
+    .map(
+      (entry) =>
+        `[${formatTimestamp(entry.atMs)}] (${SOURCE_LABELS[entry.source]}) ${entry.text}`,
+    )
     .join("\n\n");
+}
+
+export interface TranscriptLine {
+  at: string;
+  source: TranscriptSource | null;
+  text: string;
+}
+
+/** Parses the stored transcript back into displayable lines. */
+export function parseTranscript(transcript: string): TranscriptLine[] {
+  return transcript
+    .split(/\n{2,}/)
+    .map((line) => {
+      const match = /^\[(\d+(?::\d{2})+)\]\s*(?:\(([^)]*)\)\s*)?/.exec(line);
+      if (!match) return { at: "", source: null, text: line };
+      const label = match[2];
+      const source =
+        label === SOURCE_LABELS.mic
+          ? ("mic" as const)
+          : label === SOURCE_LABELS.system
+            ? ("system" as const)
+            : null;
+      return { at: match[1], source, text: line.slice(match[0].length) };
+    })
+    .filter((line) => line.text.trim());
 }
 
 /**
@@ -30,11 +72,11 @@ export function toTimestamped(entries: TranscriptEntry[]): string {
  * previous transcript is the context for the next segment, so a segment may not
  * start before its predecessor has been applied.
  *
- * Two views are kept: the plain text used as model context, and a timestamped
- * rendering for reading and for what is stored.
+ * One assembler serves one capture source, so the microphone's overlap context
+ * is never polluted by whatever was playing through the speakers.
  */
 export class TranscriptAssembler {
-  private entries: TranscriptEntry[] = [];
+  private applied: TranscriptEntry[] = [];
   private plain = "";
   private queue: Promise<void> = Promise.resolve();
   private pending = 0;
@@ -42,15 +84,16 @@ export class TranscriptAssembler {
 
   constructor(
     private transcribe: (segment: Blob, previous: string) => Promise<string>,
-    private onChange: (transcript: string) => void = () => {},
+    private onChange: () => void = () => {},
+    private source: TranscriptSource = "mic",
   ) {}
 
   /** Plain running text, used as overlap context for the next segment. */
   get transcript() {
     return this.plain;
   }
-  get timestamped() {
-    return toTimestamped(this.entries);
+  get entries(): TranscriptEntry[] {
+    return this.applied;
   }
   get pendingSegments() {
     return this.pending;
@@ -68,9 +111,9 @@ export class TranscriptAssembler {
         // The overlap step can fail to align on repetitive audio and hand back
         // text that is already there; appending it would duplicate speech.
         if (addition && !this.repeatsTail(addition)) {
-          this.entries.push({ atMs, text: addition });
+          this.applied.push({ atMs, source: this.source, text: addition });
           this.plain = this.plain ? `${this.plain} ${addition}` : addition;
-          this.onChange(this.timestamped);
+          this.onChange();
         }
       } catch (error) {
         // One lost segment must not stop the rest of the meeting transcribing.

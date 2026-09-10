@@ -95,11 +95,16 @@ export async function analyzeDraft(draft: Draft): Promise<ReportData> {
       data.error || `Analyse fehlgeschlagen (${response.status}).`,
     );
     
+  const analysed = validateAnalysis(data);
+  // A name the user typed is explicit intent and wins, but the model's title is
+  // kept so the report can offer it.
+  const chosen = draft.report.projectName?.trim();
   return {
     ...draft.report,
-    ...validateAnalysis(data),
-    ...(draft.report.projectName?.trim()
-      ? { title: draft.report.projectName.trim() }
+    ...analysed,
+    ...(chosen ? { title: chosen } : {}),
+    ...(chosen && analysed.title && analysed.title !== chosen
+      ? { suggestedTitle: analysed.title }
       : {}),
     status: "completed",
     error: "",

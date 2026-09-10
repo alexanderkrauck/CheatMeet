@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { TranscriptAssembler, formatTimestamp } from "./transcriptAssembler";
+import {
+  TranscriptAssembler,
+  formatTimestamp,
+  parseTranscript,
+  toTimestamped,
+} from "./transcriptAssembler";
 
 const segment = (name: string) => new Blob([name], { type: "audio/webm" });
 
@@ -30,7 +35,9 @@ describe("transcript assembler", () => {
     assembler.push(segment("b"), 50_000);
     await assembler.settled();
 
-    expect(assembler.timestamped).toBe("[0:00] Guten Morgen.\n\n[0:50] Zum Budget.");
+    expect(toTimestamped(assembler.entries)).toBe(
+      "[0:00] (Du) Guten Morgen.\n\n[0:50] (Du) Zum Budget.",
+    );
     // Model context stays free of timestamps so overlap matching is unaffected.
     expect(assembler.transcript).toBe("Guten Morgen. Zum Budget.");
   });
@@ -42,6 +49,48 @@ describe("transcript assembler", () => {
     [3_725_000, "1:02:05"],
   ])("formats %ims as %s", (ms, expected) => {
     expect(formatTimestamp(ms)).toBe(expected);
+  });
+
+  it("keeps each source's entries labelled and ordered by time", async () => {
+    const mic = new TranscriptAssembler(
+      vi.fn().mockResolvedValue("Ich frage nach dem Budget."),
+      () => {},
+      "mic",
+    );
+    const system = new TranscriptAssembler(
+      vi.fn().mockResolvedValue("Das Budget ist freigegeben."),
+      () => {},
+      "system",
+    );
+    mic.push(segment("a"), 0);
+    system.push(segment("b"), 12_000);
+    await Promise.all([mic.settled(), system.settled()]);
+
+    const merged = toTimestamped([...mic.entries, ...system.entries]);
+    expect(merged).toBe(
+      "[0:00] (Du) Ich frage nach dem Budget.\n\n" +
+        "[0:12] (Andere) Das Budget ist freigegeben.",
+    );
+    // Round-trips through the stored string form for the chat view.
+    expect(parseTranscript(merged)).toEqual([
+      { at: "0:00", source: "mic", text: "Ich frage nach dem Budget." },
+      { at: "0:12", source: "system", text: "Das Budget ist freigegeben." },
+    ]);
+  });
+
+  it("keeps one source's overlap context out of the other's", async () => {
+    const micTranscribe = vi.fn().mockResolvedValue("Mikrofontext");
+    const mic = new TranscriptAssembler(micTranscribe, () => {}, "mic");
+    const system = new TranscriptAssembler(
+      vi.fn().mockResolvedValue("Systemtext"),
+      () => {},
+      "system",
+    );
+    system.push(segment("s"), 0);
+    await system.settled();
+    mic.push(segment("m"), 0);
+    await mic.settled();
+    expect(micTranscribe.mock.calls[0][1]).toBe("");
   });
 
   it("gives each segment the transcript built so far as overlap context", async () => {

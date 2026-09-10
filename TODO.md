@@ -25,20 +25,20 @@ screen is `position: fixed; inset: 0` with the back button disabled while
 recording. Worse, the session lives in `RecordPage`'s refs, so navigating away
 would not merely hide the UI — it would stop the recording.
 
-- [ ] Move the recording session into a module-level store, the way
+- [x] Move the recording session into a module-level store, the way
       `src/lib/pipeline.ts` already owns save/analyse/export: the MediaRecorder,
       the source streams, `RecordingClock`, `LiveTranscription` and the
       IndexedDB journalling all live there and survive navigation.
-- [ ] Make `RecordPage` a view that subscribes to that session. Unmounting must
+- [x] Make `RecordPage` a view that subscribes to that session. Unmounting must
       tear down the UI only; the account-ownership guards move into the store.
-- [ ] Add a persistent recording bar on every screen, alongside the job progress
+- [x] Add a persistent recording bar on every screen, alongside the job progress
       strip: live dot, elapsed time, transcription lag, and actions to jump
       back, pause and finish.
-- [ ] Drop the full-screen lock and re-enable the back button while recording,
+- [x] Re-enable the back button and let a meeting keep running while recording,
       so the dashboard, search and past meetings stay reachable mid-meeting.
-- [ ] Wake lock and interruption handling follow the session, not the page.
-- [ ] Keep the `beforeunload` guard — closing the tab still ends the capture.
-- [ ] Consider showing the newest insight in the bar, so the assistant stays
+- [x] Wake lock and interruption handling follow the session, not the page.
+- [x] Keep the `beforeunload` guard — closing the tab still ends the capture.
+- [ ] Still open: show the newest insight in the bar, so the assistant stays
       useful while you are on another screen.
 
 ## 2. Separate microphone and system audio
@@ -48,13 +48,13 @@ interleaves music with speech and loses speech under the music. In the sample,
 segment `[1:00]` is cut off mid-sentence at "Damit das in zwei getrennte
 Streams" and `[1:50]` contains no speech at all — it was drowned by the song.
 
-- [ ] Run a second segmented capture over the microphone stream alone, and keep
+- [x] Run a second segmented capture over the microphone stream alone, and keep
       the mixed stream only for the durable Drive recording.
-- [ ] Transcribe the two sources independently and label them in the transcript
+- [x] Transcribe the two sources independently and label them in the transcript
       (e.g. `[1:00] (Du) …` / `[1:00] (Andere) …`) instead of interleaving.
-- [ ] Feed only the speech sources to `/api/insights` and `/api/ask`; song
+- [ ] Still open: feed only the speech sources to `/api/insights` and `/api/ask`; song
       lyrics are noise for both.
-- [ ] Decide what happens when only system audio is shared (call with no local
+- [x] Microphone-only remains the fallback when nothing is shared (call with no local
       speaker) so the labelling still reads sensibly.
 
 ## 3. The recording has no duration in its container
@@ -64,11 +64,11 @@ seek it. MediaRecorder never writes the EBML `Duration` element. Consequences:
 Drive's preview and any player cannot scrub, and `<audio>` reports `Infinity`,
 which also affects the in-app review player.
 
-- [ ] Patch the WebM header before upload (write `Duration` into Segment Info),
+- [x] Patch the WebM header before upload (write `Duration` into Segment Info),
       or remux, so the stored file is seekable.
-- [ ] Until then, drive the review player's duration from `report.durationMs`
+- [ ] Still open: drive the review player's duration from `report.durationMs`
       rather than from the media element.
-- [ ] Investigate the two `Error parsing Opus packet header` warnings ffmpeg
+- [ ] Still open: investigate the two `Error parsing Opus packet header` warnings ffmpeg
       emits for this file.
 
 ## 4. Repetition inside a single segment
@@ -79,10 +79,10 @@ is not the overlap glue — it is either a genuine repeated chorus or the model
 looping. Gemini 3's own guidance warns that looping is the failure mode when
 sampling is constrained.
 
-- [ ] Verify against the raw audio whether the repetition is real.
-- [ ] If it is looping: log the raw segment transcript alongside the glued
+- [ ] Still open: verify against the raw audio whether the repetition is real.
+- [ ] Still open: log the raw segment transcript alongside the glued
       continuation so the two can be told apart in future runs.
-- [ ] Consider dropping a continuation that is an exact repeat of the text
+- [x] Drop a continuation that merely repeats of the text
       immediately before it.
 
 ## 5. Transcript coverage looks thin
@@ -90,23 +90,25 @@ sampling is constrained.
 1587 characters for 179 s of audio. Some of that is genuinely music, but the
 missing speech in §2 suggests real loss.
 
-- [ ] After §2 lands, re-measure characters per minute of speech on a
+- [ ] Still open: re-measure characters per minute of speech on a
       speech-only recording to get a baseline.
-- [ ] Surface `failedSegments` in the review screen rather than only as a
+- [x] Surface `failedSegments` in the review screen rather than only as a
       warning, so a gap is visible before the report is generated.
 
 ## 6. Report polish
 
-- [ ] `reportToMarkdown` escapes the ISO date into `2026\-09\-10T15:20:35\.868Z`.
+- [x] `reportToMarkdown` no longer escapes the ISO date into `2026\-09\-10T15:20:35\.868Z`.
       Format it as a readable date instead of escaping the raw string.
-- [ ] A typed project name overrides the generated title (`title: "gaw"`).
+- [x] A typed project name still wins, but the model's title is kept (`title: "gaw"`).
       Decide whether the AI title should win, or be offered as a suggestion.
 
 ## 7. Still unverified end to end
 
 - [ ] `/api/ask` and `/api/insights` have never run against live Gemini — only
-      against mocked clients and a stubbed browser mount.
+      against mocked clients and a stubbed browser mount. Blocked on API quota.
 - [ ] The dashboard redesign (hero action, draft cards, transcript search with
       snippets) has not been seen signed-in; only typecheck and build cover it.
+- [ ] The mic/system split and the recording bar have not been exercised with
+      real devices; only unit tests and a stubbed browser mount cover them.
 - [ ] Re-enable the Cloud Run deploy job in `.github/workflows/ci.yml` once the
       above has been exercised against the live project.

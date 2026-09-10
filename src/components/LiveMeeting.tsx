@@ -10,6 +10,7 @@ import {
   Gavel,
 } from "lucide-react";
 import type { MeetingInsights } from "../../shared/analysis";
+import { SOURCE_LABELS, parseTranscript } from "../lib/transcriptAssembler";
 import { askMeeting, emptyInsights, hasInsights, meetingInsights } from "../lib/assist";
 
 /** How much new speech is worth another insights pass. */
@@ -147,16 +148,7 @@ export default function LiveMeeting({
   }
 
   const empty = !transcript.trim();
-  // The stored transcript carries "[m:ss] " markers; show them as time chips.
-  const rows = transcript
-    .split(/\n{2,}/)
-    .map((line) => {
-      const match = /^\[(\d+(?::\d{2})+)\]\s*/.exec(line);
-      return match
-        ? { at: match[1], text: line.slice(match[0].length) }
-        : { at: "", text: line };
-    })
-    .filter((row) => row.text.trim());
+  const rows = parseTranscript(transcript);
 
   return (
     <div className="live">
@@ -210,10 +202,16 @@ export default function LiveMeeting({
             </p>
           ) : (
             rows.map((row, index) => (
-              <p className="live-row" key={index}>
-                {row.at && <span className="live-at">{row.at}</span>}
-                <span>{row.text}</span>
-              </p>
+              <div
+                className={`chat-turn is-${row.source || "unknown"}`}
+                key={index}
+              >
+                <div className="chat-meta">
+                  {row.source && <span>{SOURCE_LABELS[row.source]}</span>}
+                  {row.at && <span className="live-at">{row.at}</span>}
+                </div>
+                <p className="chat-bubble">{row.text}</p>
+              </div>
             ))
           )}
         </div>

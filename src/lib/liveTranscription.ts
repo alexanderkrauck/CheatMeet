@@ -3,7 +3,11 @@ import {
   MAX_TRANSCRIPT_CONTEXT_CHARS,
   audioExtension,
 } from "../../shared/analysis";
-import { TranscriptAssembler } from "./transcriptAssembler";
+import {
+  TranscriptAssembler,
+  toTimestamped,
+  type TranscriptSource,
+} from "./transcriptAssembler";
 import { startSegmentedCapture } from "./segmentCapture";
 import { preferredRecordingMimeType } from "./recording";
 
@@ -47,23 +51,46 @@ export interface LiveTranscription {
   finish(): Promise<string>;
 }
 
+/**
+ * Transcribes each capture source separately.
+ *
+ * Mixing the microphone with system audio into a single transcript interleaves
+ * whatever is playing with what people say, and loses speech under music. Each
+ * source therefore gets its own segmented capture and its own overlap context;
+ * the two are merged only for display, by timestamp, with speaker labels.
+ */
 export function startLiveTranscription(
-  stream: MediaStream,
+  sources: Partial<Record<TranscriptSource, MediaStream>>,
   now: () => number,
   onChange: (transcript: string) => void,
   transcribe = transcribeSegment,
 ): LiveTranscription {
-  const assembler = new TranscriptAssembler(transcribe, onChange);
   const mimeType = preferredRecordingMimeType();
-  const begin = () =>
-    startSegmentedCapture({
-      createRecorder: () =>
-        new MediaRecorder(stream, mimeType ? { mimeType } : undefined),
-      onSegment: (segment, atMs) => assembler.push(segment, atMs),
-      now,
-    });
+  const assemblers: TranscriptAssembler[] = [];
+  const starts: (() => ReturnType<typeof startSegmentedCapture>)[] = [];
 
-  let capture: ReturnType<typeof begin> | null = begin();
+  const merged = () =>
+    toTimestamped(assemblers.flatMap((assembler) => assembler.entries));
+
+  for (const [source, stream] of Object.entries(sources)) {
+    if (!stream) continue;
+    const assembler = new TranscriptAssembler(
+      transcribe,
+      () => onChange(merged()),
+      source as TranscriptSource,
+    );
+    assemblers.push(assembler);
+    starts.push(() =>
+      startSegmentedCapture({
+        createRecorder: () =>
+          new MediaRecorder(stream, mimeType ? { mimeType } : undefined),
+        onSegment: (segment, atMs) => assembler.push(segment, atMs),
+        now,
+      }),
+    );
+  }
+
+  let captures = starts.map((start) => start());
   let stopped = false;
   // Serialize pause/resume so a resume can never outrun the stop it follows.
   let transitions: Promise<void> = Promise.resolve();
@@ -71,40 +98,43 @@ export function startLiveTranscription(
     transitions = transitions.then(change, change);
     return transitions;
   };
+  const sum = (read: (a: TranscriptAssembler) => number) =>
+    assemblers.reduce((total, assembler) => total + read(assembler), 0);
+  const stopAll = async () => {
+    const running = captures;
+    captures = [];
+    await Promise.all(running.map((capture) => capture.stop()));
+  };
 
   return {
     get transcript() {
-      return assembler.timestamped;
+      return merged();
     },
     get pendingSegments() {
-      return assembler.pendingSegments;
+      return sum((assembler) => assembler.pendingSegments);
     },
     get failedSegments() {
-      return assembler.failedSegments;
+      return sum((assembler) => assembler.failedSegments);
     },
-    tick: () => capture?.tick(),
+    tick: () => captures.forEach((capture) => capture.tick()),
     // A paused recording would otherwise pay to transcribe silence.
     pause: () =>
       transition(async () => {
-        if (stopped || !capture) return;
-        const current = capture;
-        capture = null;
-        await current.stop();
+        if (stopped || !captures.length) return;
+        await stopAll();
       }),
     resume: () =>
       transition(() => {
-        if (stopped || capture) return;
-        capture = begin();
+        if (stopped || captures.length) return;
+        captures = starts.map((start) => start());
       }),
     finish: async () => {
       await transition(async () => {
         stopped = true;
-        const current = capture;
-        capture = null;
-        await current?.stop();
+        await stopAll();
       });
-      await assembler.settled();
-      return assembler.timestamped;
+      await Promise.all(assemblers.map((assembler) => assembler.settled()));
+      return merged();
     },
   };
 }

@@ -9,6 +9,7 @@ import RecordPage from "./pages/RecordPage";
 import ReportPage from "./pages/ReportPage";
 import InstallApp from "./components/InstallApp";
 import JobProgress from "./components/JobProgress";
+import RecordingBar from "./components/RecordingBar";
 import { Loader2 } from "lucide-react";
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -34,6 +35,7 @@ export default function App() {
       <InstallApp />
       <BrowserRouter>
         <JobProgress />
+        <RecordingBar />
         <Routes key={user?.uid || "signed-out"}>
           <Route
             path="/"

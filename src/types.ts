@@ -4,6 +4,8 @@ export interface ReportData {
   updatedAt?: string;
   projectName?: string;
   title: string;
+  /** The model's own title, kept when the user typed their own. */
+  suggestedTitle?: string;
   summary: string;
   transcription: string;
   todos: string[];
