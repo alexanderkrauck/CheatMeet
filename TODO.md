@@ -1,48 +1,89 @@
-# End-to-end refinement
+# CheatMeet backlog
 
-- [x] Map existing screens, data model, integrations, and concrete failure points.
-- [x] Persist login across refresh; reconnect Drive separately when needed.
-- [x] Refine login, dashboard, recording/review, report editing and export.
-- [x] Preserve local drafts, microphone MIME type, pause-aware photo timestamps, and retryable saves.
-- [x] Repair authenticated Gemini analysis, response validation, limits, and cleanup. (analysis_backend)
-- [x] Make Drive the media/report storage home; add persistent folder selection. (drive_settings)
-- [x] Add installable PWA and safe offline app shell. (pwa_quality)
-- [x] Fix Firebase configuration/index saving and provide owner-scoped rules.
-- [x] Verify typecheck/build, regression tests, desktop/mobile browser flows and failure states.
-- [x] Document deployment configuration and any live-service validation limits.
-- [x] Review changes, commit, and push to origin/main.
+Derived from the first real end-to-end run: `Meeting 2026-09-10 – 0daa78f1`
+(2:58.9 of audio, 4 segments, live transcript + report + Drive export).
 
-Validation details and live-service boundaries are recorded in [docs/VALIDATION.md](docs/VALIDATION.md).
+The previous contents of this file were the upstream BauDoku project's
+completed checklist; it is preserved in git history.
 
-## Mobile recording and recovery follow-up
+## Verified working in that run
 
-- [x] Review Gemini's latest changes and preserve its working analysis model.
-- [x] Fit capture controls into one phone viewport; make save/analysis the explicit next step.
-- [x] Add per-recording incremental local audio recovery and legacy draft migration. (durable_recordings)
-- [x] Add wake lock, background flush, interruption handling, and in-app camera. (mobile_lifecycle)
-- [x] Verify small-phone/landscape layouts, offline capture, reload recovery, and storage retry.
-- [x] Commit and push the verified follow-up.
+- Segment boundaries landed at exactly 0 / 60 / 110 / 160 s (`[0:00] [1:00]
+  [1:50] [2:40]`), i.e. 60 s segments advancing 50 s. The tick-driven scheduler
+  behaves as designed in a real browser.
+- `durationMs` 178910 ms vs. decoded audio 178.859 s — the recording clock is
+  accurate to ~50 ms.
+- Drive export wrote audio, `bericht_daten.json`, `transkript.md` and
+  `zusammenfassung.md`, with all file IDs and `driveSyncedAt` recorded.
+- The report correctly extracted the spoken intent into German to-dos and
+  takeaways.
 
-## Drive authorization before capture
+## 1. Separate microphone and system audio — highest value
 
-- [x] Persist valid, account-scoped Drive authorization across reloads.
-- [x] Request missing authorization and verify Drive access before online recording.
-- [x] Remove implicit Google popup from saving; expose expired authorization separately.
-- [x] Verify regression tests and browser flow, commit and push.
+Today `mergeAudioStreams` mixes both into one track, so one transcript
+interleaves music with speech and loses speech under the music. In the sample,
+segment `[1:00]` is cut off mid-sentence at "Damit das in zwei getrennte
+Streams" and `[1:50]` contains no speech at all — it was drowned by the song.
 
-## Restore GitHub checks and installer compatibility
+- [ ] Run a second segmented capture over the microphone stream alone, and keep
+      the mixed stream only for the durable Drive recording.
+- [ ] Transcribe the two sources independently and label them in the transcript
+      (e.g. `[1:00] (Du) …` / `[1:00] (Andere) …`) instead of interleaving.
+- [ ] Feed only the speech sources to `/api/insights` and `/api/ask`; song
+      lyrics are noise for both.
+- [ ] Decide what happens when only system audio is shared (call with no local
+      speaker) so the labelling still reads sensibly.
 
-- [x] Identify missing npm lockfile in the failed GitHub run.
-- [x] Restore npm resolution and regenerate compatible Bun lockfile.
-- [x] Run CI with both frozen installers and preserve AI Studio runtime configuration.
-- [x] Validate clean installs, push, and verify successful GitHub checks.
+## 2. The recording has no duration in its container
 
-## Protected release and automatic deployment
+`ffprobe` reports `duration=N/A`; the file decodes to 2:58.859 but nothing can
+seek it. MediaRecorder never writes the EBML `Duration` element. Consequences:
+Drive's preview and any player cannot scrub, and `<audio>` reports `Infinity`,
+which also affects the in-app review player.
 
-- [x] Discover the actual AI Studio Cloud Run service and preserve its configuration.
-- [x] Set up GitHub OIDC federation and narrowly scoped deployment permissions.
-- [x] Add production container checks, deployment smoke tests and traffic rollback.
-- [x] Add exact-development-commit promotion checks and GitHub main protection.
-- [x] Document development-first work and production deployment in README.
-- [x] Exercise development checks, protected PR merge and real automatic deployment.
-- [x] Leave the local checkout and GitHub default branch on development.
+- [ ] Patch the WebM header before upload (write `Duration` into Segment Info),
+      or remux, so the stored file is seekable.
+- [ ] Until then, drive the review player's duration from `report.durationMs`
+      rather than from the media element.
+- [ ] Investigate the two `Error parsing Opus packet header` warnings ffmpeg
+      emits for this file.
+
+## 3. Repetition inside a single segment
+
+Segment `[1:50]` contains the same three sentences twice, and `[1:00]` repeats
+"Ooh. It's black and white." and "No more.". This is within one segment, so it
+is not the overlap glue — it is either a genuine repeated chorus or the model
+looping. Gemini 3's own guidance warns that looping is the failure mode when
+sampling is constrained.
+
+- [ ] Verify against the raw audio whether the repetition is real.
+- [ ] If it is looping: log the raw segment transcript alongside the glued
+      continuation so the two can be told apart in future runs.
+- [ ] Consider dropping a continuation that is an exact repeat of the text
+      immediately before it.
+
+## 4. Transcript coverage looks thin
+
+1587 characters for 179 s of audio. Some of that is genuinely music, but the
+missing speech in §1 suggests real loss.
+
+- [ ] After §1 lands, re-measure characters per minute of speech on a
+      speech-only recording to get a baseline.
+- [ ] Surface `failedSegments` in the review screen rather than only as a
+      warning, so a gap is visible before the report is generated.
+
+## 5. Report polish
+
+- [ ] `reportToMarkdown` escapes the ISO date into `2026\-09\-10T15:20:35\.868Z`.
+      Format it as a readable date instead of escaping the raw string.
+- [ ] A typed project name overrides the generated title (`title: "gaw"`).
+      Decide whether the AI title should win, or be offered as a suggestion.
+
+## 6. Still unverified end to end
+
+- [ ] `/api/ask` and `/api/insights` have never run against live Gemini — only
+      against mocked clients and a stubbed browser mount.
+- [ ] The dashboard redesign (hero action, draft cards, transcript search with
+      snippets) has not been seen signed-in; only typecheck and build cover it.
+- [ ] Re-enable the Cloud Run deploy job in `.github/workflows/ci.yml` once the
+      above has been exercised against the live project.
