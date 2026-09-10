@@ -18,7 +18,30 @@ completed checklist; it is preserved in git history.
 - The report correctly extracted the spoken intent into German to-dos and
   takeaways.
 
-## 1. Separate microphone and system audio — highest value
+## 1. Recording must not take over the app
+
+Starting a meeting currently locks you out of everything else: the capture
+screen is `position: fixed; inset: 0` with the back button disabled while
+recording. Worse, the session lives in `RecordPage`'s refs, so navigating away
+would not merely hide the UI — it would stop the recording.
+
+- [ ] Move the recording session into a module-level store, the way
+      `src/lib/pipeline.ts` already owns save/analyse/export: the MediaRecorder,
+      the source streams, `RecordingClock`, `LiveTranscription` and the
+      IndexedDB journalling all live there and survive navigation.
+- [ ] Make `RecordPage` a view that subscribes to that session. Unmounting must
+      tear down the UI only; the account-ownership guards move into the store.
+- [ ] Add a persistent recording bar on every screen, alongside the job progress
+      strip: live dot, elapsed time, transcription lag, and actions to jump
+      back, pause and finish.
+- [ ] Drop the full-screen lock and re-enable the back button while recording,
+      so the dashboard, search and past meetings stay reachable mid-meeting.
+- [ ] Wake lock and interruption handling follow the session, not the page.
+- [ ] Keep the `beforeunload` guard — closing the tab still ends the capture.
+- [ ] Consider showing the newest insight in the bar, so the assistant stays
+      useful while you are on another screen.
+
+## 2. Separate microphone and system audio
 
 Today `mergeAudioStreams` mixes both into one track, so one transcript
 interleaves music with speech and loses speech under the music. In the sample,
@@ -34,7 +57,7 @@ Streams" and `[1:50]` contains no speech at all — it was drowned by the song.
 - [ ] Decide what happens when only system audio is shared (call with no local
       speaker) so the labelling still reads sensibly.
 
-## 2. The recording has no duration in its container
+## 3. The recording has no duration in its container
 
 `ffprobe` reports `duration=N/A`; the file decodes to 2:58.859 but nothing can
 seek it. MediaRecorder never writes the EBML `Duration` element. Consequences:
@@ -48,7 +71,7 @@ which also affects the in-app review player.
 - [ ] Investigate the two `Error parsing Opus packet header` warnings ffmpeg
       emits for this file.
 
-## 3. Repetition inside a single segment
+## 4. Repetition inside a single segment
 
 Segment `[1:50]` contains the same three sentences twice, and `[1:00]` repeats
 "Ooh. It's black and white." and "No more.". This is within one segment, so it
@@ -62,24 +85,24 @@ sampling is constrained.
 - [ ] Consider dropping a continuation that is an exact repeat of the text
       immediately before it.
 
-## 4. Transcript coverage looks thin
+## 5. Transcript coverage looks thin
 
 1587 characters for 179 s of audio. Some of that is genuinely music, but the
-missing speech in §1 suggests real loss.
+missing speech in §2 suggests real loss.
 
-- [ ] After §1 lands, re-measure characters per minute of speech on a
+- [ ] After §2 lands, re-measure characters per minute of speech on a
       speech-only recording to get a baseline.
 - [ ] Surface `failedSegments` in the review screen rather than only as a
       warning, so a gap is visible before the report is generated.
 
-## 5. Report polish
+## 6. Report polish
 
 - [ ] `reportToMarkdown` escapes the ISO date into `2026\-09\-10T15:20:35\.868Z`.
       Format it as a readable date instead of escaping the raw string.
 - [ ] A typed project name overrides the generated title (`title: "gaw"`).
       Decide whether the AI title should win, or be offered as a suggestion.
 
-## 6. Still unverified end to end
+## 7. Still unverified end to end
 
 - [ ] `/api/ask` and `/api/insights` have never run against live Gemini — only
       against mocked clients and a stubbed browser mount.
