@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { TranscriptAssembler } from "./transcriptAssembler";
+import { TranscriptAssembler, formatTimestamp } from "./transcriptAssembler";
 
 const segment = (name: string) => new Blob([name], { type: "audio/webm" });
 
@@ -20,6 +20,28 @@ describe("transcript assembler", () => {
     await assembler.settled();
 
     expect(assembler.transcript).toBe("erster Teil zweiter Teil");
+  });
+
+  it("stamps each appended stretch with where its speech starts", async () => {
+    const assembler = new TranscriptAssembler(
+      vi.fn().mockResolvedValueOnce("Guten Morgen.").mockResolvedValueOnce("Zum Budget."),
+    );
+    assembler.push(segment("a"), 0);
+    assembler.push(segment("b"), 50_000);
+    await assembler.settled();
+
+    expect(assembler.timestamped).toBe("[0:00] Guten Morgen.\n\n[0:50] Zum Budget.");
+    // Model context stays free of timestamps so overlap matching is unaffected.
+    expect(assembler.transcript).toBe("Guten Morgen. Zum Budget.");
+  });
+
+  it.each([
+    [0, "0:00"],
+    [50_000, "0:50"],
+    [605_000, "10:05"],
+    [3_725_000, "1:02:05"],
+  ])("formats %ims as %s", (ms, expected) => {
+    expect(formatTimestamp(ms)).toBe(expected);
   });
 
   it("gives each segment the transcript built so far as overlap context", async () => {

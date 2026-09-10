@@ -59,7 +59,7 @@ export function startLiveTranscription(
     startSegmentedCapture({
       createRecorder: () =>
         new MediaRecorder(stream, mimeType ? { mimeType } : undefined),
-      onSegment: (segment) => assembler.push(segment),
+      onSegment: (segment, atMs) => assembler.push(segment, atMs),
       now,
     });
 
@@ -74,7 +74,7 @@ export function startLiveTranscription(
 
   return {
     get transcript() {
-      return assembler.transcript;
+      return assembler.timestamped;
     },
     get pendingSegments() {
       return assembler.pendingSegments;
@@ -104,7 +104,7 @@ export function startLiveTranscription(
         await current?.stop();
       });
       await assembler.settled();
-      return assembler.transcript;
+      return assembler.timestamped;
     },
   };
 }

@@ -147,6 +147,17 @@ export default function LiveMeeting({
   }
 
   const empty = !transcript.trim();
+  // The stored transcript carries "[m:ss] " markers; show them as time chips.
+  const rows = transcript
+    .split(/\n{2,}/)
+    .map((line) => {
+      const match = /^\[(\d+(?::\d{2})+)\]\s*/.exec(line);
+      return match
+        ? { at: match[1], text: line.slice(match[0].length) }
+        : { at: "", text: line };
+    })
+    .filter((row) => row.text.trim());
+
   return (
     <div className="live">
       <div className="live-bar">
@@ -198,7 +209,12 @@ export default function LiveMeeting({
               Der erste Abschnitt dauert etwa eine Minute.
             </p>
           ) : (
-            <p>{transcript}</p>
+            rows.map((row, index) => (
+              <p className="live-row" key={index}>
+                {row.at && <span className="live-at">{row.at}</span>}
+                <span>{row.text}</span>
+              </p>
+            ))
           )}
         </div>
 

@@ -36,7 +36,8 @@ function harness({ segmentMs = 60_000, advanceMs = 50_000 } = {}) {
       recorders.push(recorder);
       return recorder;
     },
-    onSegment: async (segment) => segments.push(await segment.text()),
+    onSegment: async (segment, atMs) =>
+      segments.push(`${atMs}|${await segment.text()}`),
     now: () => clock,
     segmentMs,
     advanceMs,
@@ -71,7 +72,13 @@ describe("segmented capture", () => {
       60_000, 110_000, 160_000,
     ]);
     // Consecutive segments share 10s of audio.
-    expect(h.segments).toEqual(["0-60000", "50000-110000", "100000-160000"]);
+    // The stamp marks where each segment's *new* speech starts, i.e. after the
+    // 10s already covered by its predecessor.
+    expect(h.segments).toEqual([
+      "0|0-60000",
+      "60000|50000-110000",
+      "110000|100000-160000",
+    ]);
   });
 
   it("runs two recorders only inside the overlap window", () => {
@@ -102,7 +109,7 @@ describe("segmented capture", () => {
     await h.capture.stop();
     await vi.waitFor(() => expect(h.segments).toHaveLength(1));
 
-    expect(h.segments).toEqual(["0-20000"]);
+    expect(h.segments).toEqual(["0|0-20000"]);
     expect(h.liveCount()).toBe(0);
   });
 
@@ -114,7 +121,7 @@ describe("segmented capture", () => {
     await vi.waitFor(() => expect(h.segments).toHaveLength(1));
 
     // The older recorder already covers everything the newer one holds.
-    expect(h.segments).toEqual(["0-50000"]);
+    expect(h.segments).toEqual(["0|0-50000"]);
   });
 
   it("stops scheduling new segments after stopping", async () => {
@@ -126,7 +133,7 @@ describe("segmented capture", () => {
     await vi.waitFor(() => expect(h.segments).toHaveLength(1));
 
     expect(h.recorders).toHaveLength(created);
-    expect(h.segments).toEqual(["0-20000"]);
+    expect(h.segments).toEqual(["0|0-20000"]);
   });
 
   it("is safe to stop twice", async () => {
@@ -135,7 +142,7 @@ describe("segmented capture", () => {
     await h.capture.stop();
     await h.capture.stop();
     await vi.waitFor(() => expect(h.segments).toHaveLength(1));
-    expect(h.segments).toEqual(["0-20000"]);
+    expect(h.segments).toEqual(["0|0-20000"]);
   });
 
   it("drops a segment whose recorder failed instead of transcribing it", async () => {

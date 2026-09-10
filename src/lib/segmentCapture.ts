@@ -14,7 +14,12 @@ export interface SegmentRecorder {
 
 export interface SegmentCaptureOptions {
   createRecorder: () => SegmentRecorder;
-  onSegment: (segment: Blob) => void;
+  /**
+   * `contentStartMs` is where this segment's *new* speech begins on the
+   * recording clock: its start, plus the overlap already covered by the
+   * previous segment.
+   */
+  onSegment: (segment: Blob, contentStartMs: number) => void;
   /** Recorded time so far. Must exclude paused time. */
   now: () => number;
   segmentMs?: number;
@@ -93,6 +98,9 @@ export function startSegmentedCapture({
           new Blob(entry.chunks, {
             type: entry.chunks[0].type || "audio/webm",
           }),
+          entry.sequence === 0
+            ? entry.startedAt
+            : entry.startedAt + (segmentMs - advanceMs),
         );
       entry.done();
     };
