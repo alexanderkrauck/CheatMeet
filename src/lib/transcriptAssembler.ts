@@ -65,7 +65,9 @@ export class TranscriptAssembler {
     this.queue = this.queue.then(async () => {
       try {
         const addition = (await this.transcribe(segment, this.plain)).trim();
-        if (addition) {
+        // The overlap step can fail to align on repetitive audio and hand back
+        // text that is already there; appending it would duplicate speech.
+        if (addition && !this.repeatsTail(addition)) {
           this.entries.push({ atMs, text: addition });
           this.plain = this.plain ? `${this.plain} ${addition}` : addition;
           this.onChange(this.timestamped);
@@ -78,6 +80,15 @@ export class TranscriptAssembler {
         this.pending--;
       }
     });
+  }
+
+  /** True when the text is already the tail of the transcript. */
+  private repeatsTail(addition: string) {
+    const normalise = (value: string) =>
+      value.toLowerCase().replace(/\s+/g, " ").replace(/[^\p{L}\p{N} ]/gu, "");
+    const candidate = normalise(addition);
+    if (!candidate) return true;
+    return normalise(this.plain).endsWith(candidate);
   }
 
   /** Resolves once every segment queued so far has been applied. */

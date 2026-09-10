@@ -10,6 +10,7 @@ import {
 } from "./drive";
 import { audioExtension, validateAnalysis } from "../../shared/analysis";
 import { reportToMarkdown } from "./markdown";
+import { withWebmDuration } from "./webmDuration";
 import type { Draft, ReportData } from "../types";
 
 // An operation belongs to the account that started it, including across tab sign-outs.
@@ -131,9 +132,14 @@ export async function backupDraft(
   }
   if (!report.rawAudioUrl && draft.audio) {
     progress("Audio in Google Drive sichern …");
+    // MediaRecorder omits the container duration, so the stored file would not
+    // be seekable in Drive or any player.
+    const audio = await run(() =>
+      withWebmDuration(draft.audio!, report.durationMs || 0),
+    );
     report.rawAudioUrl = await run(() =>
       uploadFileToFolder(
-        draft.audio!,
+        audio,
         `aufnahme.${audioExtension(draft.audio!.type)}`,
         draft.audio!.type,
         report.driveFolderId!,

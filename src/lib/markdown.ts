@@ -34,10 +34,18 @@ function verbatim(text: string): string {
 
 /** Portable human-readable export. Drive links retain the files' existing private permissions. */
 export function reportToMarkdown(report: ReportData): string {
+  const when = new Date(report.date);
   const lines = [
     `# ${heading(report.title)}`,
     "",
-    `Datum: ${heading(report.date)}`,
+    `Datum: ${heading(
+      Number.isFinite(when.getTime())
+        ? when.toLocaleString("de-AT", {
+            dateStyle: "long",
+            timeStyle: "short",
+          })
+        : report.date,
+    )}`,
   ];
   if (Number.isFinite(report.durationMs))
     lines.push(`Aufnahmedauer: ${time(report.durationMs!)}`);
