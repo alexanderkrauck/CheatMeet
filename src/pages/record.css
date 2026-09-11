@@ -1229,3 +1229,17 @@
   border-radius: 9px;
   padding: 9px 11px;
 }
+
+.audio-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.audio-preview audio {
+  width: 100%;
+}
+.audio-preview small {
+  font-size: 11px;
+  color: #5b6577;
+}

@@ -354,7 +354,9 @@ export default function RecordPage() {
                         {formatTime(durationMs)} Aufnahme
                       </span>
                     </div>
-                    {draft.audio && <AudioPreview blob={draft.audio} />}
+                    {draft.audio && (
+                      <AudioPreview blob={draft.audio} durationMs={durationMs} />
+                    )}
                     {failed > 0 && (
                       <p className="walk-gap">
                         {failed} Abschnitt(e) konnten nicht transkribiert

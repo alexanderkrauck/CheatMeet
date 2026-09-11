@@ -160,32 +160,54 @@ the CheatMeet waveform, but the manifest references only the PNGs.
 
 ## Research and ideas
 
-### 7. Proactive assistant (explicitly a nice-to-have)
+### 7. Proactive assistant (explicitly a nice-to-have) — done
 
-- [ ] Every minute or two, have the assistant proactively offer topics,
-      questions or things to raise, rather than only answering when asked.
-      Most valuable in an online meeting.
+- [x] `/api/insights` returns up to three `prompts`: concrete things to raise or
+      clarify next. Shown first on the live surface and echoed in the recording
+      bar. It rides along with the existing insights call rather than adding a
+      second one, since this was a nice-to-have.
 
-### 8. Speaker diarization
+### 8. Speaker diarization — researched, recommend adopting for the mic source
 
-- [ ] Single-channel phone recordings cannot separate speakers with the current
-      model. Research whether a dedicated diarization model is worth adding, or
-      whether the two-source split covers the realistic cases.
+`gemini-3.5-transcribe` is a dedicated speech-to-text model with **speaker
+diarization built in**: up to 8 speakers (3+ flagged experimental), word-level
+timestamps, 85+ languages including `de-DE`.
+
+What this means for us:
+
+- **It fits our design.** Diarization is unsupported on the *live streaming*
+  endpoint but works on the unary one, and our 60 s segments are already unary
+  calls. The 30-minute cap with diarization enabled is far above a segment.
+- **It solves the case the feedback recording raised.** The two-source split
+  already separates you from everything through the speakers. Diarization adds
+  what that cannot: several people in one room on a phone, and several remote
+  participants inside one system-audio stream.
+- **The hard part is identity across segments, not diarization itself.**
+  Nothing guarantees that "Speaker 1" in one segment is "Speaker 1" in the next.
+  Our segments overlap by 10 s, so the glue step is the natural place to carry
+  labels forward — but that has to be built, and it is where this would fail.
+- Diarization is incompatible with custom vocabulary, which we do not use.
+
+- [ ] Decide whether to adopt it. If yes: switch the segment transcription call
+      to `gemini-3.5-transcribe` with diarization, and extend the glue step to
+      map each segment's speaker labels onto the running transcript using the
+      overlap.
+- [ ] Measure the cost difference first — it runs per segment, so a pricing
+      change multiplies across a meeting.
 
 ---
 
 ## Carried over
 
-- [ ] Feed only speech sources to `/api/insights` and `/api/ask`; music and
-      video audio are noise for both.
-- [ ] Show the newest insight in the recording bar so the assistant stays useful
-      from other screens.
-- [ ] Drive the review player's duration from `report.durationMs` rather than
-      from the media element.
+- [x] `speechOnly()` drops system-audio turns before either assistant call,
+      keeping timestamps and leaving single-source recordings untouched.
+- [x] The newest proactive suggestion now shows in the recording bar.
+- [x] The review player states the real length when the container reports
+      `Infinity`, rather than showing a broken control.
 - [ ] Re-measure transcript characters per minute on a speech-only recording to
       get a coverage baseline.
-- [ ] Log the raw segment transcript alongside the glued continuation so model
-      looping can be told apart from genuine repetition.
+- [x] A continuation longer than its source segment is logged — the signature
+      of a looping model rather than repetition in the audio.
 - [ ] `/api/ask` and `/api/insights` have still never run against live Gemini.
 - [ ] Re-enable the Cloud Run deploy job in `.github/workflows/ci.yml` once the
       above has been exercised against the live project.

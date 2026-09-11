@@ -224,14 +224,45 @@ export function BlobImage({ blob, alt }: { blob: Blob; alt: string }) {
   }, [blob]);
   return <img src={url || undefined} alt={alt} />;
 }
-export function AudioPreview({ blob }: { blob: Blob }) {
+/**
+ * MediaRecorder omits the container duration, so a freshly recorded blob makes
+ * the player report `Infinity` and refuse to seek. The recording clock knows
+ * the real length, so state it rather than leaving the control broken.
+ */
+export function AudioPreview({
+  blob,
+  durationMs,
+}: {
+  blob: Blob;
+  durationMs?: number;
+}) {
   const [url, setUrl] = useState("");
+  const [unseekable, setUnseekable] = useState(false);
   useEffect(() => {
     const u = URL.createObjectURL(blob);
     setUrl(u);
+    setUnseekable(false);
     return () => URL.revokeObjectURL(u);
   }, [blob]);
   return (
-    <audio controls src={url || undefined} aria-label="Aufnahme anhören" />
+    <div className="audio-preview">
+      <audio
+        controls
+        src={url || undefined}
+        aria-label="Aufnahme anhören"
+        onLoadedMetadata={(e) =>
+          setUnseekable(!Number.isFinite(e.currentTarget.duration))
+        }
+      />
+      {unseekable && durationMs ? (
+        <small>
+          Länge {Math.floor(durationMs / 60000)}:
+          {Math.floor((durationMs / 1000) % 60)
+            .toString()
+            .padStart(2, "0")}{" "}
+          · springen erst nach dem Sichern in Drive möglich
+        </small>
+      ) : null}
+    </div>
   );
 }
