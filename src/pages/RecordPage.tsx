@@ -24,7 +24,12 @@ import "./record.css";
 import { putLocal } from "../lib/local";
 import { uid } from "../lib/reports";
 import { verifyDriveAccess } from "../lib/drive";
-import { errorMessage, connectGoogle, driveToken } from "../lib/session";
+import {
+  errorMessage,
+  connectGoogle,
+  driveToken,
+  ensureDriveToken,
+} from "../lib/session";
 import { startProcessing } from "../lib/pipeline";
 import { audioExtension } from "../../shared/analysis";
 import DriveSettings from "../components/DriveSettings";
@@ -152,13 +157,19 @@ export default function RecordPage() {
   }
 
   async function begin(localOnly = false) {
-    // Recheck at the actual click: the displayed token state may be seconds old.
-    if (!localOnly && navigator.onLine && !driveToken(10 * 60 * 1000)) {
-      await authorizeDrive();
+    try {
+      // Signed in should already mean authorized; only prompt if that fails.
+      if (!localOnly && navigator.onLine && !(await ensureDriveToken())) {
+        await authorizeDrive();
+        return;
+      }
+    } catch (e) {
+      // This runs from `void begin()`, so a rejection would vanish silently.
+      setCaptureError(errorMessage(e));
       return;
     }
     await startCapture(localOnly, async () => {
-      const token = driveToken();
+      const token = await ensureDriveToken();
       if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
       await verifyDriveAccess(token);
     });
@@ -170,8 +181,8 @@ export default function RecordPage() {
     setCaptureError("");
     setCaptureBusy("Transkription abschließen …");
     try {
-      // Saving never starts an unexpected OAuth popup.
-      const token = driveToken();
+      // Renewing is a server call, never a popup.
+      const token = await ensureDriveToken();
       if (!token) {
         refreshDriveSession((n) => n + 1);
         throw new Error(

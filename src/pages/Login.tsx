@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { connectGoogle, errorMessage } from "../lib/session";
 import { Brand, Notice } from "../components/UI";
-export default function Login() {
+export default function Login({ notice = "" }: { notice?: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   async function login() {
@@ -80,7 +80,7 @@ export default function Login() {
             {loading ? "Verbindung wird hergestellt …" : "Mit Google starten"}
             <ArrowRight size={18} />
           </button>
-          {error && <Notice>{error}</Notice>}
+          {(error || notice) && <Notice>{error || notice}</Notice>}
           <div className="login-benefits">
             <p>
               <Check /> Audio und Transkripte an einem Ort

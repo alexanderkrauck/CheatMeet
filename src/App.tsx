@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { onAuthStateChanged, type User } from "firebase/auth";
+import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { auth } from "./lib/firebase";
-import { rememberToken } from "./lib/session";
+import {
+  rememberToken,
+  startDriveTokenRefresh,
+  stopDriveTokenRefresh,
+} from "./lib/session";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import RecordPage from "./pages/RecordPage";
@@ -14,11 +18,29 @@ import { Loader2 } from "lucide-react";
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [revoked, setRevoked] = useState("");
+  // Losing the Drive grant means losing the app: sign out rather than leave the
+  // user in a half-working state.
+  useEffect(() => {
+    const onRevoked = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      setRevoked(detail?.message || "");
+      void signOut(auth).catch(() => {});
+    };
+    window.addEventListener("cheatmeet:drive-revoked", onRevoked);
+    return () => window.removeEventListener("cheatmeet:drive-revoked", onRevoked);
+  }, []);
   useEffect(
     () =>
       onAuthStateChanged(auth, (u) => {
         setUser(u);
-        if (!u) rememberToken(undefined);
+        // Signed in implies Drive-authorized: keep a usable token on hand
+        // instead of prompting when an upload is already under way.
+        if (u) startDriveTokenRefresh();
+        else {
+          stopDriveTokenRefresh();
+          rememberToken(undefined);
+        }
         setLoading(false);
       }),
     [],
@@ -39,7 +61,9 @@ export default function App() {
         <Routes key={user?.uid || "signed-out"}>
           <Route
             path="/"
-            element={user ? <Navigate to="/dashboard" replace /> : <Login />}
+            element={
+              user ? <Navigate to="/dashboard" replace /> : <Login notice={revoked} />
+            }
           />
           <Route
             path="/dashboard"

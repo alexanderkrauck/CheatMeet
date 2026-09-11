@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { Busy, Notice, Shell, Status, dateLabel } from "../components/UI";
 import type { ReportData } from "../types";
-import { connectGoogle, driveToken, errorMessage } from "../lib/session";
+import { connectGoogle, ensureDriveToken, errorMessage } from "../lib/session";
 import { saveReport, uid } from "../lib/reports";
 import { backupDraft, syncReport, analyzeDraft, restoreDraft } from "../lib/workflow";
 import { getDraft, getLocal, putDraft } from "../lib/local";
@@ -119,7 +119,7 @@ export default function ReportPage({
     setError("");
     setNotice("");
     try {
-      const connection = (syncDrive ? (driveToken() ? Promise.resolve(driveToken()) : connectGoogle()) : Promise.resolve(null))
+      const connection = (syncDrive ? ensureDriveToken().then((t) => t || connectGoogle()) : Promise.resolve(null))
         .then((t) => ({ token: t, error: null as unknown }))
         .catch((error) => ({ token: null, error }));
       const next = { ...view, updatedAt: new Date().toISOString(), ...(edited ? { driveSyncedAt: "" } : {}) };
@@ -150,7 +150,7 @@ export default function ReportPage({
     const owner = uid();
     setBusy("Lade...");
     try {
-      const t = driveToken() || (await connectGoogle());
+      const t = (await ensureDriveToken()) || (await connectGoogle());
       const local = await getDraft(owner, report.id);
       const d = local?.report.id === report.id && local.audio ? { ...local, report } : await restoreDraft(report, t);
       if (local?.report.id === report.id) await backupDraft(d, t, setBusy);

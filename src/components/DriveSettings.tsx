@@ -9,7 +9,7 @@ import {
   type DriveFolder,
 } from "../lib/driveSettings";
 import { findOrCreateRootFolder, listDriveReports } from "../lib/drive";
-import { connectGoogle, driveToken, errorMessage } from "../lib/session";
+import { connectGoogle, ensureDriveToken, errorMessage } from "../lib/session";
 import { getLocal, putLocal } from "../lib/local";
 import { uid } from "../lib/reports";
 export default function DriveSettings({
@@ -36,7 +36,7 @@ export default function DriveSettings({
     setBusy(true);
     setMessage("");
     try {
-      const token = driveToken() || (await connectGoogle());
+      const token = (await ensureDriveToken()) || (await connectGoogle());
       const selected = useDefault
         ? {
             id: await findOrCreateRootFolder(token),
@@ -66,7 +66,7 @@ export default function DriveSettings({
     setMessage("Berichte in Drive suchen …");
     try {
       const user = uid();
-      const token = driveToken() || (await connectGoogle());
+      const token = (await ensureDriveToken()) || (await connectGoogle());
       const { reports, warnings } = await listDriveReports(
         token,
         await getRootFolder(token),

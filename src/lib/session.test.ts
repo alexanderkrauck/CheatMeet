@@ -142,3 +142,81 @@ describe("Drive authorization session", () => {
     expect(session.driveToken()).toBe("renewed");
   });
 });
+
+describe("server-held drive authorization", () => {
+  async function load({
+    uid = "alice",
+    config = { serverAuth: true },
+    mint = { accessToken: "minted", expiresInSeconds: 3600 },
+    mintStatus = 200,
+  } = {}) {
+    const current = { uid, getIdToken: async () => "firebase-id-token" };
+    const holder = { user: current as { uid: string; getIdToken: () => Promise<string> } | null };
+    vi.doMock("./firebase", () => ({
+      auth: {
+        get currentUser() {
+          return holder.user;
+        },
+      },
+      provider: {},
+    }));
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("/api/auth/config")) return Response.json(config);
+      return Response.json(mint, { status: mintStatus });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const session = await import("./session");
+    return { session, fetchMock, holder };
+  }
+
+  it("mints a token from the server without prompting the user", async () => {
+    const { session, fetchMock } = await load();
+    expect(await session.ensureDriveToken()).toBe("minted");
+    expect(session.driveToken()).toBe("minted");
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/drive-token"))).toBe(true);
+  });
+
+  it("issues one request even when several uploads start at once", async () => {
+    const { session, fetchMock } = await load();
+    await Promise.all([
+      session.ensureDriveToken(),
+      session.ensureDriveToken(),
+      session.ensureDriveToken(),
+    ]);
+    const mints = fetchMock.mock.calls.filter(([u]) =>
+      String(u).includes("/api/drive-token"),
+    );
+    expect(mints).toHaveLength(1);
+  });
+
+  it("never stores a token minted for an account that has since changed", async () => {
+    const { session, holder } = await load({ uid: "alice" });
+    const pending = session.ensureDriveToken();
+    // The signed-in account changes while the mint is in flight.
+    holder.user = { uid: "bob", getIdToken: async () => "bob-token" };
+    expect(await pending).toBeNull();
+    expect(session.driveToken()).toBeNull();
+  });
+
+  it("signs the user out when the grant is gone", async () => {
+    const { session } = await load({
+      mintStatus: 403,
+      mint: { error: "entzogen", reauth: true, reason: "revoked" } as never,
+    });
+    const seen: CustomEvent[] = [];
+    window.addEventListener("cheatmeet:drive-revoked", (e) =>
+      seen.push(e as CustomEvent),
+    );
+    expect(await session.ensureDriveToken()).toBeNull();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].detail).toMatchObject({ message: "entzogen" });
+  });
+
+  it("keeps the popup flow when the server cannot mint tokens", async () => {
+    const { session, fetchMock } = await load({ config: { serverAuth: false } });
+    expect(await session.ensureDriveToken()).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).includes("/api/drive-token")),
+    ).toBe(false);
+  });
+});

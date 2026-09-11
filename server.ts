@@ -2,10 +2,16 @@ import "dotenv/config";
 import express from "express";
 import path from "node:path";
 import { createAnalysisRouter } from "./server/analysis";
+import { createAuthRouter } from "./server/googleAuth";
 
 async function startServer() {
   const app = express();
   app.disable("x-powered-by");
+  // Cloud Run terminates TLS at the front end. Without this, req.protocol is
+  // always "http", which makes Google reject the OAuth redirect_uri and drops
+  // the Secure flag from the CSRF cookie.
+  app.set("trust proxy", true);
+  app.use("/api", createAuthRouter());
   app.use("/api", createAnalysisRouter());
   app.get("/api/health", (_req, res) =>
     res.json({
