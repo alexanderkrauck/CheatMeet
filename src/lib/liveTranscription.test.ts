@@ -62,7 +62,9 @@ describe("live transcription across sources", () => {
     const transcript = await live.finish();
 
     expect(transcribe).toHaveBeenCalledOnce();
-    expect(transcript).toContain("(Du) Nur Mikrofon.");
+    // One source, so no speaker labels at all — nothing was separated.
+    expect(transcript).toBe("[0:00] Nur Mikrofon.");
+    expect(transcript).not.toContain("(Du)");
     expect(transcript).not.toContain("(Andere)");
   });
 

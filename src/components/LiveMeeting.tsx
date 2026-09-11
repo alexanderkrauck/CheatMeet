@@ -58,11 +58,13 @@ export default function LiveMeeting({
   pending,
   paused,
   timer,
+  startedAt,
 }: {
   transcript: string;
   pending: number;
   paused: boolean;
   timer: string;
+  startedAt?: string;
 }) {
   const [tab, setTab] = useState<"transcript" | "assist">("transcript");
   const [insights, setInsights] = useState<MeetingInsights>(emptyInsights);
@@ -196,6 +198,7 @@ export default function LiveMeeting({
         >
           <TranscriptChat
             transcript={transcript}
+            startedAt={startedAt}
             empty="Sobald gesprochen wird, erscheint hier das laufende Transkript. Der erste Abschnitt dauert etwa eine Minute."
           />
         </div>

@@ -338,6 +338,7 @@ export default function ReportPage({
           ) : (
             <TranscriptChat
               transcript={view.transcription}
+              startedAt={view.date}
               empty="Für dieses Meeting wurde kein Transkript gespeichert."
             />
           )}

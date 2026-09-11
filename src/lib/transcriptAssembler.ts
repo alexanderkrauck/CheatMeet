@@ -28,15 +28,34 @@ export function formatTimestamp(ms: number): string {
  * Renders entries as the persisted transcript. The `[time] (Speaker)` prefix is
  * the storage format: it survives as a plain string through IndexedDB,
  * Firestore and the Drive export, and is parsed back for the chat view.
+ *
+ * A recording with a single source carries no speaker label. On a phone there
+ * is only the microphone, so writing "(Du)" against every line would assert a
+ * speaker separation that was never made.
  */
 export function toTimestamped(entries: TranscriptEntry[]): string {
+  const sources = new Set(entries.map((entry) => entry.source));
   return [...entries]
     .sort((a, b) => a.atMs - b.atMs)
-    .map(
-      (entry) =>
-        `[${formatTimestamp(entry.atMs)}] (${SOURCE_LABELS[entry.source]}) ${entry.text}`,
-    )
+    .map((entry) => {
+      const label =
+        sources.size > 1 ? `(${SOURCE_LABELS[entry.source]}) ` : "";
+      return `[${formatTimestamp(entry.atMs)}] ${label}${entry.text}`;
+    })
     .join("\n\n");
+}
+
+/** Reads a rendered "m:ss" / "h:mm:ss" stamp back into milliseconds. */
+export function parseTimestamp(at: string): number | null {
+  // Bounded on purpose: an unbounded pattern turns a malformed line into an
+  // absurd wall-clock time instead of no time at all.
+  if (!/^\d+:\d{2}(?::\d{2})?$/.test(at)) return null;
+  return (
+    at
+      .split(":")
+      .map(Number)
+      .reduce((total, part) => total * 60 + part, 0) * 1000
+  );
 }
 
 export interface TranscriptLine {

@@ -1,4 +1,8 @@
-import { SOURCE_LABELS, parseTranscript } from "../lib/transcriptAssembler";
+import {
+  SOURCE_LABELS,
+  parseTimestamp,
+  parseTranscript,
+} from "../lib/transcriptAssembler";
 
 /**
  * Renders a stored transcript as a conversation: microphone on one side,
@@ -11,11 +15,23 @@ import { SOURCE_LABELS, parseTranscript } from "../lib/transcriptAssembler";
  */
 export default function TranscriptChat({
   transcript,
+  startedAt,
   empty = "Kein Transkript vorhanden.",
 }: {
   transcript: string;
+  /** Recording start, so a relative offset can also be shown as a wall clock. */
+  startedAt?: string;
   empty?: string;
 }) {
+  const began = startedAt ? Date.parse(startedAt) : NaN;
+  const wallClock = (at: string) => {
+    const offset = parseTimestamp(at);
+    if (!Number.isFinite(began) || offset === null) return "";
+    return new Date(began + offset).toLocaleTimeString("de-AT", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
   const rows = parseTranscript(transcript);
   if (!rows.length) return <p className="live-empty">{empty}</p>;
   const labelled = rows.some((row) => row.source === "system");
@@ -34,7 +50,14 @@ export default function TranscriptChat({
             )}
             <p className="chat-bubble">
               <span>{row.text}</span>
-              {row.at && <time className="chat-time">{row.at}</time>}
+              {row.at && (
+                <time className="chat-time">
+                  {row.at}
+                  {wallClock(row.at) && (
+                    <span className="chat-clock"> · {wallClock(row.at)}</span>
+                  )}
+                </time>
+              )}
             </p>
           </div>
         );

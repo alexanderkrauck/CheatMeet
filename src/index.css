@@ -2176,3 +2176,8 @@ body {
   font-weight: 600;
   color: #2f6b45;
 }
+
+/* The wall-clock time sits beside the offset, quieter than it. */
+.chat-clock {
+  opacity: 0.78;
+}

@@ -329,6 +329,7 @@ export default function RecordPage() {
                   pending={transcribing}
                   paused={state === "paused"}
                   timer={formatTime(durationMs)}
+                  startedAt={draft.report.date}
                 />
               ) : (
                 <>

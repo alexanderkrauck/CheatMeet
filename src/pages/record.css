@@ -371,11 +371,13 @@
 .walk-capture-controls {
   display: flex;
   align-items: stretch;
+  justify-content: center;
   gap: 12px;
   margin-bottom: 3px;
 }
 .walk-pause {
-  width: 78px;
+  width: 100%;
+  max-width: 220px;
   min-height: 70px;
   display: flex;
   flex-direction: column;

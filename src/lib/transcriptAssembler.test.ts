@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   TranscriptAssembler,
   formatTimestamp,
+  parseTimestamp,
   parseTranscript,
   toTimestamped,
 } from "./transcriptAssembler";
@@ -35,12 +36,29 @@ describe("transcript assembler", () => {
     assembler.push(segment("b"), 50_000);
     await assembler.settled();
 
+    // Single source, so no speaker label — see the mic-only case above.
     expect(toTimestamped(assembler.entries)).toBe(
-      "[0:00] (Du) Guten Morgen.\n\n[0:50] (Du) Zum Budget.",
+      "[0:00] Guten Morgen.\n\n[0:50] Zum Budget.",
     );
     // Model context stays free of timestamps so overlap matching is unaffected.
     expect(assembler.transcript).toBe("Guten Morgen. Zum Budget.");
   });
+
+  it.each([
+    ["0:00", 0],
+    ["0:50", 50_000],
+    ["10:05", 605_000],
+    ["1:02:05", 3_725_000],
+  ])("reads %s back as %ims", (at, ms) => {
+    expect(parseTimestamp(at as string)).toBe(ms);
+  });
+
+  it.each(["", "abc", "12", "1:2:3", "0:60:00:00:00:00"])(
+    "rejects %s as a timestamp rather than guessing",
+    (at) => {
+      expect(parseTimestamp(at)).toBeNull();
+    },
+  );
 
   it.each([
     [0, "0:00"],
@@ -49,6 +67,26 @@ describe("transcript assembler", () => {
     [3_725_000, "1:02:05"],
   ])("formats %ims as %s", (ms, expected) => {
     expect(formatTimestamp(ms)).toBe(expected);
+  });
+
+  it("omits the speaker label when only one source was captured", async () => {
+    // On a phone there is no system audio, so claiming "Du" would assert a
+    // separation that was never made.
+    const mic = new TranscriptAssembler(
+      vi.fn().mockResolvedValue("Nur ich rede hier."),
+      () => {},
+      "mic",
+    );
+    mic.push(segment("a"), 0);
+    await mic.settled();
+
+    const rendered = toTimestamped(mic.entries);
+    expect(rendered).toBe("[0:00] Nur ich rede hier.");
+    expect(rendered).not.toContain("(Du)");
+    // Still parses, just without a source.
+    expect(parseTranscript(rendered)).toEqual([
+      { at: "0:00", source: null, text: "Nur ich rede hier." },
+    ]);
   });
 
   it("keeps each source's entries labelled and ordered by time", async () => {
