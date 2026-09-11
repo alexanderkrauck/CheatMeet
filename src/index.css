@@ -1845,11 +1845,12 @@ textarea {
 
 /* --- Glass surfaces on the shell ------------------------------------------ */
 body {
+  /* Colour frames the page rather than competing with it: one restrained tint
+     at the top, none behind the reading column. */
   background:
-    radial-gradient(50vw 42vw at 6% 0%, #8fb0ff 0%, transparent 56%),
-    radial-gradient(44vw 38vw at 97% 10%, #bda4ff 0%, transparent 55%),
-    radial-gradient(44vw 40vw at 80% 94%, #a8e4ff 0%, transparent 56%),
-    linear-gradient(170deg, #e8eeff 0%, #f0f3ff 58%, #e6edfd 100%);
+    radial-gradient(62vw 32vw at 12% -8%, #cddcff 0%, transparent 62%),
+    radial-gradient(48vw 26vw at 96% -4%, #ded3ff 0%, transparent 60%),
+    linear-gradient(180deg, #f2f5ff 0%, #f8fafe 38%, #f7f9fd 100%);
   background-attachment: fixed;
   min-height: 100dvh;
 }

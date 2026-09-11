@@ -83,40 +83,40 @@ Consequences to accept before starting:
 - [x] Back navigation moved to a breadcrumb; "In Drive speichern" hidden once
       the report is actually in Drive.
 
-### 2b. Report screen: second design pass — product, not generated document
+### 2b. Report screen: second design pass — done
 
-The first pass fixed correctness. It did not fix **composition**: too many
-elements compete at the same visual level, so the screen still reads as a
-well-styled generated report rather than a mature product screen.
+Composition, not correctness. Delivered to the principle below, and the app
+header stopped being a logo shelf: it now carries global search across meetings
+and transcripts, the one action that starts a meeting, and an account menu.
 
 Design against this principle: **compact report header → concise intelligence
 overview → transcript as the dominant workspace.**
 
-- [ ] Shrink the header. A multi-line 44px title eats the first screen to tell
+- [x] Shrink the header. A multi-line 44px title eats the first screen to tell
       the user what they just opened. Content should start much higher.
-- [ ] Stop giving every section the same full-width card. Summary, tasks,
+- [x] Stop giving every section the same full-width card. Summary, tasks,
       insights and transcript share one treatment, which flattens hierarchy.
       The transcript is the primary artifact; the rest is secondary.
-- [ ] Put `Aufgaben` and `Wichtigste Erkenntnisse` side by side, or into one
+- [x] Put `Aufgaben` and `Wichtigste Erkenntnisse` side by side, or into one
       compact intelligence region. Today they are two tall cards holding two
       lines each, so the page is long without being informative.
-- [ ] Reconsider the chat metaphor **for the finished report**. Large left/right
+- [x] Reconsider the chat metaphor **for the finished report**. Large left/right
       bubbles waste horizontal space and make scanning harder when reading
       rather than following live; a timeline/speaker layout is likely stronger.
       Keep the chat view on the live recording screen — it was asked for there
       and it works, because following along is a different task from scanning.
-- [ ] Unify the action row. `Bearbeiten / PDF / .md` on the left and Drive on
+- [x] Unify the action row. `Bearbeiten / PDF / .md` on the left and Drive on
       the far right read as two unrelated islands. One clear primary action plus
       a compact export/share group.
-- [ ] Demote status. "Bericht erstellt" and "In Drive gespeichert" are two green
+- [x] Demote status. "Bericht erstellt" and "In Drive gespeichert" are two green
       success states occupying prime space for low-priority information.
-- [ ] Use the gradient more selectively. It gives the app personality but makes
+- [x] Use the gradient more selectively. It gives the app personality but makes
       a report feel less serious, and slightly like an AI landing page.
-- [ ] Differentiate the cards semantically. A summary, a checklist, an insight
+- [x] Differentiate the cards semantically. A summary, a checklist, an insight
       list and a transcript should not behave identically.
-- [ ] Decide the focal workflow. Read the summary, edit, work the tasks, or go
+- [x] Decide the focal workflow. Read the summary, edit, work the tasks, or go
       through the transcript? One should be obviously primary.
-- [ ] Design the transcript region for the interactions it should support even
+- [x] Design the transcript region for the interactions it should support even
       before they exist: scanning, speaker identity, timestamps, search,
       jump-to-audio, copy, highlight.
 
