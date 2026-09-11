@@ -46,9 +46,10 @@ export default function RecordingBar() {
         <span className="recording-title">
           {paused
             ? "Pausiert"
-            : snap.transcribing > 0
-              ? `${snap.transcribing} Abschnitt(e) in Arbeit`
-              : snap.draft.report.title || "Meeting läuft"}
+            : snap.hint ||
+              (snap.transcribing > 0
+                ? `${snap.transcribing} Abschnitt(e) in Arbeit`
+                : snap.draft.report.title || "Meeting läuft")}
         </span>
       </Link>
       <button

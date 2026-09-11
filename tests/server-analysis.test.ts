@@ -316,6 +316,97 @@ describe("analysis endpoints", () => {
     });
   });
 
+  describe("assistant endpoints", () => {
+    const ask = (body: Record<string, unknown>) =>
+      fetch(`${base}/api/ask`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer valid-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    const insights = (body: Record<string, unknown>) =>
+      fetch(`${base}/api/insights`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer valid-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+    it("answers only from the transcript it was given", async () => {
+      client.models.generateContent.mockResolvedValueOnce({
+        text: "Petra sagte, das Budget sei freigegeben.",
+      });
+      const response = await ask({
+        question: "Was wurde zum Budget gesagt?",
+        transcript: "Das Budget für Q4 ist freigegeben.",
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        answer: "Petra sagte, das Budget sei freigegeben.",
+      });
+      const prompt =
+        client.models.generateContent.mock.calls[0][0].contents[0].parts[0].text;
+      expect(prompt).toContain("Das Budget für Q4 ist freigegeben.");
+      expect(prompt).toContain("Was wurde zum Budget gesagt?");
+      // It must decline rather than invent when the transcript is silent.
+      expect(prompt).toMatch(/rate nicht|nicht hergibt/);
+    });
+
+    it("refuses a question with no transcript behind it", async () => {
+      expect((await ask({ question: "Und?", transcript: "" })).status).toBe(400);
+      expect(
+        (await ask({ question: "", transcript: "Etwas wurde gesagt." })).status,
+      ).toBe(400);
+    });
+
+    it("only sends the tail of a long meeting as context", async () => {
+      client.models.generateContent.mockResolvedValueOnce({ text: "ok" });
+      const long = "x".repeat(40_000);
+      await ask({ question: "Was?", transcript: long });
+      const prompt =
+        client.models.generateContent.mock.calls[0][0].contents[0].parts[0].text;
+      expect(prompt.length).toBeLessThan(long.length);
+    });
+
+    it("returns proactive prompts alongside the running state", async () => {
+      client.models.generateContent.mockResolvedValueOnce({
+        text: JSON.stringify({
+          prompts: ["Termin für die Migration klären"],
+          questions: ["Kostenschätzung bis Freitag?"],
+          actions: [],
+          decisions: [],
+          terms: [{ term: "SLO", explanation: "Zielvorgabe für Verfügbarkeit." }],
+        }),
+      });
+      const response = await insights({ transcript: "Wir reden über SLOs." });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        prompts: ["Termin für die Migration klären"],
+        questions: ["Kostenschätzung bis Freitag?"],
+      });
+      expect(
+        client.models.generateContent.mock.calls[0][0].contents[0].parts[0].text,
+      ).toContain("prompts");
+    });
+
+    it("returns empty lists rather than failing on unusable model output", async () => {
+      client.models.generateContent.mockResolvedValueOnce({ text: "not json" });
+      const response = await insights({ transcript: "Etwas." });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        prompts: [],
+        questions: [],
+        actions: [],
+        decisions: [],
+        terms: [],
+      });
+    });
+  });
+
   describe("POST /transcribe-segment", () => {
     const transcript = (text: string) => ({ text });
 

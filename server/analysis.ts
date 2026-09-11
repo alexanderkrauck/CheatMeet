@@ -257,7 +257,7 @@ export function createAnalysisRouter(options: Options = {}) {
       const insights = await assist(
         req,
         ({ transcript }) => ({
-          prompt: `Analysiere das bisherige Meeting-Transkript und extrahiere den aktuellen Stand. Gib zurück: offene Fragen, die an die aufnehmende Person gerichtet wurden und noch nicht beantwortet sind; Aufgaben, zu denen sich die aufnehmende Person verpflichtet hat; getroffene Entscheidungen; sowie Fachbegriffe oder Abkürzungen aus dem Gespräch mit einer knappen Erklärung. Erfinde nichts. Lasse Listen leer, wenn es nichts gibt. Fasse jeden Punkt in einem kurzen Satz auf Deutsch.\n\nTranskript:\n"""\n${transcript}\n"""`,
+          prompt: `Analysiere das bisherige Meeting-Transkript und extrahiere den aktuellen Stand. Gib zurück: offene Fragen, die an die aufnehmende Person gerichtet wurden und noch nicht beantwortet sind; Aufgaben, zu denen sich die aufnehmende Person verpflichtet hat; getroffene Entscheidungen; Fachbegriffe oder Abkürzungen aus dem Gespräch mit einer knappen Erklärung; sowie unter "prompts" höchstens drei konkrete Punkte, die die aufnehmende Person als Nächstes ansprechen oder nachfragen sollte — offene Widersprüche, ungeklärte Zuständigkeiten, fehlende Termine. Erfinde nichts. Lasse Listen leer, wenn es nichts gibt. Fasse jeden Punkt in einem kurzen Satz auf Deutsch.\n\nTranskript:\n"""\n${transcript}\n"""`,
           schema: insightsSchema,
         }),
         (text) => {
@@ -385,6 +385,12 @@ export function createAnalysisRouter(options: Options = {}) {
         console.error("Segment glue returned unusable output:", glued.text);
         continuation = raw;
       }
+      // Logged so a looping model can be told apart from genuine repetition
+      // when a transcript comes back with a repeated passage.
+      if (continuation.length > raw.length)
+        console.warn(
+          `Segment continuation longer than its source (${raw.length} -> ${continuation.length})`,
+        );
       res.json({ text: continuation.trim() });
     } catch (error) {
       fail(res, error, "Transcribe segment error");

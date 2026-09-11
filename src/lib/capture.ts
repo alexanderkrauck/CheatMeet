@@ -24,6 +24,8 @@ export interface CaptureSnapshot {
   checkpointMs: number;
   transcribing: number;
   failed: number;
+  /** Newest proactive suggestion, surfaced by the recording bar. */
+  hint: string;
   saved: boolean;
   busy: string;
   error: string;
@@ -53,6 +55,7 @@ const blank = (owner: string): CaptureSnapshot => ({
   checkpointMs: 0,
   transcribing: 0,
   failed: 0,
+  hint: "",
   saved: false,
   busy: "",
   error: "",
@@ -245,6 +248,7 @@ export const setCaptureTitle = (title: string) =>
 
 export const setCaptureError = (error: string) => emit({ error });
 export const setCaptureBusy = (busy: string) => emit({ busy });
+export const setCaptureHint = (hint: string) => emit({ hint });
 
 export async function startCapture(localOnly: boolean, verify: () => Promise<void>) {
   if (busyOperation || isCapturing()) return;

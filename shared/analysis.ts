@@ -95,6 +95,8 @@ export const MAX_ASSIST_CONTEXT_CHARS = 12000;
 export const MAX_QUESTION_CHARS = 500;
 
 export interface MeetingInsights {
+  /** Things worth raising next, offered without being asked. */
+  prompts?: string[];
   /** Questions that were put to the user and are still unanswered. */
   questions: string[];
   /** Things the user appears to have committed to. */
@@ -109,6 +111,7 @@ export const insightsSchema = {
   required: ["questions", "actions", "decisions", "terms"],
   properties: {
     questions: { type: "array", items: { type: "string" } },
+    prompts: { type: "array", items: { type: "string" } },
     actions: { type: "array", items: { type: "string" } },
     decisions: { type: "array", items: { type: "string" } },
     terms: {
@@ -136,6 +139,7 @@ const stringList = (value: unknown, limit = 8): string[] =>
 export function validateInsights(value: unknown): MeetingInsights {
   const v = (value ?? {}) as Record<string, unknown>;
   return {
+    prompts: stringList(v.prompts, 4),
     questions: stringList(v.questions),
     actions: stringList(v.actions),
     decisions: stringList(v.decisions),

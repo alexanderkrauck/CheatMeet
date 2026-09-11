@@ -12,6 +12,7 @@ import {
 import type { MeetingInsights } from "../../shared/analysis";
 import TranscriptChat from "./TranscriptChat";
 import { askMeeting, emptyInsights, hasInsights, meetingInsights } from "../lib/assist";
+import { setCaptureHint } from "../lib/capture";
 
 /** How much new speech is worth another insights pass. */
 const REFRESH_CHARS = 400;
@@ -100,7 +101,12 @@ export default function LiveMeeting({
       lastRun.current = { length: text.length, at: Date.now() };
       setThinking(true);
       meetingInsights(text)
-        .then((next) => active && setInsights(next))
+        .then((next) => {
+          if (!active) return;
+          setInsights(next);
+          // Share the newest suggestion so it stays visible from other screens.
+          setCaptureHint(next.prompts?.[0] || next.questions[0] || "");
+        })
         .catch(() => {
           /* A missed pass is replaced by the next one. */
         })
@@ -212,6 +218,11 @@ export default function LiveMeeting({
             )}
             {hasInsights(insights) ? (
               <>
+                <InsightGroup
+                  icon={<Sparkles size={15} />}
+                  title="Vorschläge"
+                  items={insights.prompts || []}
+                />
                 <InsightGroup
                   icon={<HelpCircle size={15} />}
                   title="An dich gerichtet"
