@@ -68,8 +68,16 @@ which also affects the in-app review player.
       or remux, so the stored file is seekable.
 - [ ] Still open: drive the review player's duration from `report.durationMs`
       rather than from the media element.
-- [ ] Still open: investigate the two `Error parsing Opus packet header` warnings ffmpeg
-      emits for this file.
+- [ ] Still open: no real upload has exercised the patch yet. The Drive sample
+      still reports `duration=N/A` because it predates the fix, so the only
+      evidence is the offline run against that file.
+- [x] `Error parsing Opus packet header` is benign — no action needed.
+      Decoding the first 60 s or 170 s produces no warning; decoding the full
+      178.86 s produces exactly one, so it is the final packet of a stream that
+      was stopped mid-flight. Remuxing with `-c copy` does *not* remove it, so
+      it is not Chrome's container header, and the decoded PCM of the original
+      and the remux have identical checksums — nothing is lost. Expect one such
+      line for any MediaRecorder recording.
 
 ## 4. Repetition inside a single segment
 
