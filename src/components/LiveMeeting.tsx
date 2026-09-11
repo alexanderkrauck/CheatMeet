@@ -10,7 +10,7 @@ import {
   Gavel,
 } from "lucide-react";
 import type { MeetingInsights } from "../../shared/analysis";
-import { SOURCE_LABELS, parseTranscript } from "../lib/transcriptAssembler";
+import TranscriptChat from "./TranscriptChat";
 import { askMeeting, emptyInsights, hasInsights, meetingInsights } from "../lib/assist";
 
 /** How much new speech is worth another insights pass. */
@@ -148,7 +148,6 @@ export default function LiveMeeting({
   }
 
   const empty = !transcript.trim();
-  const rows = parseTranscript(transcript);
 
   return (
     <div className="live">
@@ -195,25 +194,10 @@ export default function LiveMeeting({
               node.scrollHeight - node.scrollTop - node.clientHeight < 80;
           }}
         >
-          {empty ? (
-            <p className="live-empty">
-              Sobald gesprochen wird, erscheint hier das laufende Transkript.
-              Der erste Abschnitt dauert etwa eine Minute.
-            </p>
-          ) : (
-            rows.map((row, index) => (
-              <div
-                className={`chat-turn is-${row.source || "unknown"}`}
-                key={index}
-              >
-                <div className="chat-meta">
-                  {row.source && <span>{SOURCE_LABELS[row.source]}</span>}
-                  {row.at && <span className="live-at">{row.at}</span>}
-                </div>
-                <p className="chat-bubble">{row.text}</p>
-              </div>
-            ))
-          )}
+          <TranscriptChat
+            transcript={transcript}
+            empty="Sobald gesprochen wird, erscheint hier das laufende Transkript. Der erste Abschnitt dauert etwa eine Minute."
+          />
         </div>
 
         <div className="live-pane live-assist">

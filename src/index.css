@@ -6,14 +6,14 @@
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  color: #1e40af;
+  color: #16203a;
   background: #f0f7fb;
   font-synthesis: none;
   font-size: 15px;
   line-height: 1.55;
-  --green: #3b82f6;
+  --green: #1d4ed8;
   --lime: #e0f2fe;
-  --muted: #64748b;
+  --muted: #5b6577;
   --line: #cbd5e1;
   --glass-bg: rgba(255, 255, 255, 0.7);
   --glass-border: rgba(255, 255, 255, 0.5);
@@ -67,6 +67,7 @@ h1 {
   letter-spacing: -1.8px;
   font-weight: 650;
   line-height: 1.17;
+  color: #1e40af;
 }
 h2 {
   font-size: 21px;
@@ -107,10 +108,10 @@ textarea {
   font-size: 12px;
 }
 .eyebrow {
-  font-size: 10px;
-  letter-spacing: 1.9px;
+  font-size: 11px;
+  letter-spacing: 1.6px;
   font-weight: 700;
-  color: #767b84;
+  color: #414b5e;
   display: block;
   margin-bottom: 12px;
 }
@@ -118,7 +119,7 @@ textarea {
   color: #3b82f6;
 }
 .btn {
-  min-height: 43px;
+  min-height: 44px;
   padding: 10px 17px;
   display: inline-flex;
   gap: 9px;
@@ -145,13 +146,13 @@ textarea {
 .btn-primary {
   background: var(--green);
   color: white;
-  border-color: #1e40af;
+  border-color: #1e3a8a;
   box-shadow: 0 4px 15px rgba(37, 99, 235, 0.2);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
 .btn-primary:hover:not(:disabled) {
-  background: #1d4ed8;
+  background: #1e3a8a;
 }
 .btn-ghost {
   background: transparent;
@@ -291,11 +292,12 @@ textarea {
   max-width: 1136px;
   margin: auto;
   padding: 23px 0;
-  color: #8b8f95;
+  color: #3a4454;
   display: flex;
   justify-content: space-between;
-  font-size: 9px;
-  letter-spacing: 1.1px;
+  gap: 18px;
+  font-size: 11px;
+  letter-spacing: 0.9px;
 }
 .app-footer span {
   display: flex;
@@ -382,7 +384,7 @@ textarea {
   background: white;
   border-radius: 7px;
   padding: 9px 13px;
-  color: #8b8f95;
+  color: #5b6577;
 }
 .search input {
   outline: none;
@@ -988,16 +990,121 @@ textarea {
   flex-wrap: wrap;
 }
 .summary-panel {
-  padding: 28px 32px;
-  background: #dee4ed;
-  border: 1px solid #cdd5e2;
-  border-radius: 10px;
-  margin: 29px 0;
+  padding: 24px 28px;
+  border-radius: 14px;
+  margin: 16px 0;
+  background: linear-gradient(150deg, #ffffff96, #ffffff5e);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid #ffffff8f;
+  box-shadow:
+    inset 0 1px 0 #ffffffc4,
+    0 16px 38px -28px #1e293b70;
 }
 .summary-panel p {
-  font-size: 16px;
-  line-height: 1.8;
+  font-size: 15px;
+  line-height: 1.75;
   white-space: pre-wrap;
+  color: #2a3346;
+}
+/* The summary is the thing a reader lands on after the title. */
+.summary-panel.is-lead {
+  border-left: 3px solid #2563eb;
+  background: linear-gradient(150deg, #ffffffb8, #eef3ffa1);
+}
+.summary-panel.is-lead p {
+  font-size: 18px;
+  line-height: 1.68;
+  color: #1c2537;
+}
+.summary-panel h2,
+.report-transcript > summary > span {
+  font-size: 15px;
+  letter-spacing: -0.2px;
+  font-weight: 650;
+  color: #16203a;
+  text-transform: none;
+  display: block;
+  margin-bottom: 14px;
+}
+.report-transcript > summary > span {
+  margin-bottom: 0;
+}
+.todo-list,
+.takeaway-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.todo-list li,
+.takeaway-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #2a3346;
+}
+.todo-list svg {
+  color: #2563eb;
+  margin-top: 3px;
+}
+.takeaway-list svg {
+  color: #b0812f;
+  margin-top: 3px;
+}
+
+/* The transcript is the evidence behind the summary: open, readable, scrollable. */
+.report-transcript {
+  margin: 24px 0;
+  border: 1px solid #ffffff8f;
+  border-radius: 14px;
+  padding: 20px 24px;
+  background: linear-gradient(150deg, #ffffff8a, #ffffff52);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow:
+    inset 0 1px 0 #ffffffc4,
+    0 16px 38px -28px #1e293b70;
+}
+.report-transcript > summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  /* Wraps sanely at 375px instead of stacking both halves out of line. */
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  cursor: pointer;
+  color: #16203a;
+}
+.report-transcript > summary small {
+  font-weight: 500;
+  font-size: 12px;
+  color: #414b5e;
+}
+.report-transcript .chat {
+  margin-top: 20px;
+  max-height: 62vh;
+  overflow-y: auto;
+  /* Reserve the scrollbar on both edges so the two columns stay symmetric. */
+  scrollbar-gutter: stable both-edges;
+}
+/* A scroll inside a scrolling page is friction on a phone. */
+@media (max-width: 720px) {
+  .report-transcript .chat {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+}
+@media print {
+  .report-transcript .chat {
+    max-height: none;
+    overflow: visible;
+  }
 }
 .report-body {
   display: grid;
@@ -1092,26 +1199,6 @@ textarea {
   font-size: 14px;
   white-space: pre-wrap;
   line-height: 1.8;
-}
-.transcript {
-  margin: 22px 0;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  padding: 13px 0;
-}
-.transcript summary {
-  cursor: pointer;
-  font-size: 11px;
-  color: #707988;
-}
-.transcript p {
-  white-space: pre-wrap;
-  font-size: 12px;
-  color: #6b7380;
-  background: #f2f4f7;
-  padding: 16px;
-  margin-top: 12px;
-  border-radius: 6px;
 }
 .room-photos {
   display: grid;
@@ -1321,7 +1408,7 @@ textarea {
   }
   .app-footer {
     margin: 0 18px;
-    font-size: 7px;
+    font-size: 10px;
     gap: 15px;
     align-items: start;
   }
@@ -1519,7 +1606,7 @@ textarea {
     gap: 6px;
   }
   .report-title .eyebrow {
-    font-size: 8px;
+    font-size: 10px;
     margin-bottom: 5px;
   }
   .report-title h1 {
@@ -1616,6 +1703,53 @@ textarea {
     background: white;
     color: black;
   }
+  /* Browsers drop background-images when printing, so the mic bubble's white
+     text would land on a white page and half the transcript would vanish.
+     Print ink-on-paper with an accent rule instead of forcing colour. */
+  .chat-bubble {
+    color: #16203a !important;
+    background: #ffffff !important;
+    border: 1px solid #c3ccdd !important;
+    box-shadow: none !important;
+  }
+  .chat-turn.is-mic .chat-bubble {
+    border-left: 3px solid #1d4ed8 !important;
+  }
+  .chat-turn.is-system .chat-bubble,
+  .chat-turn.is-unknown .chat-bubble,
+  .chat-turn.is-single .chat-bubble {
+    border-left: 3px solid #9aa6bd !important;
+  }
+  /* One left-aligned column on paper: stretching made mic turns full-bleed
+     while system turns hugged their content. */
+  .chat-turn {
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    align-items: flex-start !important;
+  }
+  .chat-turn .chat-bubble {
+    break-inside: avoid;
+  }
+  .chat-meta {
+    color: #33538f !important;
+    background: none !important;
+    border: 0 !important;
+    padding: 0 0 2px !important;
+  }
+  .chat-time {
+    color: #5b6577 !important;
+    opacity: 1 !important;
+  }
+  .report-transcript {
+    background: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+  .report-transcript .chat {
+    max-height: none !important;
+    overflow: visible !important;
+  }
   .no-print,
   .app-header,
   .app-footer,
@@ -1655,15 +1789,12 @@ textarea {
   .report-photo {
     max-height: 180px;
   }
-  .transcript {
+  .report-transcript {
     display: block;
   }
-  .transcript::details-content {
+  .report-transcript::details-content {
     content-visibility: visible !important;
     display: block !important;
-  }
-  .transcript p {
-    display: block;
   }
   .room-photos {
     grid-template-columns: repeat(3, 1fr);
@@ -1749,7 +1880,7 @@ body {
   background:
     radial-gradient(50vw 42vw at 6% 0%, #8fb0ff 0%, transparent 56%),
     radial-gradient(44vw 38vw at 97% 10%, #bda4ff 0%, transparent 55%),
-    radial-gradient(48vw 44vw at 78% 92%, #6fd6ff 0%, transparent 58%),
+    radial-gradient(44vw 40vw at 80% 94%, #a8e4ff 0%, transparent 56%),
     linear-gradient(170deg, #e8eeff 0%, #f0f3ff 58%, #e6edfd 100%);
   background-attachment: fixed;
   min-height: 100dvh;
@@ -1891,4 +2022,157 @@ body {
 }
 .title-suggestion:hover {
   text-decoration: underline;
+}
+
+/* --- Chat transcript ------------------------------------------------------
+   Each time slice shows who was speaking: microphone on the right, whatever
+   came through the system audio on the left. */
+.chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* A chat message needs a readable measure, not the full panel width. */
+  max-width: min(86%, 62ch);
+  margin-bottom: 4px;
+}
+.chat-turn:not(.is-continued) {
+  margin-top: 16px;
+}
+.chat-turn:first-child {
+  margin-top: 0;
+}
+.chat-turn.is-continued {
+  margin-bottom: 4px;
+}
+.chat-turn.is-continued + .chat-turn:not(.is-continued) {
+  margin-top: 14px;
+}
+.chat-turn.is-mic {
+  margin-left: auto;
+  align-items: flex-end;
+}
+.chat-turn.is-system,
+.chat-turn.is-unknown,
+.chat-turn.is-single {
+  margin-right: auto;
+  align-items: flex-start;
+}
+/* The speaker is named once per run; the time rides inside every bubble, the
+   way a chat app does it, so a continuation needs no row of its own. */
+.chat-meta {
+  display: inline-block;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: #33538f;
+  font-weight: 650;
+  padding: 0 4px;
+}
+.chat-time {
+  display: block;
+  text-align: right;
+  margin-top: 3px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3px;
+  color: #4a5468;
+}
+.chat-turn.is-mic .chat-time {
+  color: #e4ebff;
+}
+.chat-bubble {
+  padding: 11px 15px;
+  border-radius: 15px;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  border: 1px solid #ffffff8f;
+  box-shadow: inset 0 1px 0 #ffffffb3;
+}
+.chat-turn.is-mic .chat-bubble {
+  background: linear-gradient(140deg, #1d4ed8, #4338ca);
+  border-color: #ffffff30;
+  border-bottom-right-radius: 5px;
+  color: #fff;
+}
+.chat-turn.is-system .chat-bubble,
+.chat-turn.is-unknown .chat-bubble,
+.chat-turn.is-single .chat-bubble {
+  background: #ffffffc4;
+  border-bottom-left-radius: 5px;
+  color: #16203a;
+}
+
+.chat-turn.is-single {
+  max-width: 100%;
+}
+.chat {
+  display: flex;
+  flex-direction: column;
+}
+/* The report renders on a light page rather than over the capture backdrop. */
+.report-transcript .chat-bubble {
+  background: #ffffffc7;
+}
+.report-transcript .chat-turn.is-mic .chat-bubble {
+  color: #fff;
+}
+
+/* Narrow screens: colour alone was carrying the speaker distinction. */
+@media (max-width: 720px) {
+  .chat-turn {
+    max-width: 78%;
+  }
+}
+
+/* A run of turns reads as one message group: only its last bubble gets a tail. */
+.chat-turn:has(+ .chat-turn.is-continued) .chat-bubble {
+  border-radius: 15px;
+}
+
+/* Back navigation reads as a breadcrumb at the start of the page. */
+.report-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 0;
+  margin-bottom: 6px;
+  color: #414b5e;
+  transition: color 0.14s;
+}
+.report-breadcrumb:hover {
+  color: #1d4ed8;
+}
+.report-breadcrumb-back {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.report-breadcrumb-rest {
+  color: #414b5e;
+  letter-spacing: 1.1px;
+}
+.report-breadcrumb:hover .report-breadcrumb-rest {
+  color: #414b5e;
+}
+@media (max-width: 640px) {
+  .report-breadcrumb-rest {
+    display: none;
+  }
+  .report-breadcrumb {
+    min-height: 44px;
+    margin-bottom: 0;
+  }
+}
+
+/* Once saved, the right cluster keeps meaning without a call to action.
+   #2f6b45 measures 4.89:1 at 1440px under the purple lobe — the tightest
+   passing contrast on this page. Do not lighten it or darken that gradient. */
+.drive-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2f6b45;
 }

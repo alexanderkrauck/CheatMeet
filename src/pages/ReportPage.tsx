@@ -10,6 +10,9 @@ import {
   Save,
   WandSparkles,
   FolderOpen,
+  Check,
+  CheckSquare,
+  Lightbulb,
 } from "lucide-react";
 import { Busy, Notice, Shell, Status, dateLabel } from "../components/UI";
 import type { ReportData } from "../types";
@@ -19,6 +22,8 @@ import { backupDraft, syncReport, analyzeDraft, restoreDraft } from "../lib/work
 import { getDraft, getLocal, putDraft } from "../lib/local";
 import { clearJob, jobFor, subscribeJobs } from "../lib/pipeline";
 import { reportToMarkdown } from "../lib/markdown";
+import TranscriptChat from "../components/TranscriptChat";
+import { parseTranscript } from "../lib/transcriptAssembler";
 
 function DriveLink({ id }: { id: string }) {
   return (
@@ -82,6 +87,7 @@ export default function ReportPage({
   }, [initialReport, params.id]);
 
   const view = edited || report;
+  const transcriptTurns = parseTranscript(view?.transcription || "").length;
   const job = useSyncExternalStore(subscribeJobs, () =>
     params.id ? jobFor(params.id) : undefined,
   );
@@ -189,11 +195,17 @@ export default function ReportPage({
   );
 
   return (
-    <Shell actions={<Link className="btn btn-ghost" to="/dashboard"><ArrowLeft size={18} /> Übersicht</Link>}>
+    <Shell>
       <fieldset disabled={!!busy || running} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <div className="report-title">
           <div className="split">
-            <span className="eyebrow">MEETING-ZUSAMMENFASSUNG / {dateLabel(view.date)}</span>
+            <Link className="eyebrow report-breadcrumb" to="/dashboard">
+              <ArrowLeft size={13} />
+              <span className="report-breadcrumb-back">Übersicht</span>
+              <span className="report-breadcrumb-rest">
+                / Meeting-Zusammenfassung / {dateLabel(view.date)}
+              </span>
+            </Link>
             <Status report={view} local={dirty} />
           </div>
           {edited ? (
@@ -226,7 +238,17 @@ export default function ReportPage({
           </div>
           <div className="actions">
             {view.driveFolderId && <DriveLink id={view.driveFolderId} />}
-            <button className="btn btn-primary" onClick={() => save(true)}><CloudUpload size={17} /> In Drive speichern</button>
+            {!view.driveSyncedAt || edited ? (
+              <button className="btn btn-primary" onClick={() => save(true)}>
+                <CloudUpload size={17} />
+                {edited ? "Änderungen in Drive speichern" : "In Drive speichern"}
+              </button>
+            ) : (
+              <span className="drive-saved">
+                <Check size={15} />
+                In Drive gespeichert
+              </span>
+            )}
           </div>
         </div>
 
@@ -257,8 +279,8 @@ export default function ReportPage({
           )
         )}
 
-        <section className="summary-panel">
-          <span className="eyebrow">ZUSAMMENFASSUNG</span>
+        <section className="summary-panel is-lead">
+          <h2>Zusammenfassung</h2>
           {edited ? (
             <textarea className="field" value={view.summary} onChange={e => setEdited({ ...view, summary: e.target.value })} />
           ) : (
@@ -268,12 +290,17 @@ export default function ReportPage({
         
         {view.todos && view.todos.length > 0 && (
           <section className="summary-panel">
-            <span className="eyebrow">AUFGABEN (TO-DOS)</span>
+            <h2>Aufgaben</h2>
             {edited ? (
               <textarea className="field" value={view.todos.join("\n")} onChange={e => setEdited({ ...view, todos: e.target.value.split("\n") })} />
             ) : (
-              <ul>
-                {view.todos.map((todo, idx) => <li key={idx}>{todo}</li>)}
+              <ul className="todo-list">
+                {view.todos.map((todo, idx) => (
+                  <li key={idx}>
+                    <CheckSquare size={16} />
+                    <span>{todo}</span>
+                  </li>
+                ))}
               </ul>
             )}
           </section>
@@ -281,23 +308,38 @@ export default function ReportPage({
 
         {view.takeaways && view.takeaways.length > 0 && (
           <section className="summary-panel">
-            <span className="eyebrow">WICHTIGSTE ERKENNTNISSE</span>
+            <h2>Wichtigste Erkenntnisse</h2>
             {edited ? (
               <textarea className="field" value={view.takeaways.join("\n")} onChange={e => setEdited({ ...view, takeaways: e.target.value.split("\n") })} />
             ) : (
-              <ul>
-                {view.takeaways.map((takeaway, idx) => <li key={idx}>{takeaway}</li>)}
+              <ul className="takeaway-list">
+                {view.takeaways.map((takeaway, idx) => (
+                  <li key={idx}>
+                    <Lightbulb size={16} />
+                    <span>{takeaway}</span>
+                  </li>
+                ))}
               </ul>
             )}
           </section>
         )}
         
-        <details className="transcript panel">
-          <summary>Vollständiges Transkript</summary>
+        <details className="report-transcript" open>
+          <summary>
+            <span>Vollständiges Transkript</span>
+            <small>{transcriptTurns} Redebeiträge</small>
+          </summary>
           {edited ? (
-             <textarea className="field" value={view.transcription} onChange={e => setEdited({ ...view, transcription: e.target.value })} />
+            <textarea
+              className="field"
+              value={view.transcription}
+              onChange={(e) => setEdited({ ...view, transcription: e.target.value })}
+            />
           ) : (
-             <p>{view.transcription}</p>
+            <TranscriptChat
+              transcript={view.transcription}
+              empty="Für dieses Meeting wurde kein Transkript gespeichert."
+            />
           )}
         </details>
       </fieldset>
