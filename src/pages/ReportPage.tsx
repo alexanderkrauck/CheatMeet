@@ -204,9 +204,9 @@ export default function ReportPage({
   return (
     <Shell>
       <fieldset disabled={!!busy || running} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-        <header className="report-head no-print">
+        <header className="report-head">
           <div className="report-head-main">
-            <Link className="report-back" to="/dashboard">
+            <Link className="report-back no-print" to="/dashboard">
               <ArrowLeft size={14} /> Zur Übersicht
             </Link>
             {edited ? (

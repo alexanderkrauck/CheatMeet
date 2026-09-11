@@ -184,17 +184,21 @@ describe("drive token endpoint", () => {
   });
 
   it("reports whether the deployment can mint tokens at all", async () => {
-    expect(
-      await (await fetch(`${base}/api/auth/config`)).json(),
-    ).toEqual({ serverAuth: true });
+    expect(await (await fetch(`${base}/api/auth/config`)).json()).toEqual({
+      serverAuth: true,
+      clientId: true,
+      clientSecret: true,
+    });
 
     const bare = mount({ clientSecret: "" }).listen(0, "127.0.0.1");
     await new Promise<void>((r) => bare.once("listening", r));
     const port = (bare.address() as never as { port: number }).port;
     // Without a secret the client keeps the popup flow instead of breaking.
+    // Says which half is missing, so a half-configured deployment is
+    // diagnosable without reading the container's environment.
     expect(
       await (await fetch(`http://127.0.0.1:${port}/api/auth/config`)).json(),
-    ).toEqual({ serverAuth: false });
+    ).toEqual({ serverAuth: false, clientId: true, clientSecret: false });
     expect(
       (
         await fetch(`http://127.0.0.1:${port}/api/drive-token`, {
@@ -322,6 +326,18 @@ describe("drive token endpoint", () => {
     );
     // State accepted (it fails later, on the missing code) rather than rejected.
     expect(await response.text()).toContain("Google hat die Freigabe abgebrochen");
+  });
+
+  it("reports a missing client id distinctly from a missing secret", async () => {
+    // The client id normally comes from firebase-applet-config.json; some
+    // deployments ship that file without an oAuthClientId key.
+    const bare = mount({ clientId: "" }).listen(0, "127.0.0.1");
+    await new Promise<void>((r) => bare.once("listening", r));
+    const port = (bare.address() as never as { port: number }).port;
+    expect(
+      await (await fetch(`http://127.0.0.1:${port}/api/auth/config`)).json(),
+    ).toEqual({ serverAuth: false, clientId: false, clientSecret: true });
+    await new Promise<void>((r) => bare.close(() => r()));
   });
 
   it("refuses a callback whose state does not match the cookie", async () => {

@@ -88,13 +88,15 @@ export function Shell({
               );
             }}
           >
-            <Search size={16} />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Meetings und Transkripte durchsuchen …"
-              aria-label="Meetings und Transkripte durchsuchen"
-            />
+            <label>
+              <Search size={16} />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Meetings und Transkripte durchsuchen …"
+                aria-label="Meetings und Transkripte durchsuchen"
+              />
+            </label>
           </form>
           <div className="header-actions">
             {actions}

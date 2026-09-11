@@ -211,13 +211,16 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
     options.projectId ||
     process.env.FIREBASE_PROJECT_ID ||
     firebaseConfig.projectId;
+  // `??` not `||`: an explicitly supplied empty option means "not configured",
+  // which is the only way to exercise the missing-client-id path in a checkout
+  // whose firebase-applet-config.json happens to carry an oAuthClientId.
   const clientId =
-    options.clientId ||
-    process.env.GOOGLE_OAUTH_CLIENT_ID ||
-    (firebaseConfig as { oAuthClientId?: string }).oAuthClientId ||
-    "";
+    options.clientId ??
+    (process.env.GOOGLE_OAUTH_CLIENT_ID ||
+      (firebaseConfig as { oAuthClientId?: string }).oAuthClientId ||
+      "");
   const clientSecret =
-    options.clientSecret || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
+    options.clientSecret ?? (process.env.GOOGLE_OAUTH_CLIENT_SECRET || "");
   const identify =
     options.identify || ((token: string) => googleAccountFor(token, projectId));
 
@@ -228,9 +231,16 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
     `${req.protocol}://${req.get("host")}/api/auth/google/callback`;
 
   // The client falls back to the popup flow while this is false, so an
-  // incomplete deployment degrades instead of locking everyone out.
+  // incomplete deployment degrades instead of locking everyone out. The two
+  // booleans say which half is missing: a bare `false` cannot, and the client
+  // ID in particular comes from firebase-applet-config.json, which some
+  // deployments ship without an `oAuthClientId` key.
   router.get("/auth/config", (_req, res) =>
-    res.json({ serverAuth: configured() }),
+    res.json({
+      serverAuth: configured(),
+      clientId: Boolean(clientId),
+      clientSecret: Boolean(clientSecret),
+    }),
   );
 
   router.get("/auth/google/start", (req, res) => {
