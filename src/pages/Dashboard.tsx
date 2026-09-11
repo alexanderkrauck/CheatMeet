@@ -1,16 +1,13 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { signOut } from "firebase/auth";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
   FileText,
-  LogOut,
   Search,
   Settings2,
   Mic,
   RefreshCw,
 } from "lucide-react";
-import { auth } from "../lib/firebase";
 import { errorMessage } from "../lib/session";
 import { watchReports, saveReport, uid } from "../lib/reports";
 import { listDrafts } from "../lib/local";
@@ -24,7 +21,11 @@ export default function Dashboard() {
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
+  const [params] = useSearchParams();
+  const [search, setSearch] = useState(params.get("q") || "");
+  useEffect(() => {
+    setSearch(params.get("q") || "");
+  }, [params]);
   const [filter, setFilter] = useState("all");
   const [settings, setSettings] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -91,26 +92,14 @@ export default function Dashboard() {
   return (
     <Shell
       actions={
-        <>
-          <button
-            className="btn btn-ghost"
-            onClick={() => setSettings(!settings)}
-            aria-expanded={settings}
-          >
-            <Settings2 size={18} />
-            <span className="hide-mobile">Speicherort</span>
-          </button>
-          <button
-            className="btn btn-ghost"
-            disabled={syncing}
-            onClick={() =>
-              signOut(auth).catch((e) => setError(errorMessage(e)))
-            }
-            aria-label="Abmelden"
-          >
-            <LogOut size={18} />
-          </button>
-        </>
+        <button
+          className="btn btn-ghost"
+          onClick={() => setSettings(!settings)}
+          aria-expanded={settings}
+        >
+          <Settings2 size={18} />
+          <span className="hide-mobile">Speicherort</span>
+        </button>
       }
     >
       {settings && (

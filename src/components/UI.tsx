@@ -1,6 +1,19 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
-import { ArrowUpRight, AudioLines, Cloud, Loader2, WifiOff } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import {
+  ArrowUpRight,
+  AudioLines,
+  Cloud,
+  LayoutGrid,
+  Loader2,
+  LogOut,
+  Plus,
+  Search,
+  UserRound,
+  WifiOff,
+} from "lucide-react";
+import { signOut } from "firebase/auth";
+import { auth } from "../lib/firebase";
 import type { ReportData } from "../types";
 export function Brand() {
   return (
@@ -13,6 +26,11 @@ export function Brand() {
     </Link>
   );
 }
+/**
+ * The app frame. The header carries real work — global search over past
+ * meetings, the one action that starts a meeting, and the account menu —
+ * rather than holding a logo and nothing else.
+ */
 export function Shell({
   children,
   actions,
@@ -21,6 +39,10 @@ export function Shell({
   actions?: ReactNode;
 }) {
   const [online, setOnline] = useState(navigator.onLine);
+  const [query, setQuery] = useState("");
+  const navigate = useNavigate();
+  const account = useRef<HTMLDetailsElement>(null);
+
   useEffect(() => {
     const update = () => setOnline(navigator.onLine);
     window.addEventListener("online", update);
@@ -30,12 +52,75 @@ export function Shell({
       window.removeEventListener("offline", update);
     };
   }, []);
+
+  useEffect(() => {
+    const close = (event: Event) => {
+      const node = account.current;
+      if (!node?.open) return;
+      if (event.type === "keydown") {
+        if ((event as KeyboardEvent).key === "Escape") node.open = false;
+        return;
+      }
+      if (!node.contains(event.target as Node)) node.open = false;
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, []);
+
   return (
     <>
       <header className="app-header no-print">
         <div className="header-inner">
           <Brand />
-          <nav>{actions}</nav>
+          <form
+            className="header-search"
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              navigate(
+                query.trim()
+                  ? `/dashboard?q=${encodeURIComponent(query.trim())}`
+                  : "/dashboard",
+              );
+            }}
+          >
+            <Search size={16} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Meetings und Transkripte durchsuchen …"
+              aria-label="Meetings und Transkripte durchsuchen"
+            />
+          </form>
+          <div className="header-actions">
+            {actions}
+            <Link to="/record?new=1" className="btn btn-primary header-new">
+              <Plus size={17} />
+              <span className="hide-mobile">Neues Meeting</span>
+            </Link>
+            <details className="header-account" ref={account}>
+              <summary aria-label="Konto und Einstellungen">
+                <UserRound size={18} />
+              </summary>
+              <div>
+                <Link to="/dashboard">
+                  <LayoutGrid size={16} /> Übersicht
+                </Link>
+                <button
+                  onClick={() => {
+                    if (account.current) account.current.open = false;
+                    void signOut(auth).catch(() => {});
+                  }}
+                >
+                  <LogOut size={16} /> Abmelden
+                </button>
+              </div>
+            </details>
+          </div>
         </div>
       </header>
       {!online && (
@@ -54,6 +139,7 @@ export function Shell({
     </>
   );
 }
+
 export function Notice({
   children,
   kind = "error",

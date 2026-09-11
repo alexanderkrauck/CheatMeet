@@ -240,7 +240,7 @@ textarea {
   justify-content: center;
 }
 .app-header {
-  height: 82px;
+  height: 68px;
   background: #f8fafc;
   border-bottom: 1px solid var(--line);
 }
@@ -248,14 +248,105 @@ textarea {
   max-width: 1220px;
   height: 100%;
   margin: auto;
-  padding: 0 42px;
+  padding: 0 28px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 20px;
 }
-.header-inner nav {
+.header-search {
+  flex: 1;
+  max-width: 460px;
   display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: #ffffffa8;
+  border: 1px solid #ffffffc4;
+  color: #414b5e;
+}
+.header-search:focus-within {
+  border-color: #1d4ed880;
+  box-shadow: 0 0 0 3px #1d4ed826;
+}
+.header-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font-size: 13px;
+  color: #16203a;
+}
+.header-search input::placeholder {
+  color: #5b6577;
+}
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
   gap: 8px;
+}
+.header-new {
+  min-height: 40px;
+}
+.header-account {
+  position: relative;
+}
+.header-account > summary {
+  list-style: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  cursor: pointer;
+  background: #ffffffa8;
+  border: 1px solid #ffffffc4;
+  color: #414b5e;
+}
+.header-account > summary::-webkit-details-marker {
+  display: none;
+}
+.header-account > summary:hover {
+  background: #ffffffd6;
+}
+.header-account > div {
+  position: absolute;
+  right: 0;
+  top: 46px;
+  z-index: 60;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 12px;
+  background: #ffffffed;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid #ffffffc4;
+  box-shadow: 0 18px 42px -20px #1e293b85;
+}
+.header-account > div > * {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: none;
+  font-size: 13px;
+  color: #16203a;
+  text-align: left;
+}
+.header-account > div > *:hover {
+  background: #eef2fb;
+}
+@media (max-width: 720px) {
+  .header-search {
+    display: none;
+  }
 }
 .brand {
   display: inline-flex;
@@ -989,109 +1080,9 @@ textarea {
   gap: 10px;
   flex-wrap: wrap;
 }
-.summary-panel {
-  padding: 24px 28px;
-  border-radius: 14px;
-  margin: 16px 0;
-  background: linear-gradient(150deg, #ffffff96, #ffffff5e);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid #ffffff8f;
-  box-shadow:
-    inset 0 1px 0 #ffffffc4,
-    0 16px 38px -28px #1e293b70;
-}
-.summary-panel p {
-  font-size: 15px;
-  line-height: 1.75;
-  white-space: pre-wrap;
-  color: #2a3346;
-}
 /* The summary is the thing a reader lands on after the title. */
-.summary-panel.is-lead {
-  border-left: 3px solid #2563eb;
-  background: linear-gradient(150deg, #ffffffb8, #eef3ffa1);
-}
-.summary-panel.is-lead p {
-  font-size: 18px;
-  line-height: 1.68;
-  color: #1c2537;
-}
-.summary-panel h2,
-.report-transcript > summary > span {
-  font-size: 15px;
-  letter-spacing: -0.2px;
-  font-weight: 650;
-  color: #16203a;
-  text-transform: none;
-  display: block;
-  margin-bottom: 14px;
-}
-.report-transcript > summary > span {
-  margin-bottom: 0;
-}
-.todo-list,
-.takeaway-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-}
-.todo-list li,
-.takeaway-list li {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  font-size: 15px;
-  line-height: 1.6;
-  color: #2a3346;
-}
-.todo-list svg {
-  color: #2563eb;
-  margin-top: 3px;
-}
-.takeaway-list svg {
-  color: #b0812f;
-  margin-top: 3px;
-}
 
 /* The transcript is the evidence behind the summary: open, readable, scrollable. */
-.report-transcript {
-  margin: 24px 0;
-  border: 1px solid #ffffff8f;
-  border-radius: 14px;
-  padding: 20px 24px;
-  background: linear-gradient(150deg, #ffffff8a, #ffffff52);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  box-shadow:
-    inset 0 1px 0 #ffffffc4,
-    0 16px 38px -28px #1e293b70;
-}
-.report-transcript > summary {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  /* Wraps sanely at 375px instead of stacking both halves out of line. */
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  cursor: pointer;
-  color: #16203a;
-}
-.report-transcript > summary small {
-  font-weight: 500;
-  font-size: 12px;
-  color: #414b5e;
-}
-.report-transcript .chat {
-  margin-top: 20px;
-  max-height: 62vh;
-  overflow-y: auto;
-  /* Reserve the scrollbar on both edges so the two columns stay symmetric. */
-  scrollbar-gutter: stable both-edges;
-}
 /* A scroll inside a scrolling page is friction on a phone. */
 @media (max-width: 720px) {
   .report-transcript .chat {
@@ -1703,52 +1694,29 @@ textarea {
     background: white;
     color: black;
   }
-  /* Browsers drop background-images when printing, so the mic bubble's white
-     text would land on a white page and half the transcript would vanish.
-     Print ink-on-paper with an accent rule instead of forcing colour. */
-  .chat-bubble {
-    color: #16203a !important;
-    background: #ffffff !important;
-    border: 1px solid #c3ccdd !important;
-    box-shadow: none !important;
+  /* The report prints as a document: no glass, no gradient, ink on paper. */
+  .report-head,
+  .report-intel section,
+  .timeline-row + .timeline-row {
+    border-color: #c3ccdd !important;
   }
-  .chat-turn.is-mic .chat-bubble {
-    border-left: 3px solid #1d4ed8 !important;
+  .report-intel section {
+    background: none !important;
   }
-  .chat-turn.is-system .chat-bubble,
-  .chat-turn.is-unknown .chat-bubble,
-  .chat-turn.is-single .chat-bubble {
-    border-left: 3px solid #9aa6bd !important;
-  }
-  /* One left-aligned column on paper: stretching made mic turns full-bleed
-     while system turns hugged their content. */
-  .chat-turn {
-    max-width: 100% !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-    align-items: flex-start !important;
-  }
-  .chat-turn .chat-bubble {
+  .timeline-row {
     break-inside: avoid;
   }
-  .chat-meta {
+  .timeline-time,
+  .timeline-speaker {
     color: #33538f !important;
-    background: none !important;
-    border: 0 !important;
-    padding: 0 0 2px !important;
   }
-  .chat-time {
+  .timeline-time small {
     color: #5b6577 !important;
-    opacity: 1 !important;
   }
-  .report-transcript {
-    background: none !important;
-    box-shadow: none !important;
-    backdrop-filter: none !important;
-  }
-  .report-transcript .chat {
-    max-height: none !important;
-    overflow: visible !important;
+  .timeline-body mark {
+    background: #ffe08a !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
   }
   .no-print,
   .app-header,
@@ -2110,12 +2078,6 @@ body {
   flex-direction: column;
 }
 /* The report renders on a light page rather than over the capture backdrop. */
-.report-transcript .chat-bubble {
-  background: #ffffffc7;
-}
-.report-transcript .chat-turn.is-mic .chat-bubble {
-  color: #fff;
-}
 
 /* Narrow screens: colour alone was carrying the speaker distinction. */
 @media (max-width: 720px) {
@@ -2146,13 +2108,6 @@ body {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
-.report-breadcrumb-rest {
-  color: #414b5e;
-  letter-spacing: 1.1px;
-}
-.report-breadcrumb:hover .report-breadcrumb-rest {
-  color: #414b5e;
-}
 @media (max-width: 640px) {
   .report-breadcrumb-rest {
     display: none;
@@ -2180,4 +2135,308 @@ body {
 /* The wall-clock time sits beside the offset, quieter than it. */
 .chat-clock {
   opacity: 0.78;
+}
+
+/* --- Report: compact header, paired intelligence, transcript as workspace ---
+   The first pass fixed contrast and print but left every section at the same
+   visual level. Here the header is compact, the summary leads as text, tasks
+   and insights pair into one region, and the transcript gets the weight. */
+.report-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #ffffffb8;
+  margin-bottom: 22px;
+}
+.report-head-main {
+  flex: 1;
+  min-width: 260px;
+}
+.report-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #414b5e;
+}
+.report-back:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.report-head-main h1,
+.report-head-main .title-input {
+  font-size: clamp(20px, 2.4vw, 27px);
+  letter-spacing: -0.7px;
+  line-height: 1.25;
+  margin: 0;
+}
+.report-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #414b5e;
+}
+.report-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* One primary action; everything else folds into a menu. */
+.report-menu {
+  position: relative;
+}
+.report-menu > summary {
+  list-style: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #414b5e;
+}
+.report-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.report-menu > summary:hover {
+  background: #ffffffb8;
+}
+.report-menu > div {
+  position: absolute;
+  right: 0;
+  top: 48px;
+  z-index: 5;
+  min-width: 232px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 12px;
+  background: #ffffffed;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid #ffffffc4;
+  box-shadow: 0 18px 42px -20px #1e293b85;
+}
+.report-menu > div > * {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: none;
+  font-size: 13px;
+  color: #16203a;
+  text-align: left;
+}
+.report-menu > div > *:hover:not(:disabled) {
+  background: #eef2fb;
+}
+.report-lead p {
+  font-size: 18px;
+  line-height: 1.62;
+  color: #1c2537;
+  max-width: 68ch;
+  white-space: pre-wrap;
+}
+.report-intel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(258px, 1fr));
+  gap: 14px;
+  margin: 0 0 26px;
+}
+.report-intel section {
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: #ffffff7a;
+  border: 1px solid #ffffff9e;
+}
+.report-intel h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  font-weight: 650;
+  color: #414b5e;
+  margin-bottom: 10px;
+}
+.report-intel h2 svg {
+  color: #4a5468;
+}
+.report-intel ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.report-intel li,
+.report-intel p {
+  font-size: 14px;
+  line-height: 1.58;
+  color: #2a3346;
+}
+.report-intel .is-summary p {
+  font-size: 14.5px;
+}
+.report-transcript > h2 {
+  font-size: 15px;
+  font-weight: 650;
+  color: #16203a;
+  margin-bottom: 12px;
+}
+.timeline-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #ffffffb8;
+}
+.timeline-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 180px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: #ffffffa8;
+  border: 1px solid #ffffffc4;
+  color: #414b5e;
+}
+.timeline-search:focus-within {
+  border-color: #1d4ed880;
+  box-shadow: 0 0 0 3px #1d4ed826;
+}
+.timeline-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font-size: 14px;
+  color: #16203a;
+}
+.timeline-search input::placeholder {
+  color: #5b6577;
+}
+.timeline-search button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #e6ebf5;
+  color: #414b5e;
+}
+.timeline-count {
+  font-size: 12px;
+  color: #414b5e;
+  font-variant-numeric: tabular-nums;
+}
+.timeline-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 9px;
+  background: #ffffffa8;
+  border: 1px solid #ffffffc4;
+  font-size: 13px;
+  font-weight: 600;
+  color: #16203a;
+}
+.timeline-copy.is-failed {
+  color: #96442f;
+  border-color: #e8c3b6;
+}
+.timeline-copy:hover {
+  background: #ffffffd6;
+}
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 0;
+}
+.timeline-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 16px;
+  padding: 10px 0;
+}
+.timeline-row + .timeline-row {
+  border-top: 1px solid #1e293b12;
+}
+.timeline-row.is-continued {
+  padding-top: 4px;
+  border-top: 0;
+}
+.timeline-time {
+  display: flex;
+  flex-direction: column;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 600;
+  color: #3f5a92;
+  padding-top: 1px;
+}
+.timeline-time small {
+  font-size: 11px;
+  font-weight: 400;
+  color: #5b6577;
+}
+.timeline-speaker {
+  display: inline-block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: #2f4a80;
+}
+.timeline-row.is-system .timeline-speaker {
+  color: #6b4a86;
+}
+.timeline-body p {
+  max-width: 82ch;
+  font-size: 15px;
+  line-height: 1.62;
+  color: #16203a;
+  white-space: pre-wrap;
+}
+.timeline-body mark {
+  background: #ffe08a;
+  color: #16203a;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.timeline-empty {
+  padding: 18px 0;
+  font-size: 14px;
+  color: #414b5e;
+}
+@media (max-width: 640px) {
+  /* The menu is anchored to a trigger near the right edge; keep it on screen. */
+  .report-menu > div {
+    right: auto;
+    left: 0;
+  }
+  .timeline-row {
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 12px;
+  }
 }

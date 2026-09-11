@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -10,7 +10,8 @@ import {
   Save,
   WandSparkles,
   FolderOpen,
-  Check,
+  FileText,
+  MoreHorizontal,
   CheckSquare,
   Lightbulb,
 } from "lucide-react";
@@ -22,22 +23,7 @@ import { backupDraft, syncReport, analyzeDraft, restoreDraft } from "../lib/work
 import { getDraft, getLocal, putDraft } from "../lib/local";
 import { clearJob, jobFor, subscribeJobs } from "../lib/pipeline";
 import { reportToMarkdown } from "../lib/markdown";
-import TranscriptChat from "../components/TranscriptChat";
-import { parseTranscript } from "../lib/transcriptAssembler";
-
-function DriveLink({ id }: { id: string }) {
-  return (
-    <a
-      href={`https://drive.google.com/drive/folders/${encodeURIComponent(id)}`}
-      target="_blank"
-      rel="noreferrer"
-      className="btn"
-    >
-      <FolderOpen size={17} />
-      Ordner in Drive
-    </a>
-  );
-}
+import TranscriptTimeline from "../components/TranscriptTimeline";
 
 export default function ReportPage({
   report: initialReport,
@@ -87,7 +73,28 @@ export default function ReportPage({
   }, [initialReport, params.id]);
 
   const view = edited || report;
-  const transcriptTurns = parseTranscript(view?.transcription || "").length;
+  const minutes = (ms: number) => `${Math.round(ms / 60000)} Min.`;
+  const menu = useRef<HTMLDetailsElement>(null);
+  // A menu that only closes by re-clicking its own trigger is not a menu.
+  useEffect(() => {
+    const close = (event: Event) => {
+      const node = menu.current;
+      if (!node?.open) return;
+      if (event.type === "keydown") {
+        if ((event as KeyboardEvent).key !== "Escape") return;
+        node.open = false;
+        node.querySelector("summary")?.focus();
+        return;
+      }
+      if (!node.contains(event.target as Node)) node.open = false;
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, []);
   const job = useSyncExternalStore(subscribeJobs, () =>
     params.id ? jobFor(params.id) : undefined,
   );
@@ -197,60 +204,52 @@ export default function ReportPage({
   return (
     <Shell>
       <fieldset disabled={!!busy || running} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-        <div className="report-title">
-          <div className="split">
-            <Link className="eyebrow report-breadcrumb" to="/dashboard">
-              <ArrowLeft size={13} />
-              <span className="report-breadcrumb-back">Übersicht</span>
-              <span className="report-breadcrumb-rest">
-                / Meeting-Zusammenfassung / {dateLabel(view.date)}
-              </span>
+        <header className="report-head no-print">
+          <div className="report-head-main">
+            <Link className="report-back" to="/dashboard">
+              <ArrowLeft size={14} /> Zur Übersicht
             </Link>
-            <Status report={view} local={dirty} />
+            {edited ? (
+              <input className="title-input" value={view.title} onChange={e => setEdited({ ...view, title: e.target.value })} />
+            ) : (
+              <h1>{view.title}</h1>
+            )}
+            <p className="report-meta">
+              <span>{dateLabel(view.date)}</span>
+              {Number.isFinite(view.durationMs) && (
+                <span>{minutes(view.durationMs!)}</span>
+              )}
+              <Status report={view} local={dirty} />
+            </p>
           </div>
-          {edited ? (
-            <input className="title-input" value={view.title} onChange={e => setEdited({ ...view, title: e.target.value })} />
-          ) : (
-            <h1>{view.title}</h1>
-          )}
-          {!edited && view.suggestedTitle && view.suggestedTitle !== view.title && (
-            <button
-              className="title-suggestion no-print"
-              onClick={() => setEdited({ ...view, title: view.suggestedTitle! })}
-            >
-              Vorschlag der KI übernehmen: „{view.suggestedTitle}“
-            </button>
-          )}
-                  </div>
-
-        <div className="report-actions no-print">
-          <div className="actions">
+          <div className="report-head-actions no-print">
             {edited ? (
               <>
-                <button className="btn btn-primary" onClick={() => save(true)}><Save size={17} /> Speichern</button>
+                <button className="btn btn-primary" onClick={() => save(true)}><Save size={16} /> Speichern</button>
                 <button className="btn" onClick={() => setEdited(undefined)}>Abbrechen</button>
               </>
+            ) : !view.driveSyncedAt ? (
+              <button className="btn btn-primary" onClick={() => save(true)}><CloudUpload size={16} /> In Drive speichern</button>
             ) : (
-              <button className="btn" onClick={() => setEdited(structuredClone(view))}><Edit3 size={17} /> Bearbeiten</button>
+              <button className="btn" onClick={() => setEdited(structuredClone(view))}><Edit3 size={16} /> Bearbeiten</button>
             )}
-            <button className="btn" onClick={() => window.print()} disabled={!!edited}><Printer size={17} /> PDF</button>
-            <button className="btn" onClick={download}><Download size={17} /> .md</button>
+            <details className="report-menu" ref={menu}>
+              <summary aria-label="Weitere Aktionen"><MoreHorizontal size={18} /></summary>
+              <div>
+                {!edited && !view.driveSyncedAt && (
+                  <button onClick={() => setEdited(structuredClone(view))}><Edit3 size={16} /> Bearbeiten</button>
+                )}
+                <button onClick={() => window.print()} disabled={!!edited}><Printer size={16} /> Als PDF drucken</button>
+                <button onClick={download}><Download size={16} /> Markdown laden</button>
+                {view.driveFolderId && (
+                  <a href={`https://drive.google.com/drive/folders/${encodeURIComponent(view.driveFolderId)}`} target="_blank" rel="noreferrer">
+                    <FolderOpen size={16} /> Ordner in Drive
+                  </a>
+                )}
+              </div>
+            </details>
           </div>
-          <div className="actions">
-            {view.driveFolderId && <DriveLink id={view.driveFolderId} />}
-            {!view.driveSyncedAt || edited ? (
-              <button className="btn btn-primary" onClick={() => save(true)}>
-                <CloudUpload size={17} />
-                {edited ? "Änderungen in Drive speichern" : "In Drive speichern"}
-              </button>
-            ) : (
-              <span className="drive-saved">
-                <Check size={15} />
-                In Drive gespeichert
-              </span>
-            )}
-          </div>
-        </div>
+        </header>
 
         {error && <Notice>{error}</Notice>}
         {notice && <Notice kind="info">{notice}</Notice>}
@@ -261,10 +260,7 @@ export default function ReportPage({
             <RefreshCw size={18} className="spin" />
             <div>
               <h2>{job!.message}</h2>
-              <p className="muted">
-                Du kannst weiterlesen und navigieren. Der Vorgang läuft in
-                diesem Tab weiter — bitte schließe ihn noch nicht.
-              </p>
+              <p className="muted">Du kannst weiterlesen und navigieren. Der Vorgang läuft in diesem Tab weiter.</p>
             </div>
           </div>
         ) : (
@@ -279,70 +275,49 @@ export default function ReportPage({
           )
         )}
 
-        <section className="summary-panel is-lead">
-          <h2>Zusammenfassung</h2>
-          {edited ? (
-            <textarea className="field" value={view.summary} onChange={e => setEdited({ ...view, summary: e.target.value })} />
-          ) : (
-            <p>{view.summary || "Noch keine Zusammenfassung erstellt."}</p>
-          )}
-        </section>
-        
-        {view.todos && view.todos.length > 0 && (
-          <section className="summary-panel">
-            <h2>Aufgaben</h2>
+        <div className="report-intel">
+          <section className="is-summary">
+            <h2><FileText size={15} /> Zusammenfassung</h2>
             {edited ? (
-              <textarea className="field" value={view.todos.join("\n")} onChange={e => setEdited({ ...view, todos: e.target.value.split("\n") })} />
+              <textarea className="field" value={view.summary} onChange={e => setEdited({ ...view, summary: e.target.value })} />
             ) : (
-              <ul className="todo-list">
-                {view.todos.map((todo, idx) => (
-                  <li key={idx}>
-                    <CheckSquare size={16} />
-                    <span>{todo}</span>
-                  </li>
-                ))}
-              </ul>
+              <p>{view.summary || "Noch keine Zusammenfassung erstellt."}</p>
             )}
           </section>
-        )}
+          <section>
+              <h2><CheckSquare size={15} /> Aufgaben</h2>
+              {edited ? (
+                <textarea className="field" value={view.todos.join("\n")} onChange={e => setEdited({ ...view, todos: e.target.value.split("\n") })} />
+              ) : view.todos?.length ? (
+                <ul>{view.todos.map((t, i) => <li key={i}>{t}</li>)}</ul>
+              ) : (
+                <p className="muted">Keine Aufgaben erkannt.</p>
+              )}
+            </section>
+            <section>
+              <h2><Lightbulb size={15} /> Erkenntnisse</h2>
+              {edited ? (
+                <textarea className="field" value={view.takeaways.join("\n")} onChange={e => setEdited({ ...view, takeaways: e.target.value.split("\n") })} />
+              ) : view.takeaways?.length ? (
+                <ul>{view.takeaways.map((t, i) => <li key={i}>{t}</li>)}</ul>
+              ) : (
+                <p className="muted">Keine Erkenntnisse erkannt.</p>
+              )}
+          </section>
+        </div>
 
-        {view.takeaways && view.takeaways.length > 0 && (
-          <section className="summary-panel">
-            <h2>Wichtigste Erkenntnisse</h2>
-            {edited ? (
-              <textarea className="field" value={view.takeaways.join("\n")} onChange={e => setEdited({ ...view, takeaways: e.target.value.split("\n") })} />
-            ) : (
-              <ul className="takeaway-list">
-                {view.takeaways.map((takeaway, idx) => (
-                  <li key={idx}>
-                    <Lightbulb size={16} />
-                    <span>{takeaway}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        )}
-        
-        <details className="report-transcript" open>
-          <summary>
-            <span>Vollständiges Transkript</span>
-            <small>{transcriptTurns} Redebeiträge</small>
-          </summary>
+        <section className="report-transcript">
+          <h2>Transkript</h2>
           {edited ? (
-            <textarea
-              className="field"
-              value={view.transcription}
-              onChange={(e) => setEdited({ ...view, transcription: e.target.value })}
-            />
+            <textarea className="field" value={view.transcription} onChange={e => setEdited({ ...view, transcription: e.target.value })} />
           ) : (
-            <TranscriptChat
+            <TranscriptTimeline
               transcript={view.transcription}
               startedAt={view.date}
               empty="Für dieses Meeting wurde kein Transkript gespeichert."
             />
           )}
-        </details>
+        </section>
       </fieldset>
     </Shell>
   );
