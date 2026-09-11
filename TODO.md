@@ -148,8 +148,8 @@ Confirmed: `public/icons/icon-192.png`, `icon-512.png` and
 the CheatMeet waveform, but the manifest references only the PNGs.
 
 - [x] Regenerated the PNGs from a rebuilt `icon.svg` at 192, 512 and apple-touch sizes.
-- [ ] Still open: the service worker precaches these paths — reinstall the PWA
-      on a device to confirm the hashed shell picks the new icon up.
+- [ ] Verify on a device: the service worker precaches these paths, so the PWA
+      has to be reinstalled before the new icon shows.
 
 ### 6. Absolute timestamps alongside relative ones
 
@@ -198,6 +198,9 @@ What this means for us:
 ---
 
 ## Carried over
+
+All of this section's original items are done. What remains needs a live
+account, a device, or a decision — not code.
 
 - [x] `speechOnly()` drops system-audio turns before either assistant call,
       keeping timestamps and leaving single-source recordings untouched.
