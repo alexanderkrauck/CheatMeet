@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowUpRight,
-  AudioLines,
   Cloud,
   LayoutGrid,
   Loader2,
@@ -18,9 +17,7 @@ import type { ReportData } from "../types";
 export function Brand() {
   return (
     <Link to="/dashboard" className="brand" aria-label="CheatMeet Übersicht">
-      <span className="brand-mark">
-        <AudioLines size={23} />
-      </span>
+      <img className="brand-mark" src="/icons/logo.png" alt="" width={32} height={32} />
       Cheat<span className="brand-light">Meet</span>
       <span className="brand-dot">.</span>
     </Link>

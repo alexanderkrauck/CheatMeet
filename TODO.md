@@ -147,7 +147,8 @@ Confirmed: `public/icons/icon-192.png`, `icon-512.png` and
 `apple-touch-icon.png` are the old dark-green house. `icon.svg` was updated to
 the CheatMeet waveform, but the manifest references only the PNGs.
 
-- [x] Regenerated the PNGs from a rebuilt `icon.svg` at 192, 512 and apple-touch sizes.
+- [x] Replaced by the CheatMeet logo at 192, 512, apple-touch and favicon
+      sizes. The waveform `icon.svg` is gone; the favicon is a PNG now.
 - [ ] Verify on a device: the service worker precaches these paths, so the PWA
       has to be reinstalled before the new icon shows.
 

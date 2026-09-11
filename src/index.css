@@ -369,14 +369,12 @@ textarea {
   color: #60a5fa;
 }
 .brand-mark {
-  height: 36px;
-  width: 36px;
-  border-radius: 7px;
-  background: #2563eb;
-  color: #eff6ff;
-  display: grid;
-  place-items: center;
-  margin-right: 11px;
+  height: 32px;
+  width: 32px;
+  object-fit: contain;
+  margin-right: 10px;
+  /* The mark is a dark illustration on transparency, so it needs no tile —
+     a coloured one would fight the navy and blue already inside it. */
 }
 .page {
   max-width: 1220px;
@@ -642,10 +640,10 @@ textarea {
 }
 .login-story .brand {
   color: #1e40af;
-}
-.login-story .brand-mark {
-  background: #93c5fd;
-  color: #1d4ed8;
+  /* The story panel is a flex column, so the link would otherwise stretch to
+     its full width and clicking empty space beside the wordmark would navigate.
+     Not scoped to `.brand`: in the app header the same rule would un-centre it. */
+  align-self: start;
 }
 .story-content {
   max-width: 540px;
@@ -1397,8 +1395,8 @@ textarea {
     font-size: 23px;
   }
   .brand-mark {
-    width: 31px;
-    height: 31px;
+    width: 28px;
+    height: 28px;
   }
   .page {
     padding: 27px 18px 40px;

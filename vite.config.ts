@@ -75,7 +75,8 @@ function pwaShellPlugin(): Plugin {
       const shell = [
         "/index.html",
         "/manifest.webmanifest",
-        "/icons/icon.svg",
+        "/icons/logo.png",
+        "/icons/favicon-32.png",
         "/icons/icon-192.png",
         "/icons/icon-512.png",
         "/icons/apple-touch-icon.png",
