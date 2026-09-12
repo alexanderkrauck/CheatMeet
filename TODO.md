@@ -16,8 +16,9 @@ From the 2026-09-11 runs (`be064b14`, 5:25, and `c02db430`, 2:54):
 - **Finishing mid-segment still transcribes to the end.** Recording ended at
   5:25, the last transcribed segment is `[5:10]` for both sources.
 - **Bilingual German/English transcription works** without switching hints.
-- A source that was silent for a whole segment is correctly dropped rather than
-  emitting an empty turn.
+- ~~A source that was silent for a whole segment is correctly dropped rather
+  than emitting an empty turn.~~ **Disproven by `3b7c8f25` — see §10.** It held
+  for that one recording; it is not a property of the system.
 
 Earlier, from `0daa78f1`: segment boundaries land at exactly 0/60/110/160 s, the
 recording clock is accurate to ~50 ms, and `Error parsing Opus packet header` is
@@ -122,6 +123,91 @@ overview → transcript as the dominant workspace.**
 
 ---
 
+## From the 2026-09-11 source-selection recording (`3b7c8f25`)
+
+The microphone half of that transcript is accurate; the user confirmed it. The
+system half is entirely invented, which is what §10 is about.
+
+### 10. Silence is transcribed as invented speech — data-integrity bug
+
+**This is the most serious bug in the backlog.** In `3b7c8f25` the shared tab
+carried an audio track that was playing nothing. Every system-audio segment was
+therefore digital silence, and the model returned fluent, confident German
+prose for it: a lecturer explaining why the slides are in German, a report on
+the 2013 Bundestag election with six party percentages to one decimal, and VfL
+Osnabrück's mid-season league position. None of it happened. The user says so on
+the recording — *"es nützt wirklich kein Audio von anderen. Ich höre überhaupt
+nichts, da ist nichts"* — and the audio agrees: between 0:30 and 0:46 the mixed
+file sits at −50 to −54 dBFS, the noise floor, while the system track claims
+continuous speech across that whole stretch.
+
+It did not stop at the transcript. The summary states as fact that the tool
+recorded a lecture and football statistics, and a fabricated to-do
+(*"Fehleranalyse durchführen, um zu klären, warum aktuell ungewollt Systemaudio
+aufgezeichnet wird"*) was written into `zusammenfassung.md` and exported to
+Drive. An invented transcript becomes an invented record of a meeting. Three
+unrelated encyclopedic topics arriving inside two minutes is the classic
+signature of an ASR model fed near-silence.
+
+- [x] **Gate segments on measured audio energy before uploading.**
+      `src/lib/audioEnergy.ts`: `segmentHasSignal()` decodes each segment's own
+      recorded audio (not a live analyser sampled on a timer — a backgrounded
+      tab throttles `setInterval` to once a minute, exactly what
+      `segmentCapture.ts` already works around for segment boundaries) and
+      checks its real PCM. `liveTranscription.ts` chains the check ahead of
+      `assembler.push()` per source, so a segment that never rises above the
+      noise floor is never sent at all.
+- [x] Threshold: `SILENCE_DBFS = -48`, stated and justified in code against
+      `3b7c8f25`'s measured levels (real silence -50 to -61 dBFS, real speech
+      never below -44). Derived from one recording/device/browser; documented
+      as failing open if a different setup's noise floor sits above it, rather
+      than risk cutting real speech.
+- [x] Added to the `/transcribe-segment` prompt as a second line of defence —
+      return nothing when there is no intelligible speech.
+- [x] Unit-tested against real PCM cut from `3b7c8f25` with ffmpeg
+      (`tests/fixtures/real-silence.f32le`, `real-speech.f32le`), not only
+      synthesised buffers — the browser's `decodeAudioData` container/codec
+      layer itself is still outside what a Node test process can exercise;
+      only the classification decision made from decoded samples is verified
+      against real bytes.
+- [x] Single-source fallback verified by a real test
+      (`liveTranscription.test.ts`): a source gated out for the whole session
+      never contributes an entry, so `toTimestamped()` already drops its label
+      rather than asserting a split that never existed.
+- [x] A first version of this fix used a live per-source analyser correlated
+      to each segment via a wall-clock FIFO queue. Two review rounds found it
+      unsound: the correlation silently desynced across pause/resume (an
+      ordinary user action), and the analyser's own `setInterval` sampling hit
+      the identical backgrounding throttle the fix exists to route around —
+      both defeated the gate with no error or log to reveal it. Replaced with
+      the per-segment decode above, which needs neither a timer nor a
+      correlation step.
+
+### 11. Choose the audio sources before recording starts
+
+Today `startCapture` always calls `getDisplayMedia`. There is no way to say "microphone only", so a user who wants a plain voice recording is pushed
+through a screen-share prompt anyway — and, as §10 shows, accepting it with
+nothing playing actively corrupts the report.
+
+- [ ] Offer the choice up front: microphone only, or microphone plus system
+      audio. Remember the last choice.
+- [ ] Microphone-only must skip `getDisplayMedia` entirely rather than calling
+      it and discarding the result.
+
+### 12. Explain the screen-share prompt before it appears
+
+The only explanation today is a busy message set while the browser's own dialog
+is already open — the user cannot read it before deciding, and it competes with
+a native modal for attention.
+
+- [ ] Show the explainer *before* calling `getDisplayMedia`: what the browser is
+      about to ask, that the tab or screen must be picked, and above all that
+      **"Audio teilen" has to be ticked** or no system audio is captured.
+- [ ] Keep the existing post-hoc warning for a share that arrives without an
+      audio track, but make it say what to do differently next time.
+
+---
+
 ## From the 2026-09-11 feedback recording (`c02db430`)
 
 ### 3. A single-channel recording must not be labelled "Du"
@@ -189,12 +275,158 @@ What this means for us:
   labels forward — but that has to be built, and it is where this would fail.
 - Diarization is incompatible with custom vocabulary, which we do not use.
 
-- [ ] Decide whether to adopt it. If yes: switch the segment transcription call
-      to `gemini-3.5-transcribe` with diarization, and extend the glue step to
-      map each segment's speaker labels onto the running transcript using the
-      overlap.
-- [ ] Measure the cost difference first — it runs per segment, so a pricing
-      change multiplies across a meeting.
+- [x] Decided: adopt it, but **not per segment**. Doing it per segment is what
+      creates the cross-segment identity problem in the first place. §9 runs it
+      once over the finished recording instead, where the problem does not
+      exist. Streaming was ruled out at the same time: `gemini-3.5-transcribe-live`
+      supports no diarization at all, so on Gemini it is streaming *or*
+      speakers, never both.
+- [x] Cost measured: ~$0.005/min blended, one call per meeting. See §9.
+
+---
+
+## 9. Diarization: one labelled pass over the finished recording
+
+**Status: plan awaiting review. Nothing here is implemented.**
+
+### The decision
+
+Keep the 60 s segmented pipeline exactly as it is — it is verified in
+production and it is what makes the live transcript live. Add *one*
+`gemini-3.5-transcribe` call over the finished recording, with diarization on,
+and let its output become the transcript the report shows. There is no
+cross-segment identity problem because there are no segments: one call sees the
+whole meeting and labels it coherently.
+
+Rejected alternatives, with the reason:
+
+- **`gemini-3.5-transcribe-live`** — no diarization on the Live API at all, 10
+  min session cap, ~1.8x the price. It would lose the feature we want it for.
+- **AssemblyAI streaming** (`speaker_labels: true`, German supported, ~307 ms,
+  $0.15 + $0.12/hr) — genuinely does live diarization, but their docs say a
+  streaming label is final once assigned, and it means a second vendor, a second
+  key, and our audio going somewhere other than Google. Revisit only if live
+  speaker labels become a requirement.
+
+### The constraint that shapes this
+
+**`aufnahme.webm` is the *mixed* stream.** `mergeAudioStreams()` feeds the main
+recorder mic + system audio combined, while live transcription runs a separate
+segmented recorder per source. So a diarized pass over the stored file would
+throw away the mic/system split — which is a *hard* split from two separate
+device streams and far more trustworthy than any model's guess.
+
+But `mergeAudioStreams()` returns the microphone stream unchanged when there is
+no system audio. So on a phone — exactly the case the feedback recording raised
+— the stored file **is** pure microphone, and diarizing it is exactly right with
+no reconciliation needed.
+
+Hence the gate: **diarize only when the recording had a single source.**
+§11 makes that case explicit and common rather than incidental, so it should
+land first — it also supplies the `sources` field §9 needs in step 3.
+
+### Scope
+
+In: single-source recordings, up to the 30 min diarization cap.
+Out, deliberately:
+
+- **The system-audio side.** Several remote participants inside one system
+  stream is a real case, but reaching it needs a second full-length recorder
+  running for the whole meeting (double memory, double journalling, double
+  upload). That is a separate decision, not a detail of this one.
+- **Recordings over 30 min.** The cap is Google's, and it applies whenever
+  diarization or timestamps are on. Past it, keep the assembled transcript and
+  say so rather than labelling half a meeting.
+- **Renaming speakers.** Output is `Sprecher 1..N`; nothing tells the model
+  which one is the user. The report's edit mode already allows a manual rename.
+- **Live speaker labels.** Not reachable on Gemini at all (see above).
+
+### Step 0 — spike first, build nothing until it passes
+
+- [ ] Call `ai.interactions.create` against the real 178 s `aufnahme.webm` and
+      **write the raw response to a fixture file.** This is a different API
+      surface from everything we use today (`interactions`, not
+      `models.generateContent`), and the response shape must be observed, not
+      assumed. `@google/genai` 2.21.0 already types it:
+      `generation_config.transcription_config.mode = { type: "verbatim",
+      diarization_mode: "speaker", timestamp_granularities: ["word"] }`,
+      returning `word_info` annotations (`text`, `speaker: "spk_1"`,
+      `start_offset: "0.100s"`). `output_text` carries the plain text; the
+      annotations hang off a `TextContent.annotations` array whose exact path
+      through `steps` needs confirming against a real response.
+- [ ] Measure on that call: wall-clock latency, billed tokens, German quality.
+      **Extrapolate the latency to 30 min and compare against the Cloud Run
+      request timeout** (default 300 s). If 30 min of audio cannot finish inside
+      it, this design needs a polling endpoint instead of one request, which is
+      a much larger change — find that out now, not after building.
+- [ ] Compare the result against the existing assembled transcript for the same
+      recording. Word-level timestamps are documented to *degrade* transcription
+      accuracy, and timestamps only support `"word"` granularity, so there is no
+      cheaper setting to fall back to. If the diarized text is materially worse
+      than what we already produce, the whole idea is off — labels are not worth
+      a worse transcript.
+
+### Step 1 — `shared/diarization.ts` (pure, isomorphic, tested directly)
+
+- [ ] `parseOffset("1.234s") -> ms`.
+- [ ] `groupWords(words) -> TranscriptEntry[]`: start a new turn on a speaker
+      change or a silence gap over ~2 s, so a monologue still breaks into
+      readable turns; map `spk_1` -> `Sprecher 1`.
+- [ ] Render through the existing `toTimestamped()` so the storage format stays
+      one format, not two.
+- [ ] Unit-test against the Step 0 fixture — the real recorded response, not a
+      hand-written echo of the function's own logic.
+
+### Step 2 — `POST /api/diarize`
+
+- [ ] Reuse the existing machinery wholesale: `receive()`, `requireAudio()`,
+      `uploadMedia()`, `withRetry()`, and the `finally` that deletes both the
+      remote Gemini file and the multer temp file on every path.
+- [ ] Take the per-user concurrency slot, like `/analyze` — this is an expensive
+      call and one per user at a time is the right limit.
+- [ ] `GEMINI_TRANSCRIBE_MODEL`, defaulting to `gemini-3.5-transcribe`. Its own
+      longer client timeout; the 180 s default is for segments.
+- [ ] Return `{ transcript, speakers }` already in our storage format, so the
+      client never sees `spk_1`.
+- [ ] Tests with a fake client replaying the Step 0 fixture.
+
+### Step 3 — pipeline
+
+- [ ] Record the capture sources on the report (`sources?: TranscriptSource[]`,
+      written in `capture.ts`). The Firestore report rules use `get()` with
+      defaults and do not restrict keys, so this needs **no rules change** —
+      unlike the settings documents.
+- [ ] New `"diarizing"` stage in `pipeline.ts`, between `uploading` and
+      `analyzing`: the audio is already safe in Drive, and `/analyze` should
+      summarise the better transcript rather than pay to summarise twice.
+- [ ] Eligible = exactly one source, audio present, `durationMs` inside the cap.
+- [ ] **Failure must never fail the job.** Log it, keep the assembled
+      transcript, carry on to analysis. This is an enhancement, not a
+      dependency.
+
+### Step 4 — display
+
+- [ ] `parseTranscript` keeps `source` for mic/system styling but also returns
+      the raw `label`, which it currently discards for anything that is not
+      `Du`/`Andere` — today a `(Sprecher 2)` line would silently lose its chip.
+- [ ] `TranscriptTimeline` renders a chip for any label, coloured from a small
+      palette by stable index. Contrast-checked, and checked in print.
+- [ ] `speechOnly()` must keep dropping only `Andere` — a diarized transcript is
+      single-source, so every one of its turns is speech and none may be
+      filtered out of the assistant's context.
+
+### Step 5 — validate
+
+- [ ] Unit tests green; visual validation of a 3-speaker timeline by subagent.
+- [ ] One real two-person in-room recording on the phone, end to end, compared
+      against what the assembled transcript produced for the same audio.
+
+### What this costs
+
+~$0.005/min blended, once per meeting: about **$0.15 for a 30 min meeting**.
+That roughly doubles the transcription spend of a meeting, since the segment
+calls still run. There is no on/off switch in the plan — adding one would mean a
+`settings/preferences` key and therefore a Firestore rules change and deploy.
 
 ---
 

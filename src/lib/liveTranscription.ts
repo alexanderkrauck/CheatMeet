@@ -10,6 +10,7 @@ import {
 } from "./transcriptAssembler";
 import { startSegmentedCapture } from "./segmentCapture";
 import { preferredRecordingMimeType } from "./recording";
+import { segmentHasSignal } from "./audioEnergy";
 
 /** Sends one overlapping segment and returns only the text that is new. */
 export async function transcribeSegment(
@@ -64,10 +65,13 @@ export function startLiveTranscription(
   now: () => number,
   onChange: (transcript: string) => void,
   transcribe = transcribeSegment,
+  hasSignal = segmentHasSignal,
 ): LiveTranscription {
   const mimeType = preferredRecordingMimeType();
   const assemblers: TranscriptAssembler[] = [];
   const starts: (() => ReturnType<typeof startSegmentedCapture>)[] = [];
+  // Reads each source's current gate chain at finish() time; see below.
+  const gateChains: (() => Promise<void>)[] = [];
 
   const merged = () =>
     toTimestamped(assemblers.flatMap((assembler) => assembler.entries));
@@ -80,11 +84,39 @@ export function startLiveTranscription(
       source as TranscriptSource,
     );
     assemblers.push(assembler);
+    // Checking a segment for silence means decoding it, which is async and
+    // can resolve out of order between segments. The assembler needs
+    // assembler.push() called in the same order segments actually finished
+    // recording (each one's overlap context is the transcript built by the
+    // ones before it), so this chain forces that order regardless of how
+    // long any one decode takes -- the same shape TranscriptAssembler itself
+    // uses internally to serialize transcription.
+    let gate: Promise<void> = Promise.resolve();
+    gateChains.push(() => gate);
     starts.push(() =>
       startSegmentedCapture({
         createRecorder: () =>
           new MediaRecorder(stream, mimeType ? { mimeType } : undefined),
-        onSegment: (segment, atMs) => assembler.push(segment, atMs),
+        onSegment: (segment, atMs) => {
+          // A rejected step must not poison the chain: gate stays a resolved
+          // promise for the next segment even if this one's check throws, the
+          // same "one lost segment must not stop the rest" rule the assembler
+          // itself applies to a failed transcription.
+          gate = gate.then(async () => {
+            try {
+              // A segment that never rose above the noise floor is not sent
+              // for transcription at all: handed silence, the model does not
+              // return an empty string, it invents fluent speech (verified
+              // on a real recording where a muted shared tab produced six
+              // minutes of invented lecture and election results).
+              if (await hasSignal(segment)) assembler.push(segment, atMs);
+              else console.debug(`Skipped a silent ${source} segment`);
+            } catch (error) {
+              console.error(`Silence check failed for a ${source} segment; sending it`, error);
+              assembler.push(segment, atMs);
+            }
+          });
+        },
         now,
       }),
     );
@@ -133,6 +165,11 @@ export function startLiveTranscription(
         stopped = true;
         await stopAll();
       });
+      // stopAll() has already made every onSegment call for the final
+      // segments, so each chain read here includes the gate check for the
+      // last segment -- awaiting it before settled() is what guarantees that
+      // segment's push() has actually happened by the time settled() waits.
+      await Promise.all(gateChains.map((chain) => chain()));
       await Promise.all(assemblers.map((assembler) => assembler.settled()));
       return merged();
     },

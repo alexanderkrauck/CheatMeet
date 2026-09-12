@@ -83,4 +83,96 @@ describe("live transcription across sources", () => {
     expect(live.failedSegments).toBe(1);
     expect(live.pendingSegments).toBe(0);
   });
+
+  it("never sends a segment from a source with no measured signal", async () => {
+    const transcribe = vi.fn().mockResolvedValue("sollte nie ankommen");
+    // The default real gate never runs in this test environment (no Web
+    // Audio), so it always reports signal; this test injects a fake one to
+    // exercise the gate itself, per segment.
+    const live = startLiveTranscription(
+      { mic: stream("mic"), system: stream("sys") },
+      () => 0,
+      () => {},
+      transcribe,
+      async (segment) => (await segment.text()) !== "sys",
+    );
+    const transcript = await live.finish();
+
+    // Only the microphone's segment was ever transcribed.
+    expect(transcribe).toHaveBeenCalledOnce();
+    expect(transcript).toContain("sollte nie ankommen");
+    // One source contributed nothing, so this reads as single-source: no
+    // speaker label asserts a separation that never happened.
+    expect(transcript).not.toContain("(Du)");
+    expect(transcript).not.toContain("(Andere)");
+  });
+
+  it("keeps segments in order when the silence check is asynchronous", async () => {
+    // A recorder that tags its blob with its own construction order, so the
+    // two segments in this test are distinguishable by *when they were
+    // really recorded*, independent of which one's silence check resolves
+    // first. Without this, both segments' blobs would be identical content
+    // and the assertions below would pass whichever way push() actually
+    // ordered them -- which is exactly how an earlier version of this test
+    // passed against a broken, unserialized gate.
+    let created = 0;
+    class OrderedFakeRecorder {
+      static isTypeSupported = () => true;
+      state = "inactive";
+      ondataavailable: ((e: { data: Blob }) => void) | null = null;
+      onstop: ((e: Event) => void) | null = null;
+      onerror: ((e: Event) => void) | null = null;
+      private id = created++;
+      start() {
+        this.state = "recording";
+      }
+      stop() {
+        this.state = "inactive";
+        this.ondataavailable?.({
+          data: new Blob([`segment-${this.id}`], { type: "audio/webm" }),
+        });
+        this.onstop?.(new Event("stop"));
+      }
+    }
+    vi.stubGlobal("MediaRecorder", OrderedFakeRecorder);
+
+    // Keyed by the segment's own identity, not by call order, so a flipped
+    // push() order shows up as wrong *content*, not just a coincidentally
+    // matching call index.
+    const transcribe = vi.fn(async (segment: Blob, previous: string) => {
+      const label = await segment.text();
+      return label === "segment-0" ? `A:${label}` : `B (nach "${previous}")`;
+    });
+    // segmentCapture.ts guarantees onSegment fires in true recording order
+    // regardless of this gate, so the Nth hasSignal call always corresponds
+    // to the Nth recorded segment -- segment-0's check is made deliberately
+    // slow, segment-1's resolves first, so this only passes if segment-1's
+    // push() still waits for segment-0's to have been fully applied.
+    const hasSignal = vi
+      .fn()
+      .mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 10)),
+      )
+      .mockImplementationOnce(async () => true);
+
+    let now = 0;
+    const live = startLiveTranscription(
+      { mic: stream("mic") },
+      () => now,
+      () => {},
+      transcribe,
+      hasSignal,
+    );
+    now = 50_000;
+    live.tick(); // opens the second, overlapping segment
+    now = 60_000;
+    live.tick(); // closes the first segment; its onSegment fires now
+    const transcript = await live.finish(); // closes the second segment
+
+    // The second segment's transcribe call must have seen the first
+    // segment's *result* as overlap context, which only holds if its push()
+    // waited for the first segment's slower silence check to resolve first.
+    expect(transcribe.mock.calls[1][1]).toBe("A:segment-0");
+    expect(transcript).toContain('B (nach "A:segment-0")');
+  });
 });

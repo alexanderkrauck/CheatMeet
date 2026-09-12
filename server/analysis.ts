@@ -332,7 +332,7 @@ export function createAnalysisRouter(options: Options = {}) {
                     },
                   },
                   {
-                    text: "Transkribiere diese Audioaufnahme wortgetreu. Gib ausschließlich das Transkript aus, ohne Einleitung, Zeitstempel oder Erklärungen.",
+                    text: "Transkribiere diese Audioaufnahme wortgetreu. Gib ausschließlich das Transkript aus, ohne Einleitung, Zeitstempel oder Erklärungen. Enthält die Aufnahme keine verständliche Sprache (Stille, Rauschen), gib nichts zurück.",
                   },
                 ],
               },
