@@ -12,6 +12,7 @@ import { audioExtension, validateAnalysis } from "../../shared/analysis";
 import { reportToMarkdown } from "./markdown";
 import { withWebmDuration } from "./webmDuration";
 import type { Draft, ReportData } from "../types";
+import { ensureFinalTranscript } from "./finalTranscription";
 
 // An operation belongs to the account that started it, including across tab sign-outs.
 function ownedOperation() {
@@ -56,7 +57,12 @@ async function summaryPreferences(owner: string): Promise<string> {
 
 export async function analyzeDraft(draft: Draft): Promise<ReportData> {
   const { owner, run } = ownedOperation();
+  await run(() => ensureFinalTranscript(draft));
   const transcription = draft.report.transcription?.trim() || "";
+  // A successful empty final transcript is silence, not permission to send the
+  // recording to Gemini for a third transcription.
+  if (draft.report.speech?.phase === "final" && !transcription)
+    return { ...draft.report, summary: "Keine Sprache erkannt.", todos: [], takeaways: [], status: "completed", error: "" };
   if (!transcription && !draft.audio)
     throw new Error("Weder Transkript noch Audio vorhanden.");
 
@@ -102,6 +108,7 @@ export async function analyzeDraft(draft: Draft): Promise<ReportData> {
   return {
     ...draft.report,
     ...analysed,
+    ...(transcription ? { transcription } : {}),
     ...(chosen ? { title: chosen } : {}),
     ...(chosen && analysed.title && analysed.title !== chosen
       ? { suggestedTitle: analysed.title }

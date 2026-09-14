@@ -98,7 +98,7 @@ jobs:
       - name: Build and smoke-test the production container
         run: |
           docker build --tag baudoku:check .
-          docker run --detach --name baudoku-check -p 8080:8080 -e PORT=8080 -e GEMINI_API_KEY=ci-smoke-test baudoku:check
+          docker run --detach --name baudoku-check -p 8080:8080 -e PORT=8080 -e GEMINI_API_KEY=ci-smoke-test -e ASSEMBLYAI_API_KEY=ci-smoke-test baudoku:check
           trap 'docker rm -f baudoku-check' EXIT
           node scripts/smoke-deployment.mjs http://localhost:8080
   # Production deployment is temporarily disabled: pushes to main must not

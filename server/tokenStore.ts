@@ -40,7 +40,7 @@ const METADATA_TOKEN_URL =
  */
 let cached: { token: string; expiresAt: number } | null = null;
 
-async function serviceAccountToken(
+export async function serviceAccountToken(
   fetchImpl: typeof fetch,
 ): Promise<string> {
   if (cached && cached.expiresAt > Date.now()) return cached.token;

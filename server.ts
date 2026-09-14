@@ -3,6 +3,7 @@ import express from "express";
 import path from "node:path";
 import { createAnalysisRouter } from "./server/analysis";
 import { createAuthRouter } from "./server/googleAuth";
+import { createTranscriptionRouter } from "./server/transcription";
 
 async function startServer() {
   const app = express();
@@ -12,11 +13,13 @@ async function startServer() {
   // the Secure flag from the CSRF cookie.
   app.set("trust proxy", true);
   app.use("/api", createAuthRouter());
+  app.use("/api", createTranscriptionRouter());
   app.use("/api", createAnalysisRouter());
   app.get("/api/health", (_req, res) =>
     res.json({
       status: "ok",
       analysisConfigured: Boolean(process.env.GEMINI_API_KEY),
+      transcriptionConfigured: Boolean(process.env.ASSEMBLYAI_API_KEY),
     }),
   );
   app.use("/api", (_req, res) =>

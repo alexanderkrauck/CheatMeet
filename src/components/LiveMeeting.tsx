@@ -168,7 +168,7 @@ export default function LiveMeeting({
             ? "Transkription pausiert"
             : pending > 0
               ? `${pending} Abschnitt(e) werden transkribiert`
-              : "Transkript aktuell"}
+              : "Vorläufiges Live-Transkript"}
         </span>
       </div>
 
@@ -205,7 +205,7 @@ export default function LiveMeeting({
           <TranscriptChat
             transcript={transcript}
             startedAt={startedAt}
-            empty="Sobald gesprochen wird, erscheint hier das laufende Transkript. Der erste Abschnitt dauert etwa eine Minute."
+            empty="Sobald gesprochen wird, erscheint hier das laufende Transkript. Das Live-Transkript ist vorläufig; beim Abschluss wird es durch den finalen Text ersetzt."
           />
         </div>
 

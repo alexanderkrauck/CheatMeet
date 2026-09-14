@@ -2475,3 +2475,12 @@ body {
   align-self: stretch;
   cursor: text;
 }
+
+.meeting-languages { margin: 12px 0; font-size: 14px; }
+.meeting-languages summary, .speaker-editor summary { cursor: pointer; padding: 10px 0; }
+.meeting-languages fieldset { display: flex; flex-wrap: wrap; gap: 12px; border: 0; padding: 8px 0; }
+.meeting-languages label { display: flex; align-items: center; gap: 5px; }
+.speaker-editor-row { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 12px; }
+.speaker-editor-row label { flex: 1 1 200px; }
+.speaker-editor .field { display: block; width: 100%; margin-top: 6px; }
+.speaker-turn-edit { margin: 16px 0; }

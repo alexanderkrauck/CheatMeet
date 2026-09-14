@@ -3,16 +3,16 @@ import type { Draft } from "../types";
 import { appendRecordingChunk, deleteDraft, getDraft, putDraft } from "./local";
 import { mergeAudioStreams, type MergedAudio } from "./audioMerge";
 import { RecordingClock, preferredRecordingMimeType } from "./recording";
-import {
-  startLiveTranscription,
-  type LiveTranscription,
-} from "./liveTranscription";
+import type { LiveTranscription } from "./liveTranscription";
 import {
   observeRecordingLifecycle,
   type RecordingWakeLockState,
 } from "./useRecordingLifecycle";
 import { errorMessage } from "./session";
 import { auth } from "./firebase";
+import type { AudioSourcePreference } from "./audioSources";
+import { startAssemblyLive } from "./assemblyLive";
+import { DEFAULT_LANGUAGES, renderTranscript, validLanguages } from "../../shared/transcription";
 
 export type CaptureState = "ready" | "recording" | "paused" | "review";
 
@@ -41,6 +41,7 @@ const freshDraft = (): Draft => ({
     title: "",
     summary: "",
     transcription: "",
+    speech: { provider: "assemblyai", phase: "pending", languages: [...DEFAULT_LANGUAGES], turns: [], speakerNames: {} },
     todos: [],
     takeaways: [],
     status: "pending",
@@ -249,11 +250,34 @@ export const setCaptureTitle = (title: string) =>
 export const setCaptureError = (error: string) => emit({ error });
 export const setCaptureBusy = (busy: string) => emit({ busy });
 export const setCaptureHint = (hint: string) => emit({ hint });
+export const setCaptureLanguages = (languages: string[]) => {
+  if (isCapturing() || !validLanguages(languages)) return;
+  void persist({ ...snapshot.draft, report: { ...snapshot.draft.report,
+    speech: { provider: "assemblyai", phase: "pending", turns: [], speakerNames: {}, ...snapshot.draft.report.speech, languages } } }).catch(() => {});
+};
 
-export async function startCapture(localOnly: boolean, verify: () => Promise<void>) {
+export async function startCapture(
+  localOnly: boolean,
+  verify: () => Promise<void>,
+  audioSources: AudioSourcePreference = "mic+system",
+) {
   if (busyOperation || isCapturing()) return;
   busyOperation = true;
-  emit({ busy: "Aufnahme vorbereiten …", error: "", localStartOffered: false });
+  emit({ busy: "Aufnahme vorbereiten …", error: "", warning: "", localStartOffered: false });
+  const captureOwner = snapshot.owner;
+  let share: Promise<MediaStream | undefined> | undefined;
+  // Request display capture during the actual click, before Drive/mic awaits
+  // consume transient user activation. Keep its rejection handled immediately.
+  if (audioSources === "mic+system" && navigator.mediaDevices?.getDisplayMedia) {
+    try {
+      share = navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+        .then(stream => {
+          if (auth.currentUser?.uid !== captureOwner) { stream.getTracks().forEach(t => t.stop()); return undefined; }
+          sources.system = stream;
+          return stream;
+        }, () => undefined);
+    } catch { share = Promise.resolve(undefined); }
+  }
   try {
     if (!localOnly && navigator.onLine) {
       emit({ busy: "Drive-Berechtigung prüfen …" });
@@ -273,28 +297,24 @@ export async function startCapture(localOnly: boolean, verify: () => Promise<voi
     emit({ busy: "Mikrofon vorbereiten …" });
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     sources.mic = mic;
+    if (ownerChanged()) { releaseCapture(); return; }
 
     // Browsers only expose system audio through a display-capture prompt, and
-    // only alongside a video track. Declining it is a normal outcome.
+    // only alongside a video track. Declining it is a normal outcome. A user
+    // who chose microphone-only never sees this prompt at all -- calling
+    // getDisplayMedia and discarding the result would still interrupt them
+    // with a dialog for something they already said they did not want.
     let system: MediaStream | undefined;
-    if (navigator.mediaDevices.getDisplayMedia) {
+    if (audioSources === "mic+system" && navigator.mediaDevices.getDisplayMedia) {
       emit({
-        busy: "Systemaudio freigeben … Teile den Tab oder Bildschirm und aktiviere „Audio teilen“. Ohne Freigabe wird nur das Mikrofon aufgenommen.",
+        busy: "Systemaudio freigeben … Teile den Tab oder Bildschirm und aktiviere „Audio teilen“.",
       });
-      try {
-        system = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true,
-        });
-        sources.system = system;
-        if (!system.getAudioTracks().length)
-          emit({
-            warning:
-              "Die Freigabe enthält kein Systemaudio. Es wird nur das Mikrofon aufgenommen.",
-          });
-      } catch (e) {
-        console.warn("System audio was not shared", e);
-      }
+      system = await share;
+      if (ownerChanged()) { releaseCapture(); return; }
+      if (!system) emit({ warning: "Systemaudio wurde nicht freigegeben. Es wird nur das Mikrofon aufgenommen." });
+      else if (!system.getAudioTracks().length) emit({ warning: "Die Freigabe enthält kein Systemaudio. Es wird nur das Mikrofon aufgenommen. Prüfe beim nächsten Mal „Audio teilen“ und ob dein Browser Audio für den gewählten Tab oder Bildschirm unterstützt." });
+    } else if (audioSources === "mic+system") {
+      emit({ warning: "Dieser Browser unterstützt keine Bildschirmfreigabe. Es wird nur das Mikrofon aufgenommen." });
     }
 
     // The mixed stream is the durable recording; transcription reads each
@@ -318,7 +338,7 @@ export async function startCapture(localOnly: boolean, verify: () => Promise<voi
     clock.reset();
     await persist({
       ...snapshot.draft,
-      report: { ...snapshot.draft.report, captureState: "recording" },
+      report: { ...snapshot.draft.report, date: new Date().toISOString(), captureState: "recording", captureSources: system?.getAudioTracks().length ? ["mic", "system"] : ["mic"] },
     });
     void navigator.storage?.persist?.().catch(() => {});
 
@@ -326,21 +346,29 @@ export async function startCapture(localOnly: boolean, verify: () => Promise<voi
       system && system.getAudioTracks().length
         ? new MediaStream(system.getAudioTracks())
         : undefined;
-    live = startLiveTranscription(
+    live = startAssemblyLive(
       { mic: new MediaStream(mic.getAudioTracks()), system: systemAudio },
       elapsed,
-      (transcription) => {
+      (speech) => {
+        if (ownerChanged()) return;
+        const transcription = renderTranscript(speech);
         emit({
+          ...(speech.liveWarning ? { warning: speech.liveWarning } : {}),
           draft: {
             ...snapshot.draft,
-            report: { ...snapshot.draft.report, transcription },
+            report: { ...snapshot.draft.report, transcription, speech },
           },
         });
         pendingSnapshot = chunks.length
           ? { ...snapshot.draft, audio: undefined }
           : snapshot.draft;
-        void queueWrite().catch(() => {});
+        // Checkpoint with the recorder's 10-second journal tick. Partial
+        // events can arrive many times per second; do not queue a full
+        // IndexedDB rewrite for every word. Pause/finish also flush this.
+
       },
+      snapshot.draft.report.id,
+      snapshot.draft.report.speech?.languages || [...DEFAULT_LANGUAGES],
     );
 
     rec.ondataavailable = (event) => {
@@ -392,6 +420,8 @@ export async function startCapture(localOnly: boolean, verify: () => Promise<voi
       emit({ durationMs: finalDuration, state: "review" });
     };
 
+    rec.start(10_000);
+    clock.resume();
     stopLifecycle = observeRecordingLifecycle({
       recorder: rec,
       tracks: captureTracks,
@@ -420,8 +450,6 @@ export async function startCapture(localOnly: boolean, verify: () => Promise<voi
       },
     });
 
-    rec.start(10_000);
-    clock.resume();
     void acquireWakeLock();
     ticker = window.setInterval(() => {
       if (recorder?.state !== "recording") return;
@@ -441,6 +469,10 @@ export async function startCapture(localOnly: boolean, verify: () => Promise<voi
           : errorMessage(e),
     });
   } finally {
+    if (snapshot.state !== "recording") {
+      // A Drive/mic failure can happen while the native picker is still open.
+      void share?.then(stream => stream?.getTracks().forEach(t => t.stop()));
+    }
     busyOperation = false;
     emit({ busy: "" });
   }
@@ -493,7 +525,10 @@ export function finishTranscription(): Promise<string> {
   const pipeline = live;
   if (!pipeline)
     return Promise.resolve(snapshot.draft.report.transcription || "");
+  const reportId = snapshot.draft.report.id;
+  const captureOwner = snapshot.owner;
   transcriptionDone ||= pipeline.finish().then((transcription) => {
+    if (snapshot.owner !== captureOwner || snapshot.draft.report.id !== reportId) return transcription;
     live = null;
     const draft = {
       ...snapshot.draft,
@@ -536,13 +571,26 @@ export async function importAudio(file: File) {
     });
     return;
   }
+  await queue.catch(() => {});
+  chunks = [];
+  pendingChunks.clear();
+  pendingSnapshot = null;
+  chunkSequence = 0;
+  live = null;
+  transcriptionDone = null;
   clock.reset();
   emit({ error: "", durationMs: 0, state: "review" });
   await persist({
     ...snapshot.draft,
     audio: file,
-    report: { ...snapshot.draft.report, durationMs: 0 },
+    // Replacing audio starts a NEW submission identity; never reuse a provider
+    // job from the previous file under the same report ID.
+    report: { ...snapshot.draft.report, id: crypto.randomUUID(), rawAudioUrl: undefined,
+      driveFolderId: undefined, driveReportId: undefined, driveMarkdownId: undefined,
+      driveTranscriptId: undefined, driveSyncedAt: undefined, transcription: "", summary: "", todos: [], takeaways: [], status: "pending", durationMs: 0,
+      speech: { provider: "assemblyai", phase: "pending", languages: snapshot.draft.report.speech?.languages || [...DEFAULT_LANGUAGES], turns: [], speakerNames: {} } },
   });
+  return snapshot.draft.report.id;
 }
 
 export async function discardCapture() {

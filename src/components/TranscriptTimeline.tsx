@@ -59,7 +59,7 @@ export default function TranscriptTimeline({
   const visible = needle
     ? rows.filter((row) => row.text.toLowerCase().includes(needle))
     : rows;
-  const labelled = rows.some((row) => row.source === "system");
+  const labelled = rows.some((row) => row.speaker || row.source === "system");
 
   async function copyAll() {
     try {
@@ -117,7 +117,7 @@ export default function TranscriptTimeline({
         <ol className="timeline">
           {visible.map((row, index) => {
             const previous = visible[index - 1];
-            const sameSpeaker = previous && previous.source === row.source;
+            const sameSpeaker = previous && (previous.speaker || previous.source) === (row.speaker || row.source);
             return (
               <li
                 key={index}
@@ -128,9 +128,9 @@ export default function TranscriptTimeline({
                   {clock(row.at) && <small>{clock(row.at)}</small>}
                 </div>
                 <div className="timeline-body">
-                  {labelled && row.source && !sameSpeaker && (
+                  {labelled && (row.speaker || row.source) && !sameSpeaker && (
                     <span className="timeline-speaker">
-                      {SOURCE_LABELS[row.source]}
+                      {row.speaker || SOURCE_LABELS[row.source!]}
                     </span>
                   )}
                   <p>

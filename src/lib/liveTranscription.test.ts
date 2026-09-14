@@ -172,7 +172,39 @@ describe("live transcription across sources", () => {
     // The second segment's transcribe call must have seen the first
     // segment's *result* as overlap context, which only holds if its push()
     // waited for the first segment's slower silence check to resolve first.
+    expect(transcribe).toHaveBeenCalledTimes(2);
+    expect(await transcribe.mock.calls[0][0].text()).toBe("segment-0");
+    expect(await transcribe.mock.calls[1][0].text()).toBe("segment-1");
     expect(transcribe.mock.calls[1][1]).toBe("A:segment-0");
     expect(transcript).toContain('B (nach "A:segment-0")');
+  });
+
+  it("sends a segment when its silence check fails and keeps processing later segments", async () => {
+    const source = { id: "first" };
+    const transcribe = vi.fn(async (segment: Blob, _previous: string) => segment.text());
+    const hasSignal = vi.fn()
+      .mockRejectedValueOnce(new Error("decode failed"))
+      .mockResolvedValueOnce(true);
+    const live = startLiveTranscription(
+      { mic: source as unknown as MediaStream },
+      () => 0,
+      () => {},
+      transcribe,
+      hasSignal,
+    );
+
+    await live.pause();
+    source.id = "second";
+    await live.resume();
+    const transcript = await live.finish();
+
+    expect(hasSignal).toHaveBeenCalledTimes(2);
+    expect(transcribe).toHaveBeenCalledTimes(2);
+    expect(await transcribe.mock.calls[0][0].text()).toBe("first");
+    expect(await transcribe.mock.calls[1][0].text()).toBe("second");
+    expect(transcribe.mock.calls[1][1]).toBe("first");
+    expect(transcript).toBe("[0:00] first\n\n[0:00] second");
+    expect(live.pendingSegments).toBe(0);
+    expect(live.failedSegments).toBe(0);
   });
 });

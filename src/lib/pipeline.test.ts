@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const account = vi.hoisted(() => ({ currentUser: { uid: "user-1" } }));
+vi.mock("./firebase", () => ({ auth: account }));
+const finalTranscript = vi.hoisted(() => vi.fn());
+vi.mock("./finalTranscription", () => ({ ensureFinalTranscript: finalTranscript }));
 const backupDraft = vi.fn();
 const syncReport = vi.fn();
 const analyzeDraft = vi.fn();
@@ -42,6 +46,8 @@ const run = (analyze = true) =>
 
 describe("processing pipeline", () => {
   beforeEach(() => {
+    account.currentUser = { uid: "user-1" };
+    finalTranscript.mockReset().mockResolvedValue(undefined);
     for (const spy of [
       backupDraft,
       syncReport,
@@ -137,4 +143,20 @@ describe("processing pipeline", () => {
     // Identity must change per update, otherwise subscribers never re-render.
     expect(new Set(snapshots).size).toBe(snapshots.length);
   });
+  it("never summarizes or exports a provisional transcript after finalization fails", async () => {
+    finalTranscript.mockRejectedValueOnce(new Error("Finaler Auftrag unbestätigt"));
+    await run();
+    expect(analyzeDraft).not.toHaveBeenCalled();
+    expect(syncReport).not.toHaveBeenCalled();
+    expect(deleteDraft).not.toHaveBeenCalled();
+    expect(jobFor(report.id)?.stage).toBe("error");
+  });
+  it("does not start cloud work under a changed account", async () => {
+    saveReport.mockImplementationOnce(async () => { account.currentUser = { uid: "user-2" }; return null; });
+    await run();
+    expect(backupDraft).not.toHaveBeenCalled();
+    expect(finalTranscript).not.toHaveBeenCalled();
+    expect(syncReport).not.toHaveBeenCalled();
+  });
+
 });

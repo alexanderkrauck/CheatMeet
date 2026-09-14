@@ -15,11 +15,18 @@ import {
   Upload,
   WandSparkles,
   CloudUpload,
+  Volume2,
+  MonitorUp,
 } from "lucide-react";
 import { AudioPreview } from "../components/UI";
 import LiveMeeting from "../components/LiveMeeting";
 import RecordingSheet from "../components/RecordingSheet";
 import { savedDriveFolder } from "../lib/driveSettings";
+import {
+  audioSourcePreference,
+  setAudioSourcePreference,
+  type AudioSourcePreference,
+} from "../lib/audioSources";
 import "./record.css";
 import { putLocal } from "../lib/local";
 import { uid } from "../lib/reports";
@@ -32,6 +39,7 @@ import {
 } from "../lib/session";
 import { startProcessing } from "../lib/pipeline";
 import { audioExtension } from "../../shared/analysis";
+import MeetingLanguages from "../components/MeetingLanguages";
 import DriveSettings from "../components/DriveSettings";
 import {
   captureQueue,
@@ -45,6 +53,7 @@ import {
   setCaptureBusy,
   setCaptureError,
   setCaptureTitle,
+  setCaptureLanguages,
   startCapture,
   stopCapture,
   subscribeCapture,
@@ -82,13 +91,18 @@ export default function RecordPage() {
   } = snap;
 
   const [loading, setLoading] = useState(true);
-  const [sheet, setSheet] = useState<"settings" | "options" | "leave" | null>(
-    null,
-  );
+  const [sheet, setSheet] = useState<
+    "settings" | "options" | "leave" | "sources" | "share-explainer" | null
+  >(null);
   const [online, setOnline] = useState(navigator.onLine);
   const [folder, setFolder] = useState(savedDriveFolder);
+  const systemAudioAvailable = typeof navigator.mediaDevices?.getDisplayMedia === "function";
+  const [audioSources, setAudioSources] = useState<AudioSourcePreference>(() =>
+    systemAudioAvailable ? audioSourcePreference() : "mic",
+  );
   const [, refreshDriveSession] = useState(0);
   const operation = useRef(false);
+  const pendingLocalOnly = useRef(false);
   const audioInput = useRef<HTMLInputElement>(null);
   const saveButton = useRef<HTMLButtonElement>(null);
   const recording = state === "recording" || state === "paused";
@@ -156,7 +170,26 @@ export default function RecordPage() {
     }
   }
 
-  async function begin(localOnly = false) {
+  // `sources` is always explicit, never read from the component's own state,
+  // because the explainer sheet below sometimes changes that state and starts
+  // a recording in the same click -- reading `audioSources` there would race
+  // against React's async state update and could still request a screen share
+  // the user just declined.
+  async function begin(
+    localOnly: boolean,
+    sources: AudioSourcePreference,
+    sharingExplained = false,
+  ) {
+    // The explainer's confirmation click must reach getDisplayMedia without
+    // an intervening await (native browser activation requirement).
+    if (sharingExplained && sources === "mic+system") {
+      await startCapture(localOnly, async () => {
+        const token = await ensureDriveToken();
+        if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
+        await verifyDriveAccess(token);
+      }, sources);
+      return;
+    }
     try {
       // Signed in should already mean authorized; only prompt if that fails.
       if (!localOnly && navigator.onLine && !(await ensureDriveToken())) {
@@ -168,11 +201,32 @@ export default function RecordPage() {
       setCaptureError(errorMessage(e));
       return;
     }
-    await startCapture(localOnly, async () => {
-      const token = await ensureDriveToken();
-      if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
-      await verifyDriveAccess(token);
-    });
+    // A cached Drive token can expire and then renew without a popup. Decide
+    // after renewal so this path still explains sharing before requesting it.
+    if (sources === "mic+system" && systemAudioAvailable && !sharingExplained) {
+      pendingLocalOnly.current = localOnly;
+      setSheet("share-explainer");
+      return;
+    }
+    await startCapture(
+      localOnly,
+      async () => {
+        const token = await ensureDriveToken();
+        if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
+        await verifyDriveAccess(token);
+      },
+      sources,
+    );
+  }
+
+  function startRecording(localOnly = false) {
+    void begin(localOnly, audioSources);
+  }
+
+  function chooseAudioSources(value: AudioSourcePreference) {
+    setAudioSources(value);
+    setAudioSourcePreference(value);
+    setSheet(null);
   }
 
   async function process(analyze: boolean) {
@@ -311,17 +365,38 @@ export default function RecordPage() {
                       Hintergrund.
                     </p>
                   </div>
-                  <button
-                    className="walk-folder"
-                    onClick={() => setSheet("settings")}
-                  >
-                    <FolderOpen size={18} />
-                    <span>
-                      <small>SPEICHERORT IN GOOGLE DRIVE</small>
-                      <strong>{folder?.name || "CheatMeet Recordings"}</strong>
-                    </span>
-                    <ArrowRight size={17} />
-                  </button>
+                  <div className="walk-settings-row">
+                    <button
+                      className="walk-folder"
+                      onClick={() => setSheet("settings")}
+                    >
+                      <FolderOpen size={18} />
+                      <span>
+                        <small>SPEICHERORT</small>
+                        <strong>{folder?.name || "CheatMeet Recordings"}</strong>
+                      </span>
+                    </button>
+                    <button
+                      className="walk-folder"
+                      aria-haspopup="dialog"
+                      onClick={() => setSheet("sources")}
+                    >
+                      {audioSources === "mic" ? (
+                        <Mic size={18} />
+                      ) : (
+                        <MonitorUp size={18} />
+                      )}
+                      <span>
+                        <small>AUDIOQUELLEN</small>
+                        <strong>
+                          {audioSources === "mic"
+                            ? "Nur Mikrofon"
+                            : "Mikrofon + System"}
+                        </strong>
+                      </span>
+                    </button>
+                  </div>
+                  <MeetingLanguages value={draft.report.speech?.languages} onChange={setCaptureLanguages} />
                 </>
               ) : recording ? (
                 <LiveMeeting
@@ -343,10 +418,11 @@ export default function RecordPage() {
                       Jetzt den Bericht erstellen.
                     </h1>
                     <p>
-                      Audio in Drive sichern und automatisch Zusammenfassungen,
-                      Takeaways und To-Dos erstellen.
+                      Audio sichern, das finale Transkript mit Sprechern erstellen
+                      und daraus Zusammenfassung, Erkenntnisse und Aufgaben ableiten.
                     </p>
                   </div>
+                  {draft.report.speech?.phase !== "final" && <MeetingLanguages value={draft.report.speech?.languages} onChange={setCaptureLanguages} />}
                   <div className="walk-review-media">
                     <div className="walk-review-stats">
                       <span>
@@ -419,7 +495,7 @@ export default function RecordPage() {
                   <button
                     className="walk-primary"
                     disabled={!!busy}
-                    onClick={() => void begin()}
+                    onClick={() => startRecording()}
                   >
                     <Mic size={22} />
                     {online && !driveReady
@@ -429,7 +505,7 @@ export default function RecordPage() {
                   {localStartOffered && (
                     <button
                       className="walk-secondary"
-                      onClick={() => void begin(true)}
+                      onClick={() => startRecording(true)}
                     >
                       Trotzdem lokal aufnehmen · später in Drive sichern
                     </button>
@@ -522,9 +598,9 @@ export default function RecordPage() {
         onChange={(e) => {
           const file = e.target.files?.[0];
           if (file)
-            void importAudio(file).catch((err) =>
-              setCaptureError(errorMessage(err)),
-            );
+            void importAudio(file).then(id => {
+              if (id) navigate(`/record?draft=${id}`, { replace: true });
+            }).catch((err) => setCaptureError(errorMessage(err)));
           e.target.value = "";
         }}
       />
@@ -535,12 +611,89 @@ export default function RecordPage() {
               ? "Speicherort"
               : sheet === "leave"
                 ? "Dein Bericht ist noch nicht gesichert"
-                : "Weitere Optionen"
+                : sheet === "sources"
+                  ? "Audioquellen"
+                  : sheet === "share-explainer"
+                    ? "Gleich fragt der Browser"
+                    : "Weitere Optionen"
           }
           onClose={() => setSheet(null)}
         >
           {sheet === "settings" ? (
             <DriveSettings />
+          ) : sheet === "sources" ? (
+            <div className="walk-sources" role="group" aria-label="Audioquelle auswählen">
+              <button
+                className={`walk-source-option${audioSources === "mic+system" ? " is-selected" : ""}`}
+                aria-pressed={audioSources === "mic+system"}
+                disabled={!systemAudioAvailable}
+                onClick={() => chooseAudioSources("mic+system")}
+              >
+                <MonitorUp size={19} />
+                <span>
+                  <strong>Mikrofon + Systemaudio</strong>
+                  <small>
+                    {systemAudioAvailable
+                      ? "Für Video-Calls: dein Mikrofon und der Ton des geteilten Tabs oder Bildschirms, sofern dein Browser ihn unterstützt."
+                      : "Bildschirmfreigabe ist in diesem Browser nicht verfügbar. Du kannst mit dem Mikrofon aufnehmen."}
+                  </small>
+                </span>
+                {audioSources === "mic+system" && <Check size={18} />}
+              </button>
+              <button
+                className={`walk-source-option${audioSources === "mic" ? " is-selected" : ""}`}
+                aria-pressed={audioSources === "mic"}
+                onClick={() => chooseAudioSources("mic")}
+              >
+                <Mic size={19} />
+                <span>
+                  <strong>Nur Mikrofon</strong>
+                  <small>
+                    Für Gespräche ohne Bildschirmfreigabe. Kein
+                    Freigabe-Dialog beim Start.
+                  </small>
+                </span>
+                {audioSources === "mic" && <Check size={18} />}
+              </button>
+            </div>
+          ) : sheet === "share-explainer" ? (
+            <div className="walk-explainer">
+              <p>
+                Der Browser fragt jetzt, welchen Tab oder Bildschirm du
+                teilst.
+              </p>
+              <ul>
+                <li>
+                  Wähle den Tab oder Bildschirm, dessen Ton mit aufgenommen
+                  werden soll.
+                </li>
+                <li className="walk-explainer-critical">
+                  <Volume2 size={15} />
+                  <span>
+                    <strong>Aktiviere „Audio teilen“, wenn angeboten.</strong>{" "}
+                    Ohne freigegebenen Ton nimmt CheatMeet nur dein Mikrofon auf.
+                  </span>
+                </li>
+              </ul>
+              <button
+                className="walk-primary"
+                onClick={() => {
+                  setSheet(null);
+                  void begin(pendingLocalOnly.current, "mic+system", true);
+                }}
+              >
+                Verstanden, weiter
+              </button>
+              <button
+                className="walk-secondary"
+                onClick={() => {
+                  chooseAudioSources("mic");
+                  void begin(pendingLocalOnly.current, "mic");
+                }}
+              >
+                Doch nur Mikrofon verwenden
+              </button>
+            </div>
           ) : sheet === "leave" ? (
             <div className="walk-leave">
               <p>

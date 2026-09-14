@@ -62,6 +62,7 @@ export interface TranscriptLine {
   at: string;
   source: TranscriptSource | null;
   text: string;
+  speaker?: string;
 }
 
 /** Parses the stored transcript back into displayable lines. */
@@ -78,7 +79,7 @@ export function parseTranscript(transcript: string): TranscriptLine[] {
           : label === SOURCE_LABELS.system
             ? ("system" as const)
             : null;
-      return { at: match[1], source, text: line.slice(match[0].length) };
+      return { at: match[1], source, text: line.slice(match[0].length), ...(label && !source ? { speaker: label } : {}) };
     })
     .filter((line) => line.text.trim());
 }

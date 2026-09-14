@@ -3,6 +3,8 @@ import { saveReport } from "./reports";
 import { deleteDraft, putLocal } from "./local";
 import { errorMessage } from "./session";
 import type { Draft } from "../types";
+import { ensureFinalTranscript } from "./finalTranscription";
+import { auth } from "./firebase";
 
 export type JobStage =
   | "saving"
@@ -75,11 +77,16 @@ export function startProcessing({
   const update = (stage: JobStage, message: string, extra: Partial<JobState> = {}) =>
     publish({ reportId, owner, stage, message, ...extra });
 
+  const assertOwner = () => {
+    if (auth.currentUser?.uid !== owner) throw new Error("Das angemeldete Konto hat sich geändert.");
+  };
   const run = async () => {
     let warning = "";
     try {
+      assertOwner();
       update("saving", "Bericht wird gesichert …");
       const saveWarning = await saveReport(current.report);
+      assertOwner();
       if (saveWarning) warning = saveWarning;
 
       update("uploading", "Aufnahme wird in Google Drive gesichert …", {
@@ -88,12 +95,19 @@ export function startProcessing({
       await backupDraft(current, token, (message) =>
         update("uploading", message, { warning }),
       );
+      assertOwner();
       await putLocal(owner, current.report);
+      assertOwner();
+
+      update("analyzing", "Finales Transkript und Sprecher werden erstellt …", { warning });
+      await ensureFinalTranscript(current, token);
+      assertOwner();
 
       if (analyze) {
         update("analyzing", "Bericht wird erstellt …", { warning });
         try {
           current = { ...current, report: await analyzeDraft(current) };
+          assertOwner();
           await putLocal(owner, current.report);
         } catch (error) {
           // Keep the failure on the report so it can be retried from its page.
@@ -106,8 +120,8 @@ export function startProcessing({
             },
           };
           await putLocal(owner, current.report);
-          await saveReport(current.report).catch(() => {});
-          await syncReport(current.report, token).catch(() => {});
+          if (auth.currentUser?.uid === owner) await saveReport(current.report).catch(() => {});
+          if (auth.currentUser?.uid === owner) await syncReport(current.report, token).catch(() => {});
           throw error;
         }
       }
@@ -115,12 +129,18 @@ export function startProcessing({
       update("exporting", "Bericht wird nach Google Drive exportiert …", {
         warning,
       });
+      assertOwner();
       const result = await syncReport(current.report, token);
+      assertOwner();
       await deleteDraft(owner, result.report.id);
       update("done", "Fertig.", {
         warning: result.warning || warning || undefined,
       });
     } catch (error) {
+      current.report = { ...current.report, status: "error", error: errorMessage(error) };
+      // The final pass may fail before the summary block. Keep its recovery
+      // state on the report as well as the transient job notification.
+      await putLocal(owner, current.report).catch(() => {});
       update("error", "Fehlgeschlagen.", {
         error: errorMessage(error),
         warning: warning || undefined,

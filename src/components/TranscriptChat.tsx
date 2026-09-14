@@ -34,19 +34,19 @@ export default function TranscriptChat({
   };
   const rows = parseTranscript(transcript);
   if (!rows.length) return <p className="live-empty">{empty}</p>;
-  const labelled = rows.some((row) => row.source === "system");
+  const labelled = rows.some((row) => row.speaker || row.source === "system");
   return (
     <div className="chat">
       {rows.map((row, index) => {
         // Only label a change of speaker, so a run of turns reads as one voice.
-        const continued = index > 0 && rows[index - 1].source === row.source;
+        const continued = index > 0 && (rows[index - 1].speaker || rows[index - 1].source) === (row.speaker || row.source);
         return (
           <div
             className={`chat-turn is-${labelled ? row.source || "unknown" : "single"}${continued ? " is-continued" : ""}`}
             key={index}
           >
-            {labelled && row.source && !continued && (
-              <span className="chat-meta">{SOURCE_LABELS[row.source]}</span>
+            {labelled && (row.speaker || row.source) && !continued && (
+              <span className="chat-meta">{row.speaker || SOURCE_LABELS[row.source!]}</span>
             )}
             <p className="chat-bubble">
               <span>{row.text}</span>

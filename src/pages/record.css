@@ -161,6 +161,122 @@
   white-space: nowrap;
   font-weight: 600;
 }
+.walk-settings-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  align-items: stretch;
+}
+.walk-settings-row > .walk-folder {
+  flex: 1;
+  min-width: 0;
+  align-items: flex-start;
+}
+/* Two pills side by side leaves too little width to truncate a value down
+   to, e.g. "CheatMeet Recordings" collapsing to "CheatM…". Wrapping to a
+   second line reads better than an ellipsis here. */
+.walk-settings-row > .walk-folder strong {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  line-height: 1.3;
+}
+.walk-settings-row > .walk-folder svg {
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+.walk-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.walk-source-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #d5dae2;
+  border-radius: 10px;
+  background: #f7f9fc;
+  padding: 13px 15px;
+  text-align: left;
+  color: #4b5563;
+}
+.walk-source-option.is-selected {
+  border-color: #2563eb;
+  background: #e0f2fe;
+  color: #1e40af;
+}
+.walk-source-option:disabled {
+  cursor: not-allowed;
+  background: #f1f3f6;
+}
+.walk-source-option > svg {
+  flex-shrink: 0;
+}
+.walk-source-option:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
+}
+.walk-source-option > span {
+  flex: 1;
+  min-width: 0;
+}
+.walk-source-option strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+.walk-source-option small {
+  display: block;
+  font-size: 11px;
+  color: #737b88;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+.walk-source-option.is-selected small {
+  color: #3d5f92;
+}
+.walk-explainer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.walk-explainer > p {
+  font-size: 13px;
+  color: #4b5563;
+}
+.walk-explainer ul {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+}
+.walk-explainer li {
+  font-size: 12.5px;
+  color: #4b5563;
+  line-height: 1.5;
+  background: #f7f9fc;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+/* Only this item mixes an icon with running text, so only it needs a flex
+   row -- mixing an icon and bare inline text as flex siblings elsewhere
+   turns each text run into its own item and breaks normal wrapping. */
+.walk-explainer-critical {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+.walk-explainer-critical svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: #2563eb;
+}
+.walk-explainer-critical strong {
+  color: #1e40af;
+}
 .walk-dock {
   flex-shrink: 0;
   padding: 14px 26px 12px;

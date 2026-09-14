@@ -30,7 +30,7 @@ python3 -m unittest discover -s tests -p 'test_deploy_config.py'
 
 ## Architecture
 
-Single Express process serves both the API and the SPA (`server.ts`): in dev it mounts Vite middleware, in production it serves `dist/` and 404s any `*.cjs` request so the server bundle sharing `dist/` is never publicly readable. `/api/health` reports whether `GEMINI_API_KEY` is set; the deploy smoke test asserts on it.
+Single Express process serves both the API and the SPA (`server.ts`): in dev it mounts Vite middleware, in production it serves `dist/` and 404s any `*.cjs` request so the server bundle sharing `dist/` is never publicly readable. `/api/health` reports whether `GEMINI_API_KEY` is set; the deploy smoke test asserts on it and on `transcriptionConfigured` (`ASSEMBLYAI_API_KEY`).
 
 **Three independent storage backends, each able to fail alone.** This is the central design constraint:
 
@@ -46,17 +46,32 @@ A local write succeeding must never be presented as a cloud save succeeding. `sa
 
 **Account-change safety.** `src/lib/workflow.ts` wraps every multi-step cloud operation in `ownedOperation()`, which re-asserts `auth.currentUser.uid` before *and* after each await so a sign-out mid-upload aborts instead of writing into the wrong account. `backupDraft` and `syncReport` checkpoint returned Drive file IDs into IndexedDB after every upload, making retries resumable rather than duplicating files.
 
-**Live transcription** is the app's core loop and has three separable parts:
+**AssemblyAI is the default for new recordings and imports.** See
+`ASSEMBLYAI_IMPLEMENTATION.md` for the full flow and rollout requirements.
+`src/lib/assemblyLive.ts` opens one Pro streaming connection per actual capture
+source; `pcmWorklet.js` emits 16 kHz PCM frames. Partial turns replace by ID;
+`assemblyEvents.ts` groups by word-level speakers and applies speaker revisions.
+Dropped/paused audio is not replayed. The durable recording remains independent.
 
-- `src/lib/segmentCapture.ts` runs *additional* MediaRecorders alongside the main one, producing 60 s segments that advance 50 s (a 10 s overlap). A single recorder cannot be sliced after the fact — only its first chunk carries the container header — so each segment needs its own recorder, and two overlap briefly. **Boundaries are decided by `tick()` against the recording clock, never by timers:** a hidden tab has `setTimeout` clamped to 1 s and, after five minutes, to once a minute. `RecordPage` drives `tick()` from the main recorder's `ondataavailable`, which is media-pipeline driven and keeps firing while backgrounded.
-- `src/lib/transcriptAssembler.ts` applies segments strictly in order — each one needs the transcript so far as its overlap context — and survives a failed segment by counting it and moving on.
-- `POST /api/transcribe-segment` transcribes the segment, then makes a second cheap call that returns **only the continuation**, stripping the duplicated overlap and cleaning obvious errors. Returning a continuation rather than a rewritten full transcript keeps per-call cost flat as the meeting grows.
+`server/transcription.ts` issues short-lived streaming tokens and manages one
+final Pro batch job per owner/meeting. In production, `transcriptionStore.ts`
+uses atomic Firestore reservations in the server-only `transcriptionJobs`
+collection; local development uses private `.transcription-jobs/` files. Never
+replace these with an in-memory production store or delete reservations to retry
+an uncertain submission: this guards the two-transcription limit across restarts.
 
-`POST /api/analyze` summarises the assembled transcript and **does not re-upload the audio**; audio is only sent when there is no transcript at all (an imported file). A supplied transcript always wins over whatever the summarising model echoes back. The full raw audio still goes to Drive regardless.
+After Drive backup, the server streams the saved audio from Drive to AssemblyAI
+without passing the Drive credential to the provider. Browser requests carry a
+small reference, avoiding Cloud Run's HTTP/1 upload cap. `finalTranscription.ts`
+polls the same job and checkpoints final structured turns plus plain text before
+analysis. Only final text goes to Gemini for new recordings; empty final text is
+silence, not an audio fallback. Report speaker edits do not trigger ASR again.
 
-Both routes verify the Firebase ID token via `jose` against Google's JWKS (no Admin SDK) and delete the remote Gemini file and the multer temp file in `finally` on every path — including rejected uploads and media that never becomes `ACTIVE`. `/analyze` holds a per-user concurrency slot; segment transcription deliberately does not, since the client already serializes it.
-
-`shared/analysis.ts` is imported by both the browser and the server — keep it dependency-free and isomorphic.
+The old `liveTranscription.ts`/`segmentCapture.ts`/`transcriptAssembler.ts` and
+`/api/transcribe-segment` remain for compatibility/tests. They are not the default
+recording path. Existing reports retain their saved transcript. Analysis routes
+still authenticate Firebase identity and clean up Gemini files in `finally`.
+The shared transcription types/helpers remain dependency-free and isomorphic.
 
 **Save/analyse/export runs in `src/lib/pipeline.ts`, not in a component.** It is a module-level job store, so navigating away no longer cancels the work; `JobProgress` renders running jobs from any screen and guards `beforeunload`. Recording hands off to it and navigates straight to the report. The job still belongs to the tab — closing it abandons the upload.
 

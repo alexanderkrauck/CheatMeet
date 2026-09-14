@@ -24,6 +24,8 @@ import { getDraft, getLocal, putDraft } from "../lib/local";
 import { clearJob, jobFor, subscribeJobs } from "../lib/pipeline";
 import { reportToMarkdown } from "../lib/markdown";
 import TranscriptTimeline from "../components/TranscriptTimeline";
+import SpeakerEditor from "../components/SpeakerEditor";
+import { renderTranscript } from "../../shared/transcription";
 
 export default function ReportPage({
   report: initialReport,
@@ -165,7 +167,10 @@ export default function ReportPage({
     try {
       const t = (await ensureDriveToken()) || (await connectGoogle());
       const local = await getDraft(owner, report.id);
-      const d = local?.report.id === report.id && local.audio ? { ...local, report } : await restoreDraft(report, t);
+      const canUseSavedTranscript = report.speech?.phase === "final" || (!report.speech && !!report.transcription.trim());
+      const canUseDriveStream = !!report.speech && !!report.rawAudioUrl;
+      const d = local?.report.id === report.id && local.audio ? { ...local, report }
+        : canUseSavedTranscript || canUseDriveStream ? { report } : await restoreDraft(report, t);
       if (local?.report.id === report.id) await backupDraft(d, t, setBusy);
       setBusy("Analysiere...");
       const next = await analyzeDraft(d);
@@ -308,7 +313,10 @@ export default function ReportPage({
 
         <section className="report-transcript">
           <h2>Transkript</h2>
-          {edited ? (
+          {view.speech && view.speech.phase !== "final" && <p className="muted" role="status">Vorläufiges Live-Transkript. Das finale Transkript wird beim Erstellen des Berichts übernommen.</p>}
+          {edited && view.speech?.phase === "final" ? (
+            <SpeakerEditor speech={view.speech} onChange={speech => setEdited({ ...view, speech, transcription: renderTranscript(speech), status: "pending", error: "Transkript korrigiert. Bericht aus dem finalen Text erneut erstellen." })} />
+          ) : edited ? (
             <textarea className="field" value={view.transcription} onChange={e => setEdited({ ...view, transcription: e.target.value })} />
           ) : (
             <TranscriptTimeline

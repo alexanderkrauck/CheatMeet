@@ -3,6 +3,75 @@
 Maintained from real recordings. Each item says what was observed and where, so
 it can be picked up without re-deriving the context.
 
+## Current follow-up — 2026-09-14 transcription feedback
+
+The current implementation and rollout checkpoint are in
+[ASSEMBLYAI_IMPLEMENTATION.md](ASSEMBLYAI_IMPLEMENTATION.md). AssemblyAI is the
+approved default, with live streaming and one final batch pass. The
+[paid evaluation](STREAMING_RESULTS.md) informed this choice; production rollout
+is still pending. [STREAMING_PROPOSAL.md](STREAMING_PROPOSAL.md) preserves the
+earlier research and tradeoffs.
+
+- [x] Run the approved StackFuel/synthetic streaming evaluation: approximately
+      USD 0.078 estimated total; raw events preserved locally. No long unrelated
+      passages in the selected real intervals; no output for synthetic non-speech.
+- [x] Decide expected-language defaults: German + English, editable per meeting.
+- [x] Implement the approved per-meeting language selector.
+- [x] Evaluate guidance on unused real audio and synthetic bilingual speech.
+      Cumulative estimated spend USD 0.117. Pro preserved content/speakers better
+      than the cheaper streaming model, but added words in the controlled sample.
+- [x] Evaluate streaming + one independent final batch pass on fresh synthetic
+      audio. Final batch removed added phrases but introduced one name error;
+      live merged two speakers and batch split one speaker. Cumulative estimated
+      spend USD 0.135 of USD 5. Exact evidence in STREAMING_RESULTS.md.
+- [x] Review whether more generic synthetic testing is useful: stop here.
+      It does not train the provider; the short-turn fixture is a stress case.
+      Further tests must resolve a concrete implementation/configuration decision.
+- [x] User decision: AssemblyAI should be the default, with no opt-in switch.
+- [x] Implement separate live streams, one final batch pass, final-text-only
+      summaries, per-meeting languages and editable/mergeable final speakers.
+      See ASSEMBLYAI_IMPLEMENTATION.md for behavior and verification: 216 tests,
+      typecheck, build, PWA/deploy checks and synthetic browser checks pass.
+- [x] Persist final-job reservations across concurrent requests and restarts;
+      reconnect live sessions using future audio only, without replay.
+- [x] Avoid Cloud Run's browser upload limit by streaming the saved Drive audio
+      through the server to AssemblyAI for final transcription.
+- [ ] Configure the server secret, verify runtime job-store permissions and
+      provider retention, and run a scoped native/real-provider smoke test.
+      Deployment is not authorized yet.
+- [ ] Validate three or more recurring speakers, overlap and cross-source echo.
+      Do not replay the existing synthetic sample; its two submissions are spent.
+
+See [TRANSCRIPTION_QUALITY.md](TRANSCRIPTION_QUALITY.md) for evidence, open
+questions, and acceptance criteria from the StackFuel recording and the other
+ChatGPT conversation. Capture UX was completed first, followed by the default
+AssemblyAI implementation. Older diarization proposals below are historical;
+the implementation document describes the current behavior.
+
+- [x] Verify the asynchronous gate ordering test fails with concurrent checks,
+      even when `finish()` waits for both checks. Restored the ordered chain.
+- [x] Add regression coverage: a rejected silence check sends that segment and
+      does not prevent later segments from being transcribed, including across
+      pause/resume. Full suite: 186 tests; typecheck, build, 5 PWA tests and
+      9 deployment-config tests passed locally on 2026-09-14.
+- [ ] Trace the unrelated StackFuel passages back to the corresponding audio
+      intervals and identify the deployed build used for that recording.
+- [ ] Check silence gating against brief, quiet speech within long segments;
+      whole-segment RMS can dilute speech below the current threshold.
+- [ ] Preserve source/build/model metadata and diagnostic evidence sufficient
+      to distinguish captured audio from transcription and stitching errors.
+- [ ] Compare the existing raw AssemblyAI result with CheatMeet and manually
+      checked audio intervals; decide on a broader benchmark before integration.
+- [x] Finish the audio-source selector and pre-sharing explanation. Unit coverage
+      includes cancelled sharing and unsupported/missing audio; browser checks
+      use synthetic streams and verify choice persistence, request order, the
+      mic-only alternative, keyboard behavior and desktop/mobile layout.
+- [ ] Smoke-test native sharing with real devices on target browsers; automated
+      UI checks substitute media devices and do not validate the OS picker.
+- [ ] Decide whether durable recordings should preserve separate sources or
+      remain a mix for later diarization; see the tradeoffs in the linked plan.
+
+
 ## Verified in production
 
 From the 2026-09-11 runs (`be064b14`, 5:25, and `c02db430`, 2:54):
@@ -185,25 +254,24 @@ signature of an ASR model fed near-silence.
 
 ### 11. Choose the audio sources before recording starts
 
-Today `startCapture` always calls `getDisplayMedia`. There is no way to say "microphone only", so a user who wants a plain voice recording is pushed
-through a screen-share prompt anyway — and, as §10 shows, accepting it with
-nothing playing actively corrupts the report.
+Previously `startCapture` always requested screen sharing when available.
+Microphone-only now skips that request, and the last choice is remembered locally.
 
-- [ ] Offer the choice up front: microphone only, or microphone plus system
+- [x] Offer the choice up front: microphone only, or microphone plus system
       audio. Remember the last choice.
-- [ ] Microphone-only must skip `getDisplayMedia` entirely rather than calling
+- [x] Microphone-only must skip `getDisplayMedia` entirely rather than calling
       it and discarding the result.
 
 ### 12. Explain the screen-share prompt before it appears
 
-The only explanation today is a busy message set while the browser's own dialog
-is already open — the user cannot read it before deciding, and it competes with
-a native modal for attention.
+Previously the explanation appeared as a busy message during the native dialog.
+A dismissible sheet now explains sharing before capture starts, with a direct
+microphone-only alternative.
 
-- [ ] Show the explainer *before* calling `getDisplayMedia`: what the browser is
+- [x] Show the explainer *before* calling `getDisplayMedia`: what the browser is
       about to ask, that the tab or screen must be picked, and above all that
-      **"Audio teilen" has to be ticked** or no system audio is captured.
-- [ ] Keep the existing post-hoc warning for a share that arrives without an
+      **"Audio teilen" must be enabled when offered** to include system audio.
+- [x] Keep the existing post-hoc warning for a share that arrives without an
       audio track, but make it say what to do differently next time.
 
 ---

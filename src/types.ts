@@ -1,3 +1,4 @@
+import type { MeetingTranscript } from "../shared/transcription";
 export interface ReportData {
   id: string;
   date: string;
@@ -8,12 +9,14 @@ export interface ReportData {
   suggestedTitle?: string;
   summary: string;
   transcription: string;
+  speech?: MeetingTranscript;
   todos: string[];
   takeaways: string[];
   status?: "pending" | "analyzing" | "completed" | "error";
   error?: string;
   durationMs?: number;
   captureState?: "recording" | "paused" | "stopped";
+  captureSources?: ("mic" | "system")[];
   rawAudioUrl?: string; // Legacy name: a private Drive file ID, not a URL
   driveFolderId?: string;
   driveReportId?: string;
