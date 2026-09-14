@@ -119,7 +119,7 @@ export function createTranscriptionRouter(
         if (recent && Date.now() - recent.at < 60000 && recent.count >= 12)
           throw new ApiError(
             429,
-            "Zu viele Verbindungsversuche. Aufnahme läuft weiter; finales Transkript folgt beim Abschluss.",
+            "Zu viele Verbindungsversuche. Die Aufnahme läuft weiter; das Live-Transkript kann Lücken enthalten.",
           );
         if (!recent || Date.now() - recent.at >= 60000)
           bursts.set(uid, { at: Date.now(), count: 1 });
@@ -153,7 +153,7 @@ export function createTranscriptionRouter(
       }
     },
   );
-  router.get("/transcription/final/:id", async (req, res) => {
+  router.get(["/transcription/import/:id", "/transcription/final/:id"], async (req, res) => {
     try {
       const uid = await owner(req);
       const job = await store.get(
@@ -180,7 +180,7 @@ export function createTranscriptionRouter(
       if (data.status === "error")
         throw new ApiError(
           422,
-          "Der finale Transkriptionsauftrag ist fehlgeschlagen. Die Originalaufnahme bleibt erhalten; kein automatischer weiterer Durchlauf.",
+          "Der Transkriptionsauftrag ist fehlgeschlagen. Die Originalaufnahme bleibt erhalten; kein automatischer weiterer Durchlauf.",
         );
       if (data.status !== "completed") {
         res.json({ state: "processing" });
@@ -216,8 +216,12 @@ export function createTranscriptionRouter(
       files: 1,
     },
   }).single("audio");
+  // Old clients must not silently request a second transcription after rollout.
+  router.post("/transcription/final/:id", (_req, res) => {
+    res.status(410).json({ error: "Aufnahmen verwenden jetzt das Live-Transkript. Bitte die App neu laden; es wurde keine neue Transkription gestartet." });
+  });
   router.post(
-    "/transcription/final/:id",
+    "/transcription/import/:id",
     express.json({ limit: "8kb" }),
     async (req, res) => {
       let stream: Readable | undefined;

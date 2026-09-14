@@ -3,6 +3,25 @@
 Maintained from real recordings. Each item says what was observed and where, so
 it can be picked up without re-deriving the context.
 
+## Current decision — live transcript only (2026-09-14)
+
+This supersedes all earlier final-batch and automatic matching plans below.
+
+- [x] Use recorded meetings' live transcript directly for saving and summaries.
+- [x] Preserve maintained names and mic/system identities; ignore the provider's
+      global closing relabeling and retain visible unconfirmed trailing text.
+- [x] Remove mandatory completion review and promises of a later transcription.
+- [x] Never retranscribe a recording automatically, including empty/failed live
+      capture. Keep its original audio and show the limitation explicitly.
+- [x] Retain one initial batch transcription for imported files only; reject the
+      retired second-pass POST endpoint so old clients cannot start another job.
+- [ ] User deploys in AI Studio, reloads, and checks a fresh recording.
+
+## Historical decisions and completed work
+
+The following items describe earlier iterations. Their final-batch/reconciliation
+plans are no longer the current product behavior.
+
 ## Final speaker continuity — 2026-09-14 late afternoon
 
 - [x] Automatically carry maintained live names and source metadata into final

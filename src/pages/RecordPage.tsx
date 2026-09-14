@@ -419,11 +419,12 @@ export default function RecordPage() {
                       Jetzt den Bericht erstellen.
                     </h1>
                     <p>
-                      Audio sichern, das finale Transkript mit Sprechern erstellen
-                      und die Sprecher prüfen. Danach entsteht die Zusammenfassung.
+                      {draft.report.transcriptionOrigin === "import"
+                        ? "Audio sichern, einmal transkribieren und zusammenfassen."
+                        : "Audio sichern und das Live-Transkript zusammenfassen. Deine Namen und Audioquellen bleiben erhalten."}
                     </p>
                   </div>
-                  {draft.report.speech?.phase !== "final" && <MeetingLanguages value={draft.report.speech?.languages} onChange={setCaptureLanguages} />}
+                  {draft.report.transcriptionOrigin === "import" && draft.report.speech?.phase !== "final" && <MeetingLanguages value={draft.report.speech?.languages} onChange={setCaptureLanguages} />}
                   <div className="walk-review-media">
                     <div className="walk-review-stats">
                       <span>
@@ -436,9 +437,8 @@ export default function RecordPage() {
                     )}
                     {failed > 0 && (
                       <p className="walk-gap">
-                        Das vorläufige Live-Transkript kann Lücken enthalten.
-                        Beim nächsten Schritt wird das finale Transkript aus
-                        der gespeicherten Aufnahme erstellt.
+                        Das Live-Transkript kann Lücken enthalten. Es wird ohne
+                        erneute Transkription verwendet. Die Originalaufnahme wird gesichert.
                       </p>
                     )}
                   </div>
@@ -485,7 +485,7 @@ export default function RecordPage() {
                     <button className="walk-finish" onClick={stopCapture}>
                       <span>
                         <strong>Meeting abschließen</strong>
-                        <small>Weiter zum Sichern &amp; Sprecherprüfen</small>
+                        <small>Weiter zum Sichern &amp; Zusammenfassen</small>
                       </span>
                       <ArrowRight size={22} />
                     </button>
@@ -540,7 +540,7 @@ export default function RecordPage() {
                     onClick={() => process(true)}
                   >
                     <WandSparkles size={21} />
-                    Sichern &amp; Sprecher prüfen
+                    Sichern &amp; Zusammenfassen
                     <ArrowRight size={18} />
                   </button>
                   <p className="walk-save-hint">
@@ -548,7 +548,7 @@ export default function RecordPage() {
                       ? "Sobald du online bist, kannst du hier fortfahren."
                       : !driveReady
                         ? "Drive-Freigabe fehlt oder ist abgelaufen. Dein Entwurf bleibt lokal gesichert."
-                        : "Audio sichern → Sprecher prüfen → Zusammenfassung"}
+                        : "Audio sichern → Zusammenfassung"}
                   </p>
                 </>
               )}

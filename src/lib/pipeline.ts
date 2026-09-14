@@ -3,7 +3,7 @@ import { saveReport } from "./reports";
 import { deleteDraft, putLocal } from "./local";
 import { errorMessage } from "./session";
 import type { Draft } from "../types";
-import { ensureFinalTranscript } from "./finalTranscription";
+import { prepareTranscript } from "./prepareTranscript";
 import { auth } from "./firebase";
 import { needsSpeakerReview } from "../../shared/transcription";
 
@@ -101,8 +101,8 @@ export function startProcessing({
       await putLocal(owner, current.report);
       assertOwner();
 
-      update("analyzing", "Finales Transkript und Sprecher werden erstellt …", { warning });
-      await ensureFinalTranscript(current, token);
+      update("analyzing", "Transkript wird für die Zusammenfassung vorbereitet …", { warning });
+      await prepareTranscript(current, token);
       assertOwner();
       if (needsSpeakerReview(current.report.speech)) {
         current.report = { ...current.report, status: "pending", error: "" };
@@ -149,7 +149,7 @@ export function startProcessing({
       });
     } catch (error) {
       current.report = { ...current.report, status: "error", error: errorMessage(error) };
-      // The final pass may fail before the summary block. Keep its recovery
+      // Preparing an imported transcript may fail before the summary block. Keep its recovery
       // state on the report as well as the transient job notification.
       await putLocal(owner, current.report).catch(() => {});
       update("error", "Fehlgeschlagen.", {

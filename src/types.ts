@@ -16,6 +16,7 @@ export interface ReportData {
   error?: string;
   durationMs?: number;
   captureState?: "recording" | "paused" | "stopped";
+  transcriptionOrigin?: "live" | "import";
   captureSources?: ("mic" | "system")[];
   rawAudioUrl?: string; // Legacy name: a private Drive file ID, not a URL
   driveFolderId?: string;
@@ -27,7 +28,7 @@ export interface ReportData {
 
 export interface Draft {
   report: ReportData;
-  /** Local matching evidence frozen before late provider speaker revisions. */
+  /** Legacy live snapshot from versions that performed a second transcription. */
   speakerReference?: MeetingTranscript;
   audio?: Blob;
 }

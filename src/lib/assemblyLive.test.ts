@@ -88,7 +88,7 @@ const begin = async () => {
       configuration: { model: "universal-3-5-pro", mode: "max_accuracy" },
     });
 };
-it("sends a frame once, waits for late speaker corrections, and excludes unfinished text", async () => {
+it("sends a frame once, retains visible text, and ignores global closing speaker revisions", async () => {
   const changed = vi.fn();
   live = startAssemblyLive(
     { mic: {} as MediaStream },
@@ -133,8 +133,9 @@ it("sends a frame once, waits for late speaker corrections, and excludes unfinis
     ],
   });
   sockets[0].message({ type: "Termination" });
-  expect(await finish).not.toContain("Unfertig");
-  expect(changed.mock.calls.at(-1)?.[0].turns[0].speaker).toBe("mic:0:B");
+  expect(await finish).toContain("Unfertig");
+  expect(changed.mock.calls.at(-1)?.[0].turns[0].speaker).toBe("mic:0:A");
+  expect(changed.mock.calls.at(-1)?.[0].liveWarning).toContain("unbestätigte");
   expect(sockets[0].sent.filter((v) => typeof v !== "string")).toHaveLength(1);
 });
 it("drops stale frames without a catch-up burst and exposes the live gap", async () => {

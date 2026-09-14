@@ -8,15 +8,31 @@ import {
 import { withWebmDuration } from "./webmDuration";
 import type { Draft } from "../types";
 import { ensureDriveToken } from "./session";
-import { reconcileSpeakers } from "./speakerMatches";
 
 const active = new Map<string, Promise<void>>();
-/** Final result is checkpointed before summary generation. Retry only polls the
- * same server-owned job; uncertain POSTs never trigger a second final pass. */
-export function ensureFinalTranscript(
+/** Captured meetings keep their live text. Only imported audio needs batch ASR.
+ * The ready transcript is checkpointed before summary generation. */
+export function prepareTranscript(
   draft: Draft,
   driveToken?: string,
 ): Promise<void> {
+  if (
+    !draft.report.speech &&
+    (draft.report.transcriptionOrigin === "live" ||
+      draft.report.captureState ||
+      draft.report.captureSources?.length)
+  ) {
+    draft.report = {
+      ...draft.report,
+      speech: {
+        provider: "assemblyai",
+        phase: "pending",
+        languages: [],
+        turns: [],
+        speakerNames: {},
+      },
+    };
+  }
   if (!draft.report.speech || draft.report.speech.phase === "final")
     return Promise.resolve();
   const owner = auth.currentUser?.uid;
@@ -35,15 +51,49 @@ export function ensureFinalTranscript(
       const stored = await getDraft(owner, draft.report.id);
       assertOwner();
       if (stored?.report.speech?.phase !== "final")
-        throw new Error("Finales Transkript fehlt.");
+        throw new Error("Transkript fehlt.");
       draft.report = {
         ...draft.report,
         speech: stored.report.speech,
+        transcriptionOrigin: stored.report.transcriptionOrigin,
         transcription: stored.report.transcription,
       };
     });
   const run = async () => {
-    const url = `/api/transcription/final/${encodeURIComponent(draft.report.id)}`;
+    const report = draft.report;
+    const recorded =
+      report.transcriptionOrigin === "live" ||
+      (report.transcriptionOrigin !== "import" &&
+        (!!report.captureState ||
+          !!report.captureSources?.length ||
+          !!draft.speakerReference ||
+          report.speech?.turns.some(
+            (t) =>
+              /^(mic|system):/.test(t.speaker) || /^(mic|system):/.test(t.id),
+          ) ||
+          !!report.transcription.trim()));
+    if (recorded) {
+      const speech = {
+        ...(draft.speakerReference || report.speech!),
+        phase: "final" as const,
+        speakerReview: "skipped" as const,
+      };
+      draft.report = {
+        ...report,
+        transcriptionOrigin: "live",
+        speech,
+        transcription: speech.turns.length
+          ? renderTranscript(speech)
+          : report.transcription,
+      };
+      assertOwner();
+      await putDraft(owner, draft);
+      assertOwner();
+      await putLocal(owner, draft.report);
+      assertOwner();
+      return;
+    }
+    const url = `/api/transcription/import/${encodeURIComponent(draft.report.id)}`;
     const request = async (init: RequestInit = {}) => {
       assertOwner();
       const token = await auth.currentUser!.getIdToken();
@@ -57,7 +107,7 @@ export function ensureFinalTranscript(
       const data = await response.json();
       assertOwner();
       if (!response.ok && response.status !== 404)
-        throw new Error(data.error || "Finale Transkription fehlgeschlagen.");
+        throw new Error(data.error || "Transkription fehlgeschlagen.");
       return { response, data };
     };
     let { response, data } = await request();
@@ -78,7 +128,7 @@ export function ensureFinalTranscript(
       } else {
         if (!draft.audio)
           throw new Error(
-            "Für das finale Transkript fehlt die Originalaufnahme.",
+            "Für die Transkription fehlt die importierte Audiodatei.",
           );
         if (draft.audio.size > 30 * 1024 * 1024)
           throw new Error("Diese Aufnahme bitte zuerst in Drive sichern.");
@@ -100,7 +150,7 @@ export function ensureFinalTranscript(
     while (data.state !== "completed") {
       if (Date.now() >= deadline)
         throw new Error(
-          "Das finale Transkript braucht länger. Später erneut öffnen; der bestehende Auftrag wird weiter abgefragt.",
+          "Die Transkription braucht länger. Später erneut öffnen; der bestehende Auftrag wird weiter abgefragt.",
         );
       await new Promise((resolve) => setTimeout(resolve, 3000));
       ({ data } = await request());
@@ -112,11 +162,12 @@ export function ensureFinalTranscript(
       !Array.isArray(speech.turns) ||
       speech.turns.some((t) => !t.final || typeof t.text !== "string")
     )
-      throw new Error("Kein finales Transkript erhalten.");
-    speech = reconcileSpeakers(draft.speakerReference || draft.report.speech!, speech);
+      throw new Error("Kein Transkript erhalten.");
+    speech = { ...speech, speakerReview: "skipped" };
     draft.report = {
       ...draft.report,
       speech,
+      transcriptionOrigin: "import",
       transcription: renderTranscript(speech),
     };
     assertOwner();

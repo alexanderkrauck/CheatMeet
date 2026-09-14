@@ -345,7 +345,7 @@ export async function startCapture(
     clock.reset();
     await persist({
       ...snapshot.draft,
-      report: { ...snapshot.draft.report, date: new Date().toISOString(), captureState: "recording", captureSources: system?.getAudioTracks().length ? ["mic", "system"] : ["mic"] },
+      report: { ...snapshot.draft.report, date: new Date().toISOString(), captureState: "recording", transcriptionOrigin: "live", captureSources: system?.getAudioTracks().length ? ["mic", "system"] : ["mic"] },
     });
     void navigator.storage?.persist?.().catch(() => {});
 
@@ -537,11 +537,6 @@ export function finishTranscription(): Promise<string> {
     return Promise.resolve(snapshot.draft.report.transcription || "");
   const reportId = snapshot.draft.report.id;
   const captureOwner = snapshot.owner;
-  if (!transcriptionDone && snapshot.draft.report.speech) {
-    // Preserve the labels the user maintained, before termination can relabel
-    // the entire stream. This local reference is never used as summary text.
-    emit({ draft: { ...snapshot.draft, speakerReference: structuredClone(snapshot.draft.report.speech) } });
-  }
   transcriptionDone ||= pipeline.finish().then((transcription) => {
     if (snapshot.owner !== captureOwner || snapshot.draft.report.id !== reportId) return transcription;
     live = null;
@@ -555,7 +550,7 @@ export function finishTranscription(): Promise<string> {
       transcribing: 0,
       failed: pipeline.failedSegments,
       warning: pipeline.failedSegments
-        ? snapshot.draft.report.speech?.liveWarning || "Das vorläufige Live-Transkript kann Lücken enthalten. Das finale Transkript wird aus der gespeicherten Aufnahme erstellt."
+        ? snapshot.draft.report.speech?.liveWarning || "Das Live-Transkript kann Lücken enthalten. Es wird unverändert verwendet; die Originalaufnahme bleibt gespeichert."
         : snapshot.warning,
     });
     pendingSnapshot = chunks.length ? { ...draft, audio: undefined } : draft;
@@ -599,9 +594,11 @@ export async function importAudio(file: File) {
   await persist({
     ...snapshot.draft,
     audio: file,
+    speakerReference: undefined,
     // Replacing audio starts a NEW submission identity; never reuse a provider
     // job from the previous file under the same report ID.
     report: { ...snapshot.draft.report, id: crypto.randomUUID(), rawAudioUrl: undefined,
+      transcriptionOrigin: "import", captureState: undefined, captureSources: undefined,
       driveFolderId: undefined, driveReportId: undefined, driveMarkdownId: undefined,
       driveTranscriptId: undefined, driveSyncedAt: undefined, transcription: "", summary: "", todos: [], takeaways: [], status: "pending", durationMs: 0,
       speech: { provider: "assemblyai", phase: "pending", languages: snapshot.draft.report.speech?.languages || [...DEFAULT_LANGUAGES], turns: [], speakerNames: {} } },

@@ -27,7 +27,7 @@ import TranscriptTimeline from "../components/TranscriptTimeline";
 import SpeakerReview from "../components/SpeakerReview";
 import SpeakerEditor from "../components/SpeakerEditor";
 import { renderTranscript, needsSpeakerReview, renameSpeaker } from "../../shared/transcription";
-import { ensureFinalTranscript } from "../lib/finalTranscription";
+import { prepareTranscript } from "../lib/prepareTranscript";
 import { downloadDriveFile } from "../lib/drive";
 import { withWebmDuration } from "../lib/webmDuration";
 
@@ -197,8 +197,8 @@ export default function ReportPage({
       if (local?.speakerReference) d.speakerReference = local.speakerReference;
       if (local?.report.id === report.id) await backupDraft(d, t, setBusy);
       checkOwner();
-      setBusy("Finales Transkript erstellen …");
-      await ensureFinalTranscript(d, t);
+      setBusy("Transkript vorbereiten …");
+      await prepareTranscript(d, t);
       checkOwner();
       if (reviewDecision && needsSpeakerReview(d.report.speech)) {
         d.report = { ...d.report, speech: { ...d.report.speech!, speakerReview: reviewDecision },
@@ -216,7 +216,7 @@ export default function ReportPage({
         const result = await syncReport(d.report, t);
         checkOwner();
         setReport(result.report);
-        setNotice(result.warning || "Finales Transkript bereit. Bitte Sprecher prüfen oder Prüfung überspringen.");
+        setNotice(result.warning || "Transkript bereit. Bitte Sprecher prüfen oder Prüfung überspringen.");
         return;
       }
       setBusy("Analysiere...");
@@ -339,6 +339,7 @@ export default function ReportPage({
 
         {error && <Notice>{error}</Notice>}
         {notice && <Notice kind="info">{notice}</Notice>}
+        {view.speech?.liveWarning && <Notice>{view.speech.liveWarning}</Notice>}
         {busy && <Busy text={busy} />}
 
         {running ? (
@@ -412,17 +413,17 @@ export default function ReportPage({
 
         <section className="report-transcript">
           <h2>Transkript</h2>
-          {view.speech && view.speech.phase !== "final" && <p className="muted" role="status">Vorläufiges Live-Transkript. Das finale Transkript wird beim Erstellen des Berichts übernommen.</p>}
+          {view.speech && view.speech.phase !== "final" && <p className="muted" role="status">Live-Transkript. Es wird direkt für die Zusammenfassung verwendet.</p>}
           {view.speech ? (
             <>
               <TranscriptTimeline transcript={view.transcription} speech={view.speech} startedAt={view.date}
                 onRename={(id, name) => {
                   const speech = renameSpeaker(view.speech!, id, name);
                   setEdited({ ...view, speech, transcription: renderTranscript(speech),
-                    status: "pending", error: "Sprechernamen geändert. Zusammenfassung aus dem finalen Transkript aktualisieren." });
+                    status: "pending", error: "Sprechernamen geändert. Zusammenfassung aus dem gespeicherten Transkript aktualisieren." });
                 }} />
               {edited && !needsSpeakerReview(view.speech) && <details className="speaker-advanced"><summary>Weitere Transkriptkorrekturen</summary>
-                <SpeakerEditor speech={view.speech} onChange={speech => setEdited({ ...view, speech, transcription: renderTranscript(speech), status: "pending", error: "Transkript korrigiert. Bericht aus dem finalen Text erneut erstellen." })} />
+                <SpeakerEditor speech={view.speech} onChange={speech => setEdited({ ...view, speech, transcription: renderTranscript(speech), status: "pending", error: "Transkript korrigiert. Bericht aus dem gespeicherten Text erneut erstellen." })} />
               </details>}
             </>
           ) : edited ? (

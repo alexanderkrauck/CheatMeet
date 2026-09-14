@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
     currentUser: { uid: "alice", getIdToken: async () => "identity" } as any,
   },
   putDraft: vi.fn(),
+  getDraft: vi.fn(),
   putLocal: vi.fn(),
   fetch: vi.fn(),
 }));
@@ -16,6 +17,7 @@ vi.mock("firebase/firestore", () => ({
 }));
 vi.mock("./local", () => ({
   putDraft: mocks.putDraft,
+  getDraft: mocks.getDraft,
   putLocal: mocks.putLocal,
 }));
 vi.mock("./reports", () => ({ uid: () => mocks.auth.currentUser.uid }));
@@ -23,7 +25,7 @@ vi.mock("./webmDuration", () => ({
   withWebmDuration: async (blob: Blob) => blob,
 }));
 import { analyzeDraft } from "./workflow";
-import { ensureFinalTranscript } from "./finalTranscription";
+import { prepareTranscript } from "./prepareTranscript";
 
 const draft = (): Draft => ({
   audio: new Blob(["test"], { type: "audio/webm" }),
@@ -31,7 +33,8 @@ const draft = (): Draft => ({
     id: "meeting",
     date: "2026-09-14",
     title: "Test",
-    transcription: "Erfundener Live-Text",
+    transcription: "",
+    transcriptionOrigin: "import",
     summary: "",
     todos: [],
     takeaways: [],
@@ -70,6 +73,7 @@ beforeEach(() => {
   mocks.auth.currentUser = { uid: "alice", getIdToken: async () => "identity" };
   mocks.fetch.mockReset();
   mocks.putDraft.mockReset();
+  mocks.getDraft.mockReset();
   mocks.putLocal.mockReset();
   vi.stubGlobal("fetch", mocks.fetch);
 });
@@ -101,9 +105,6 @@ it("checkpoints the final transcript before summarizing, and ignores the summary
     return Response.json(final());
   });
   const d = draft();
-  await expect(analyzeDraft(d)).rejects.toThrow("Sprecher prüfen");
-  expect(mocks.fetch.mock.calls.map(c => c[0])).not.toContain("/api/analyze");
-  d.report.speech!.speakerReview = "reviewed";
   const result = await analyzeDraft(d);
   expect(result.transcription).toContain("Keine Zusage.");
   expect(result.transcription).not.toContain("Modell-Echo");
@@ -130,7 +131,7 @@ it("submits a missing job once and then only polls", async () => {
     )
     .mockResolvedValueOnce(Response.json(final()));
   const d = draft();
-  const running = ensureFinalTranscript(d);
+  const running = prepareTranscript(d);
   await vi.runAllTimersAsync();
   await running;
   expect(mocks.fetch.mock.calls.map((c) => c[1].method || "GET")).toEqual([
@@ -154,7 +155,7 @@ it("an uncertain reservation is surfaced without resubmitting audio", async () =
   mocks.fetch.mockResolvedValue(
     Response.json({ error: "Auftrag unbestätigt" }, { status: 409 }),
   );
-  await expect(ensureFinalTranscript(draft())).rejects.toThrow("unbestätigt");
+  await expect(prepareTranscript(draft())).rejects.toThrow("unbestätigt");
   expect(mocks.fetch).toHaveBeenCalledOnce();
   expect(mocks.fetch.mock.calls[0][1].method).toBeUndefined();
 });
@@ -168,7 +169,7 @@ it("uses a small Drive-reference request once audio is backed up", async () => {
   const d = draft();
   d.report.rawAudioUrl = "private-drive-file";
   d.audio = undefined;
-  const running = ensureFinalTranscript(d, "short-drive-grant");
+  const running = prepareTranscript(d, "short-drive-grant");
   await vi.runAllTimersAsync();
   await running;
   const submitted = mocks.fetch.mock.calls[1][1];
@@ -180,52 +181,190 @@ it("uses a small Drive-reference request once audio is backed up", async () => {
   });
 });
 it("retries a server-confirmed unused pass but still performs just one accepted final submission", async () => {
-  mocks.fetch.mockResolvedValueOnce(Response.json({ state: "retryable" }))
-    .mockResolvedValueOnce(Response.json({ state: "processing" }, { status: 202 }))
+  mocks.fetch
+    .mockResolvedValueOnce(Response.json({ state: "retryable" }))
+    .mockResolvedValueOnce(
+      Response.json({ state: "processing" }, { status: 202 }),
+    )
     .mockResolvedValueOnce(Response.json(final()));
   const d = draft();
-  const running = ensureFinalTranscript(d);
-  await vi.runAllTimersAsync(); await running;
-  expect(mocks.fetch.mock.calls.map(c => c[1].method || "GET")).toEqual(["GET", "POST", "GET"]);
-  expect(d.report.speech?.speakerReview).toBe("pending");
+  const running = prepareTranscript(d);
+  await vi.runAllTimersAsync();
+  await running;
+  expect(mocks.fetch.mock.calls.map((c) => c[1].method || "GET")).toEqual([
+    "GET",
+    "POST",
+    "GET",
+  ]);
+  expect(d.report.speech?.speakerReview).toBe("skipped");
 });
 it("a deliberate skipped review permits the final text summary without any new ASR call", async () => {
-  const d = draft(); d.report.speech = { ...final().speech, speakerReview: "skipped" } as any;
+  const d = draft();
+  d.report.speech = { ...final().speech, speakerReview: "skipped" } as any;
   d.report.transcription = "Finaler Text";
-  mocks.fetch.mockResolvedValue(Response.json({ title: "Test", summary: "Zusammenfassung", transcription: "Echo", todos: [], takeaways: [] }));
+  mocks.fetch.mockResolvedValue(
+    Response.json({
+      title: "Test",
+      summary: "Zusammenfassung",
+      transcription: "Echo",
+      todos: [],
+      takeaways: [],
+    }),
+  );
   await analyzeDraft(d);
-  expect(mocks.fetch.mock.calls.map(c => c[0])).toEqual(["/api/analyze"]);
+  expect(mocks.fetch.mock.calls.map((c) => c[0])).toEqual(["/api/analyze"]);
 });
 
-it("automatically carries live names and sources into the saved final transcript and summary", async () => {
+it("uses the live transcript and maintained names directly, without any ASR request", async () => {
   const d = draft();
-  const text = "Wir haben heute den Vertrag gemeinsam geprüft und noch keine Zusage erteilt";
-  d.report.speech!.turns = [{id:"mic:0:0",speaker:"mic:0:A",startMs:0,endMs:1000,text,final:true}];
-  d.report.speech!.speakerNames = {"mic:0:A":"Alex"};
-  d.report.speech!.speakerAliases = {"mic:0:A":"Alex"};
+  const text =
+    "Wir haben heute den Vertrag gemeinsam geprüft und noch keine Zusage erteilt";
+  d.report.transcriptionOrigin = "live";
+  d.report.speech!.turns = [
+    {
+      id: "mic:0:0",
+      speaker: "mic:0:A",
+      startMs: 0,
+      endMs: 1000,
+      text,
+      final: true,
+    },
+  ];
+  d.report.speech!.speakerNames = { "mic:0:A": "Alex" };
+  d.report.speech!.speakerAliases = { "mic:0:A": "Alex" };
   mocks.fetch.mockImplementation(async (url, init) => {
     if (url === "/api/analyze") {
       expect(init.body.get("audio")).toBeNull();
       expect(init.body.get("transcription")).toContain("Mikrofon · Alex");
-      return Response.json({title:"Test",summary:"Alex prüft den Vertrag.",transcription:"Echo",todos:[],takeaways:[]});
+      return Response.json({
+        title: "Test",
+        summary: "Alex prüft den Vertrag.",
+        transcription: "Echo",
+        todos: [],
+        takeaways: [],
+      });
     }
-    const response=final();response.speech.turns[0].text=text;return Response.json(response);
+    const response = final();
+    response.speech.turns[0].text = text;
+    return Response.json(response);
   });
-  const result=await analyzeDraft(d);
-  expect(result.speech?.speakerReview).toBe("matched");
+  const result = await analyzeDraft(d);
+  expect(result.speech?.speakerReview).toBe("skipped");
   expect(result.transcription).toContain("Mikrofon · Alex");
   expect(mocks.putDraft).toHaveBeenCalled();
-  expect(mocks.fetch.mock.calls.map(c=>c[0])).toEqual(["/api/transcription/final/meeting","/api/analyze"]);
+  expect(mocks.fetch.mock.calls.map((c) => c[0])).toEqual(["/api/analyze"]);
 });
 
 it("matches against the user-maintained reference before late provider label revisions", async () => {
-  const d=draft();
-  const text="Wir haben heute den Vertrag gemeinsam geprüft und noch keine Zusage erteilt";
-  d.speakerReference={...d.report.speech!,turns:[{id:"mic:0:0",speaker:"mic:0:A",text,startMs:0,endMs:1000,final:true}],speakerNames:{"mic:0:A":"Alex"},speakerAliases:{"mic:0:A":"Alex"}};
-  d.report.speech={...d.speakerReference,turns:d.speakerReference.turns.map(t=>({...t,speaker:"mic:0:B"})),speakerNames:{"mic:0:B":"Nina"}};
-  const response=final();response.speech.turns[0].text=text;
+  const d = draft();
+  d.report.transcriptionOrigin = "live";
+  const text =
+    "Wir haben heute den Vertrag gemeinsam geprüft und noch keine Zusage erteilt";
+  d.speakerReference = {
+    ...d.report.speech!,
+    turns: [
+      {
+        id: "mic:0:0",
+        speaker: "mic:0:A",
+        text,
+        startMs: 0,
+        endMs: 1000,
+        final: true,
+      },
+    ],
+    speakerNames: { "mic:0:A": "Alex" },
+    speakerAliases: { "mic:0:A": "Alex" },
+  };
+  d.report.speech = {
+    ...d.speakerReference,
+    turns: d.speakerReference.turns.map((t) => ({ ...t, speaker: "mic:0:B" })),
+    speakerNames: { "mic:0:B": "Nina" },
+  };
+  const response = final();
+  response.speech.turns[0].text = text;
   mocks.fetch.mockResolvedValue(Response.json(response));
-  await ensureFinalTranscript(d);
+  await prepareTranscript(d);
   expect(d.report.speech?.turns[0].speaker).toBe("mic:0:A");
   expect(d.report.speech?.speakerAliases?.["mic:0:A"]).toBe("Alex");
+  expect(mocks.fetch).not.toHaveBeenCalled();
+});
+
+it("does not retranscribe an empty or failed live recording, including when analysis is retried", async () => {
+  const d = draft();
+  d.report.transcriptionOrigin = "live";
+  d.report.speech!.liveWarning = "Verbindung fehlgeschlagen";
+  await expect(analyzeDraft(d)).rejects.toThrow("Kein Live-Transkript");
+  await expect(analyzeDraft(d)).rejects.toThrow("Kein Live-Transkript");
+  expect(mocks.fetch).not.toHaveBeenCalled();
+  expect(d.audio).toBeDefined();
+});
+it("keeps visible unconfirmed words and microphone/system labels in the saved transcript", async () => {
+  const d = draft();
+  d.report.transcriptionOrigin = "live";
+  d.report.speech!.speakerNames = {
+    "mic:0:A": "Alex",
+    "system:1:A": "Fireship",
+  };
+  d.report.speech!.turns = [
+    {
+      id: "mic:0:0",
+      speaker: "mic:0:A",
+      text: "Ich prüfe das",
+      startMs: 0,
+      endMs: 500,
+      final: true,
+    },
+    {
+      id: "system:1:0",
+      speaker: "system:1:A",
+      text: "We will send",
+      startMs: 1000,
+      endMs: 1500,
+      final: false,
+    },
+  ];
+  const before = structuredClone(d.report.speech!.turns);
+  await prepareTranscript(d);
+  expect(d.report.speech!.turns).toEqual(before);
+  expect(d.report.transcription).toContain("Mikrofon · Alex");
+  expect(d.report.transcription).toContain("Systemaudio · Fireship");
+  expect(d.report.transcription).toContain("We will send");
+  expect(mocks.fetch).not.toHaveBeenCalled();
+});
+it("recognizes older captured drafts without the new origin marker", async () => {
+  const d = draft();
+  delete d.report.transcriptionOrigin;
+  d.report.captureSources = ["mic"];
+  await prepareTranscript(d);
+  expect(d.report.transcriptionOrigin).toBe("live");
+  expect(mocks.fetch).not.toHaveBeenCalled();
+});
+it("never falls back to audio when a legacy captured draft lacks structured speech", async () => {
+  const d = draft();
+  delete d.report.speech;
+  delete d.report.transcriptionOrigin;
+  d.report.captureState = "stopped";
+  await expect(analyzeDraft(d)).rejects.toThrow("Kein Live-Transkript");
+  expect(mocks.fetch).not.toHaveBeenCalled();
+});
+
+it("shares a locally finalized live transcript with concurrent callers without an audio fallback", async () => {
+  const first = draft();
+  first.report.transcriptionOrigin = "live";
+  const second = structuredClone(first);
+  let release!: () => void;
+  mocks.putDraft.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  mocks.getDraft.mockImplementation(async () => first);
+  const one = prepareTranscript(first);
+  const two = prepareTranscript(second);
+  release();
+  await Promise.all([one, two]);
+  expect(second.report.speech?.phase).toBe("final");
+  expect(second.report.transcriptionOrigin).toBe("live");
+  expect(mocks.fetch).not.toHaveBeenCalled();
 });

@@ -104,9 +104,8 @@ export class AssemblyEvents {
     }
     return entries;
   }
-  seal() {
-    for (const [id, turn] of this.turns)
-      if (!turn.end_of_turn) this.turns.delete(id);
+  hasUnfinishedTurns() {
+    return [...this.turns.values()].some(turn => !turn.end_of_turn);
   }
 }
 export function liveDocument(
@@ -121,7 +120,7 @@ export function liveDocument(
     phase: stopped ? "pending" : "live",
     languages,
     turns: events
-      .flatMap((e) => e.entries(!stopped))
+      .flatMap((e) => e.entries())
       .sort((a, b) => a.startMs - b.startMs),
     speakerNames: {},
     ...(warning ? { liveWarning: warning } : {}),

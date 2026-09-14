@@ -70,7 +70,7 @@ const submit = (token = "alice", size = 10) => {
     "meeting.webm",
   );
   body.append("languages", '["de","en"]');
-  return fetch(`${base}/final/meeting-1`, {
+  return fetch(`${base}/import/meeting-1`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body,
@@ -89,7 +89,7 @@ it("reserves atomically across simultaneous submissions and polls the same job a
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await listen();
   expect((await submit()).status).toBe(202);
-  const response = await fetch(`${base}/final/meeting-1`, {
+  const response = await fetch(`${base}/import/meeting-1`, {
     headers: { Authorization: "Bearer alice" },
   });
   expect(await response.json()).toMatchObject({
@@ -104,7 +104,7 @@ it("does not expose another account's job", async () => {
   await submit();
   expect(
     (
-      await fetch(`${base}/final/meeting-1`, {
+      await fetch(`${base}/import/meeting-1`, {
         headers: { Authorization: "Bearer bob" },
       })
     ).status,
@@ -121,7 +121,7 @@ it("never repeats a final submission after an uncertain provider POST", async ()
   expect((await submit()).status).toBe(202);
   expect(
     (
-      await fetch(`${base}/final/meeting-1`, {
+      await fetch(`${base}/import/meeting-1`, {
         headers: { Authorization: "Bearer alice" },
       })
     ).status,
@@ -167,7 +167,7 @@ it("streams private Drive audio without passing the Drive credential to Assembly
       expect(init.body).not.toContain("drive-only-secret");
     return original(url, init);
   });
-  const response = await fetch(`${base}/final/meeting-1`, {
+  const response = await fetch(`${base}/import/meeting-1`, {
     method: "POST",
     headers: {
       Authorization: "Bearer alice",
@@ -188,7 +188,7 @@ it("streams private Drive audio without passing the Drive credential to Assembly
 });
 it("a rejected Drive grant does not consume the final transcription reservation", async () => {
   provider.mockResolvedValue(new Response(null, { status: 403 }));
-  const response = await fetch(`${base}/final/meeting-1`, {
+  const response = await fetch(`${base}/import/meeting-1`, {
     method: "POST",
     headers: {
       Authorization: "Bearer alice",
@@ -203,7 +203,7 @@ it("a rejected Drive grant does not consume the final transcription reservation"
   expect(response.status).toBe(502);
   expect(
     (
-      await fetch(`${base}/final/meeting-1`, {
+      await fetch(`${base}/import/meeting-1`, {
         headers: { Authorization: "Bearer alice" },
       })
     ).status,
@@ -225,7 +225,7 @@ it("allows one atomic retry after explicit provider rejection, including across 
     return original(url, init);
   });
   expect((await submit()).status).toBe(502);
-  const state = await fetch(`${base}/final/meeting-1`, { headers: { Authorization: 'Bearer alice' } });
+  const state = await fetch(`${base}/import/meeting-1`, { headers: { Authorization: 'Bearer alice' } });
   expect(await state.json()).toEqual({ state: 'retryable' });
   await new Promise<void>(resolve => server.close(() => resolve())); await listen();
   reject = false;
@@ -250,8 +250,15 @@ it("keeps a 5xx submission outcome blocked and logs only stage/status, not provi
     provider.mockImplementation(async (url, init) => url.endsWith('/transcript')
       ? Response.json({ error: 'private-url-and-secret' }, { status: 500 }) : original(url, init));
     expect((await submit()).status).toBe(502);
-    expect((await fetch(`${base}/final/meeting-1`, { headers: { Authorization: 'Bearer alice' } })).status).toBe(409);
+    expect((await fetch(`${base}/import/meeting-1`, { headers: { Authorization: 'Bearer alice' } })).status).toBe(409);
     expect(log.mock.calls.map(c => c[0]).join(' ')).toContain('"stage":"submit"');
     expect(log.mock.calls.map(c => c[0]).join(' ')).not.toContain('private-url-and-secret');
   } finally { log.mockRestore(); }
+});
+
+it("rejects the retired second-pass endpoint without touching audio or the provider", async () => {
+  const response = await fetch(`${base}/final/meeting-1`, {method:"POST", headers:{Authorization:"Bearer alice"}});
+  expect(response.status).toBe(410);
+  expect((await response.json()).error).toContain("Live-Transkript");
+  expect(provider).not.toHaveBeenCalled();
 });

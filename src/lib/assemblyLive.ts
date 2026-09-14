@@ -6,8 +6,8 @@ import {
 import { AssemblyEvents, liveDocument } from "./assemblyEvents";
 import type { LiveTranscription } from "./liveTranscription";
 
-/** Each packet is sent at most once. A connection failure leaves live gaps;
- * the independent final pass covers the durable recording, including those gaps. */
+/** Each packet is sent at most once. The live transcript is the saved transcript;
+ * connection failures remain visible instead of triggering retranscription. */
 export function startAssemblyLive(
   sources: Partial<Record<"mic" | "system", MediaStream>>,
   now: () => number,
@@ -44,7 +44,7 @@ export function startAssemblyLive(
   };
   const failed = () => {
     warning =
-      "Das vorläufige Live-Transkript kann Lücken enthalten. Beim Abschluss wird die gespeicherte Aufnahme für das finale Transkript verarbeitet.";
+      "Das Live-Transkript kann Lücken oder unbestätigte Beiträge enthalten. Es wird ohne erneute Transkription gespeichert.";
     publish();
   };
   let transitions = Promise.resolve();
@@ -96,7 +96,7 @@ export function startAssemblyLive(
       node?.disconnect();
       void context?.close().catch(() => {});
       socket?.close();
-      reducer.seal();
+      if (reducer.hasUnfinishedTurns()) failed();
       publish();
       resolveEnd();
     };
@@ -105,7 +105,7 @@ export function startAssemblyLive(
       if (terminating) return ended;
       terminating = true;
       node?.port.postMessage({ active: false });
-      // Wait for final turns AND SpeakerRevision before disposing the socket.
+      // Drain the last live Turn events without starting another transcription.
       if (socket?.readyState === WebSocket.OPEN && begun) {
         timeout = setTimeout(() => {
           failed();
@@ -265,7 +265,9 @@ export function startAssemblyLive(
           else if (event.type === "Error") {
             failed();
             dispose();
-          } else {
+          } else if (event.type !== "SpeakerRevision") {
+            // Keep the speaker labels the user maintained during the recording.
+            // The provider's end-of-session global relabeling must not swap them.
             reducer.apply(event);
             publish();
           }

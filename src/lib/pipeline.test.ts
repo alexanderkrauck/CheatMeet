@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const account = vi.hoisted(() => ({ currentUser: { uid: "user-1" } }));
 vi.mock("./firebase", () => ({ auth: account }));
 const finalTranscript = vi.hoisted(() => vi.fn());
-vi.mock("./finalTranscription", () => ({ ensureFinalTranscript: finalTranscript }));
+vi.mock("./prepareTranscript", () => ({ prepareTranscript: finalTranscript }));
 const backupDraft = vi.fn();
 const syncReport = vi.fn();
 const analyzeDraft = vi.fn();

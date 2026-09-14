@@ -12,7 +12,7 @@ import { audioExtension, validateAnalysis } from "../../shared/analysis";
 import { reportToMarkdown } from "./markdown";
 import { withWebmDuration } from "./webmDuration";
 import type { Draft, ReportData } from "../types";
-import { ensureFinalTranscript } from "./finalTranscription";
+import { prepareTranscript } from "./prepareTranscript";
 import { needsSpeakerReview } from "../../shared/transcription";
 
 // An operation belongs to the account that started it, including across tab sign-outs.
@@ -58,14 +58,16 @@ async function summaryPreferences(owner: string): Promise<string> {
 
 export async function analyzeDraft(draft: Draft): Promise<ReportData> {
   const { owner, run } = ownedOperation();
-  await run(() => ensureFinalTranscript(draft));
+  await run(() => prepareTranscript(draft));
   if (needsSpeakerReview(draft.report.speech))
     throw new Error("Bitte zuerst die Sprecher prüfen oder die Prüfung überspringen.");
   const transcription = draft.report.transcription?.trim() || "";
-  // A successful empty final transcript is silence, not permission to send the
-  // recording to Gemini for a third transcription.
-  if (draft.report.speech?.phase === "final" && !transcription)
+  // Empty/failed live capture must never fall back to sending audio for ASR.
+  if (draft.report.speech?.phase === "final" && !transcription) {
+    if (draft.report.transcriptionOrigin === "live")
+      throw new Error("Kein Live-Transkript vorhanden. Die Aufnahme bleibt gesichert; es wird keine erneute Transkription gestartet.");
     return { ...draft.report, summary: "Keine Sprache erkannt.", todos: [], takeaways: [], status: "completed", error: "" };
+  }
   if (!transcription && !draft.audio)
     throw new Error("Weder Transkript noch Audio vorhanden.");
 

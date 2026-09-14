@@ -124,7 +124,18 @@ it("retains a live speaker name through partials and final live updates", async 
   expect(capture.captureSnapshot().draft.report.transcription).toContain("Mikrofon · Alex");
   await capture.finishTranscription();
   expect(capture.captureSnapshot().draft.report.transcription).toContain("Mikrofon · Alex");
-  changed({ ...structuredClone(speech), phase: "pending", turns: speech.turns.map(t => ({...t, speaker: "mic:0:B"})) } as any);
-  expect(capture.captureSnapshot().draft.speakerReference?.turns[0].speaker).toBe("mic:0:A");
-  expect(capture.captureSnapshot().draft.speakerReference?.speakerAliases?.["mic:0:A"]).toBe("Alex");
+  expect(capture.captureSnapshot().draft.report.transcriptionOrigin).toBe("live");
+});
+
+it("treats a replacement import as new audio and clears old recording provenance", async () => {
+  await capture.startCapture(true, async () => {}, "mic");
+  capture.stopCapture(); await capture.finishTranscription();
+  const previous = capture.captureSnapshot().draft.report.id;
+  await capture.importAudio(new File(["audio"], "import.webm", {type:"audio/webm"}));
+  const next = capture.captureSnapshot().draft;
+  expect(next.report.id).not.toBe(previous);
+  expect(next.report.transcriptionOrigin).toBe("import");
+  expect(next.report.captureState).toBeUndefined();
+  expect(next.report.captureSources).toBeUndefined();
+  expect(next.speakerReference).toBeUndefined();
 });
