@@ -17,6 +17,7 @@ export function startAssemblyLive(
   singleSpeakerSources: Partial<Record<"mic" | "system", boolean>> = {},
 ): LiveTranscription {
   const owner = auth.currentUser?.uid;
+  const microphoneName = auth.currentUser?.displayName?.trim().slice(0, 80) || "Ich";
   const events: AssemblyEvents[] = [];
   let warning = "",
     startDelayed = false,
@@ -35,9 +36,11 @@ export function startAssemblyLive(
     const current = liveDocument(languages, events, stopped, warning);
     for (const turn of current.turns)
       if (!names[turn.speaker])
-        names[turn.speaker] = turn.speaker.endsWith(":unknown")
-          ? "Unbekannt"
-          : `Sprecher ${++speakerCount}`;
+        names[turn.speaker] = turn.speaker === "mic:single"
+          ? microphoneName
+          : turn.speaker.endsWith(":unknown")
+            ? "Unbekannt"
+            : `Sprecher ${++speakerCount}`;
     return { ...current, speakerNames: { ...names }, ...(startDelayed ? { liveStartDelayed: true } : {}) };
   };
   const publish = () => {

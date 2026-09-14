@@ -11,7 +11,9 @@ review on completion. This change awaits the user's next AI Studio deployment.
   on the microphone and/or system audio. Both default off. Confirmed sources use
   a stable source-specific speaker identity across turns, pauses and reconnects;
   provider labels (including unknown) cannot split that person. The other source
-  retains automatic diarization. Names remain editable inline. Choices are stored
+  retains automatic diarization. The confirmed microphone speaker defaults to
+  the signed-in account’s display name, falling back to “Ich”. Explicit inline
+  names still take precedence. Choices are stored
   with the draft/report and cleared when importing replacement audio.
 - Each microphone/system source has its own AssemblyAI stream. Audio packets are
   sent once; reconnects send future audio only. German/English remain the default.
