@@ -139,3 +139,18 @@ it("treats a replacement import as new audio and clears old recording provenance
   expect(next.report.captureSources).toBeUndefined();
   expect(next.speakerReference).toBeUndefined();
 });
+
+it("persists independent single-person choices, passes them to streaming and locks them during capture", async () => {
+  capture.setCaptureSingleSpeaker("mic", true);
+  capture.setCaptureSingleSpeaker("system", true);
+  capture.setCaptureSingleSpeaker("system", false);
+  expect(capture.captureSnapshot().draft.report.singleSpeakerSources).toEqual({mic: true, system: false});
+  await capture.startCapture(true, async () => {}, "mic+system");
+  expect(vi.mocked(startAssemblyLive).mock.calls[0][5]).toEqual({mic: true, system: false});
+  capture.setCaptureSingleSpeaker("mic", false);
+  expect(capture.captureSnapshot().draft.report.singleSpeakerSources?.mic).toBe(true);
+  capture.stopCapture();
+  await capture.finishTranscription();
+  await capture.importAudio(new File(["test"], "import.wav", {type: "audio/wav"}));
+  expect(capture.captureSnapshot().draft.report.singleSpeakerSources).toBeUndefined();
+});

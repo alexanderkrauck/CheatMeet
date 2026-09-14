@@ -1,3 +1,9 @@
+## Single-person audio sources (2026-09-14)
+
+- [x] Independent per-meeting microphone/system single-person checkboxes; default off.
+- [x] Stable, separate source identities across pauses and reconnects; inline names retained.
+- [x] Preserve automatic speaker separation on sources without the setting.
+
 # CheatMeet backlog
 
 Maintained from real recordings. Each item says what was observed and where, so

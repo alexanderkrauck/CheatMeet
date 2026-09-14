@@ -1392,3 +1392,20 @@
   .live-speakers .speaker-filters button { padding: 6px 7px; font-size: 11px; }
   .live-suggestion span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 }
+
+.walk-speaker-assumptions {
+  margin: 12px 0 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  text-align: left;
+}
+.walk-speaker-assumptions legend { font-size: 13px; font-weight: 600; padding: 0 4px; }
+.walk-speaker-assumptions label { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 14px; cursor: pointer; }
+.walk-speaker-assumptions input { width: 18px; height: 18px; flex-shrink: 0; }
+.walk-speaker-assumptions p { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+
+/* The setup can grow with meeting options; scroll instead of overlapping. */
+.walk-content.is-ready { overflow-y: auto; justify-content: flex-start; }
+.walk-content.is-ready > * { flex-shrink: 0; }
+.walk-content.is-ready .walk-ready-intro { flex: 0 0 auto; padding: 12px 0; }

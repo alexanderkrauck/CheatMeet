@@ -54,6 +54,7 @@ import {
   setCaptureError,
   setCaptureTitle,
   setCaptureLanguages,
+  setCaptureSingleSpeaker,
   startCapture,
   stopCapture,
   subscribeCapture,
@@ -339,7 +340,7 @@ export default function RecordPage() {
           </main>
         ) : (
           <>
-            <main className="walk-content">
+            <main className={`walk-content${state === "ready" ? " is-ready" : ""}`}>
               {state === "ready" ? (
                 <>
                   <label className="walk-project">
@@ -397,6 +398,20 @@ export default function RecordPage() {
                     </button>
                   </div>
                   <MeetingLanguages value={draft.report.speech?.languages} onChange={setCaptureLanguages} />
+                  <fieldset className="walk-speaker-assumptions">
+                    <legend>Personen pro Audioquelle</legend>
+                    <label>
+                      <input type="checkbox" checked={!!draft.report.singleSpeakerSources?.mic}
+                        onChange={event => setCaptureSingleSpeaker("mic", event.target.checked)} />
+                      Nur eine Person am Mikrofon
+                    </label>
+                    {audioSources === "mic+system" && <label>
+                      <input type="checkbox" checked={!!draft.report.singleSpeakerSources?.system}
+                        onChange={event => setCaptureSingleSpeaker("system", event.target.checked)} />
+                      Nur eine Person im Systemaudio
+                    </label>}
+                    <p>Für dieses Meeting: Alle Beiträge der gewählten Quelle gehören zu einer Person, auch nach einer Pause. Namen kannst du direkt im Transkript ändern. Ohne Häkchen werden Stimmen automatisch unterschieden.</p>
+                  </fieldset>
                 </>
               ) : recording ? (
                 <LiveMeeting

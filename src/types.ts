@@ -18,6 +18,8 @@ export interface ReportData {
   captureState?: "recording" | "paused" | "stopped";
   transcriptionOrigin?: "live" | "import";
   captureSources?: ("mic" | "system")[];
+  /** User confirms one person for the entire recording on each selected source. */
+  singleSpeakerSources?: Partial<Record<"mic" | "system", boolean>>;
   rawAudioUrl?: string; // Legacy name: a private Drive file ID, not a URL
   driveFolderId?: string;
   driveReportId?: string;

@@ -14,6 +14,7 @@ export function startAssemblyLive(
   changed: (speech: MeetingTranscript) => void,
   reportId: string,
   languages: string[],
+  singleSpeakerSources: Partial<Record<"mic" | "system", boolean>> = {},
 ): LiveTranscription {
   const owner = auth.currentUser?.uid;
   const events: AssemblyEvents[] = [];
@@ -53,7 +54,7 @@ export function startAssemblyLive(
     return transitions;
   };
   async function startSource(
-    source: string,
+    source: "mic" | "system",
     stream: MediaStream,
     epoch: number,
     sequence: number,
@@ -86,7 +87,10 @@ export function startAssemblyLive(
         ? Math.max(0, block.at + Math.min(100, Math.max(0, ms - block.sent)))
         : 0;
     };
-    const reducer = new AssemblyEvents(`${source}:${sequence}`, mapTime);
+    // Turn IDs remain session-specific; a confirmed single person keeps the same
+    // identity across pauses/reconnects and never merges with the other source.
+    const reducer = new AssemblyEvents(`${source}:${sequence}`, mapTime,
+      singleSpeakerSources[source] ? `${source}:single` : undefined);
     events.push(reducer);
     const dispose = () => {
       if (closed) return;
@@ -288,10 +292,10 @@ export function startAssemblyLive(
   const launch = async () => {
     const epoch = ++generation;
     await Promise.all(
-      Object.entries(sources)
-        .filter(([, value]) => value)
-        .map(([source, stream]) =>
-          startSource(source, stream!, epoch, session++),
+      (["mic", "system"] as const)
+        .filter(source => sources[source])
+        .map(source =>
+          startSource(source, sources[source]!, epoch, session++),
         ),
     );
   };

@@ -256,3 +256,48 @@ it("does not treat elapsed meeting time as delayed startup after resume", async 
   expect(live.failedSegments).toBe(0);
   expect(changed.mock.calls.at(-1)?.[0].liveStartDelayed).toBeUndefined();
 });
+
+it.each(["mic", "system"] as const)("keeps confirmed %s identity across sessions while the other source still distinguishes voices", async source => {
+  const changed = vi.fn();
+  live = startAssemblyLive({mic: {} as MediaStream, system: {} as MediaStream}, () => clock,
+    changed, "meeting", ["de"], {[source]: true});
+  await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  const sendTurn = (socket: Socket) => {
+    socket.message({type: "Begin", configuration: {model: "universal-3-5-pro", mode: "max_accuracy"}});
+    socket.message({type: "Turn", turn_order: 0, end_of_turn: true, words: [
+      {text: "Hallo", start: 0, end: 100, speaker: "A"},
+      {text: "weiter", start: 100, end: 200, speaker: "B"},
+      {text: "ja", start: 200, end: 300, speaker: "UNKNOWN"},
+    ]});
+  };
+  sockets.forEach(sendTurn);
+  const before = changed.mock.calls.at(-1)![0];
+  expect(before.turns.filter((t: any) => t.speaker === `${source}:single`)).toHaveLength(1);
+  expect(before.turns.find((t: any) => t.speaker === `${source}:single`).text).toBe("Hallo weiter ja");
+  const other = source === "mic" ? "system" : "mic";
+  expect(new Set(before.turns.filter((t: any) => t.speaker.startsWith(`${other}:`)).map((t: any) => t.speaker)).size).toBe(3);
+  const paused = live.pause();
+  await vi.waitFor(() => expect(sockets[0].sent).toHaveLength(1));
+  sockets.forEach(socket => socket.message({type: "Termination"}));
+  await paused;
+  await live.resume();
+  sockets.slice(2).forEach(sendTurn);
+  const after = changed.mock.calls.at(-1)![0];
+  const turns = after.turns.filter((t: any) => t.speaker === `${source}:single`);
+  expect(turns).toHaveLength(2);
+  expect(turns[0].id).not.toBe(turns[1].id);
+  expect(new Set(after.turns.filter((t: any) => t.speaker.startsWith(`${other}:`)).map((t: any) => t.speaker)).size).toBe(6);
+});
+
+it("keeps two confirmed single speakers separate by source", async () => {
+  const changed = vi.fn();
+  live = startAssemblyLive({mic: {} as MediaStream, system: {} as MediaStream}, () => clock,
+    changed, "meeting", ["de"], {mic: true, system: true});
+  await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  sockets.forEach(socket => {
+    socket.message({type: "Begin", configuration: {model: "universal-3-5-pro", mode: "max_accuracy"}});
+    socket.message({type: "Turn", turn_order: 0, end_of_turn: false,
+      words: [{text: "Hallo", start: 0, end: 100, speaker: "PENDING"}]});
+  });
+  expect(changed.mock.calls.at(-1)![0].turns.map((t: any) => t.speaker)).toEqual(["mic:single", "system:single"]);
+});

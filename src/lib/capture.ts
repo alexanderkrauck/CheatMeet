@@ -257,6 +257,12 @@ export const setCaptureSpeakerName = (speaker: string, name: string) => {
     speech, transcription: renderTranscript(speech),
   } }).catch(() => {});
 };
+export const setCaptureSingleSpeaker = (source: "mic" | "system", enabled: boolean) => {
+  if (ownerChanged() || busyOperation || snapshot.state !== "ready") return;
+  void persist({ ...snapshot.draft, report: { ...snapshot.draft.report,
+    singleSpeakerSources: { ...snapshot.draft.report.singleSpeakerSources, [source]: enabled },
+  } }).catch(() => {});
+};
 export const setCaptureLanguages = (languages: string[]) => {
   if (isCapturing() || !validLanguages(languages)) return;
   void persist({ ...snapshot.draft, report: { ...snapshot.draft.report,
@@ -379,6 +385,7 @@ export async function startCapture(
       },
       snapshot.draft.report.id,
       snapshot.draft.report.speech?.languages || [...DEFAULT_LANGUAGES],
+      { ...snapshot.draft.report.singleSpeakerSources },
     );
 
     rec.ondataavailable = (event) => {
@@ -598,7 +605,7 @@ export async function importAudio(file: File) {
     // Replacing audio starts a NEW submission identity; never reuse a provider
     // job from the previous file under the same report ID.
     report: { ...snapshot.draft.report, id: crypto.randomUUID(), rawAudioUrl: undefined,
-      transcriptionOrigin: "import", captureState: undefined, captureSources: undefined,
+      transcriptionOrigin: "import", captureState: undefined, captureSources: undefined, singleSpeakerSources: undefined,
       driveFolderId: undefined, driveReportId: undefined, driveMarkdownId: undefined,
       driveTranscriptId: undefined, driveSyncedAt: undefined, transcription: "", summary: "", todos: [], takeaways: [], status: "pending", durationMs: 0,
       speech: { provider: "assemblyai", phase: "pending", languages: snapshot.draft.report.speech?.languages || [...DEFAULT_LANGUAGES], turns: [], speakerNames: {} } },

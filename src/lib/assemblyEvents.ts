@@ -21,6 +21,7 @@ export class AssemblyEvents {
   constructor(
     private namespace: string,
     private mapTime: (ms: number) => number,
+    private fixedSpeaker?: string,
   ) {}
   apply(data: any) {
     if (data.type === "Turn") {
@@ -85,7 +86,7 @@ export class AssemblyEvents {
       if (!includePartials && !turn.end_of_turn) continue;
       let group: SpeechTurn | undefined;
       for (const word of turn.words) {
-        const speaker = `${this.namespace}:${word.speaker || "unknown"}`;
+        const speaker = this.fixedSpeaker || `${this.namespace}:${word.speaker || "unknown"}`;
         if (!group || group.speaker !== speaker) {
           group = {
             id: `${this.namespace}:${turn.turn_order}:${word.start}`,

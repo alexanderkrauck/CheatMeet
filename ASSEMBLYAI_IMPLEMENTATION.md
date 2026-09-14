@@ -7,6 +7,12 @@ review on completion. This change awaits the user's next AI Studio deployment.
 
 ## Recording and completion
 
+- Before recording, independent per-meeting checkboxes can confirm one person
+  on the microphone and/or system audio. Both default off. Confirmed sources use
+  a stable source-specific speaker identity across turns, pauses and reconnects;
+  provider labels (including unknown) cannot split that person. The other source
+  retains automatic diarization. Names remain editable inline. Choices are stored
+  with the draft/report and cleared when importing replacement audio.
 - Each microphone/system source has its own AssemblyAI stream. Audio packets are
   sent once; reconnects send future audio only. German/English remain the default.
 - Stopping drains the current stream's last Turn events, with the existing bounded
@@ -48,7 +54,7 @@ transcript. Legacy speaker-review/matching utilities remain for old report data.
 
 ## Verification
 
-251 tests in 25 files, typecheck, production build and five PWA checks. Coverage
+255 tests in 25 files, typecheck, production build and five PWA checks. Coverage
 includes no ASR call for recorded meetings, source/name preservation, empty/live
 failure handling, concurrent preparation, import replacement, retired endpoint
 rejection and one-time import submission. Browser checks use synthetic streams
