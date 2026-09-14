@@ -8,6 +8,7 @@ import {
 import { withWebmDuration } from "./webmDuration";
 import type { Draft } from "../types";
 import { ensureDriveToken } from "./session";
+import { suggestSpeakerNames } from "./speakerMatches";
 
 const active = new Map<string, Promise<void>>();
 /** Final result is checkpointed before summary generation. Retry only polls the
@@ -60,7 +61,7 @@ export function ensureFinalTranscript(
       return { response, data };
     };
     let { response, data } = await request();
-    if (response.status === 404) {
+    if (response.status === 404 || data.state === "retryable") {
       if (draft.report.rawAudioUrl) {
         const access = driveToken || (await ensureDriveToken());
         assertOwner();
@@ -104,7 +105,7 @@ export function ensureFinalTranscript(
       await new Promise((resolve) => setTimeout(resolve, 3000));
       ({ data } = await request());
     }
-    const speech = data.speech as MeetingTranscript;
+    let speech = data.speech as MeetingTranscript;
     if (
       speech?.provider !== "assemblyai" ||
       speech.phase !== "final" ||
@@ -112,8 +113,8 @@ export function ensureFinalTranscript(
       speech.turns.some((t) => !t.final || typeof t.text !== "string")
     )
       throw new Error("Kein finales Transkript erhalten.");
-    // Batch identities are independent from live identities: never equate their
-    // letters or guess a name mapping. Final names are editable in the report.
+    speech = { ...speech, speakerReview: speech.turns.length ? "pending" : "skipped",
+      speakerNameSuggestions: suggestSpeakerNames(draft.report.speech!, speech) };
     draft.report = {
       ...draft.report,
       speech,

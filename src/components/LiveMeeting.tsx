@@ -1,3 +1,4 @@
+import type { MeetingTranscript } from "../../shared/transcription";
 import { useEffect, useRef, useState } from "react";
 import {
   CornerDownLeft,
@@ -12,11 +13,10 @@ import {
 import type { MeetingInsights } from "../../shared/analysis";
 import TranscriptChat from "./TranscriptChat";
 import { askMeeting, emptyInsights, hasInsights, meetingInsights } from "../lib/assist";
-import { setCaptureHint } from "../lib/capture";
-
-/** How much new speech is worth another insights pass. */
-const REFRESH_CHARS = 400;
-const REFRESH_MS = 45_000;
+import { setCaptureHint, setCaptureSpeakerName } from "../lib/capture";
+import LiveSpeakers, { type SpeakerFilter } from "./LiveSpeakers";
+import { startInsightRefresh } from "../lib/insightRefresh";
+import { renderTranscript } from "../../shared/transcription";
 
 interface Exchange {
   question: string;
@@ -56,12 +56,14 @@ function InsightGroup({
  */
 export default function LiveMeeting({
   transcript,
+  speech,
   pending,
   paused,
   timer,
   startedAt,
 }: {
   transcript: string;
+  speech?: MeetingTranscript;
   pending: number;
   paused: boolean;
   timer: string;
@@ -74,12 +76,13 @@ export default function LiveMeeting({
   const [question, setQuestion] = useState("");
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState("");
+  const [insightError, setInsightError] = useState(false);
+  const [speakerFilter, setSpeakerFilter] = useState<SpeakerFilter>("all");
 
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
-  const lastRun = useRef({ length: 0, at: 0 });
   const latest = useRef(transcript);
-  latest.current = transcript;
+  latest.current = speech ? renderTranscript(speech) : transcript;
 
   // Follow the conversation, unless the user has scrolled back to re-read.
   useEffect(() => {
@@ -88,37 +91,18 @@ export default function LiveMeeting({
   }, [transcript]);
 
   useEffect(() => {
-    let active = true;
-    const maybeRefresh = () => {
-      const text = latest.current;
-      const { length, at } = lastRun.current;
-      if (
-        thinking ||
-        text.length - length < REFRESH_CHARS ||
-        Date.now() - at < REFRESH_MS
-      )
-        return;
-      lastRun.current = { length: text.length, at: Date.now() };
-      setThinking(true);
-      meetingInsights(text)
-        .then((next) => {
-          if (!active) return;
-          setInsights(next);
-          // Share the newest suggestion so it stays visible from other screens.
-          setCaptureHint(next.prompts?.[0] || next.questions[0] || "");
-        })
-        .catch(() => {
-          /* A missed pass is replaced by the next one. */
-        })
-        .finally(() => active && setThinking(false));
-    };
-    maybeRefresh();
-    const timer = window.setInterval(maybeRefresh, 5000);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, [transcript, thinking]);
+    return startInsightRefresh({
+      read: () => latest.current,
+      request: meetingInsights,
+      thinking: setThinking,
+      received: (next) => {
+        setInsights(next);
+        setInsightError(false);
+        setCaptureHint(next.prompts?.[0] || next.questions[0] || "");
+      },
+      failed: () => setInsightError(true),
+    });
+  }, [startedAt]);
 
   async function ask(event: React.FormEvent) {
     event.preventDefault();
@@ -194,6 +178,14 @@ export default function LiveMeeting({
         </button>
       </div>
 
+      {(insights.prompts?.[0] || insights.questions[0]) && (
+        <button className="live-suggestion" onClick={() => setTab("assist")}>
+          <Sparkles size={16} />
+          <span><strong>Frage oder Hinweis zum Gespräch</strong>{insights.prompts?.[0] || insights.questions[0]}</span>
+        </button>
+      )}
+      {insightError && <p className="live-error" role="status">Hinweise konnten nicht geladen werden. Der Assistent versucht es erneut.</p>}
+
       <div className="live-panes" data-tab={tab}>
         <div className="live-pane live-transcript" ref={scroller}
           onScroll={(e) => {
@@ -202,8 +194,11 @@ export default function LiveMeeting({
               node.scrollHeight - node.scrollTop - node.clientHeight < 80;
           }}
         >
+          {speech && <LiveSpeakers speech={speech} filter={speakerFilter} onFilter={setSpeakerFilter} onRename={setCaptureSpeakerName} />}
           <TranscriptChat
             transcript={transcript}
+            speech={speech}
+            filter={speakerFilter}
             startedAt={startedAt}
             empty="Sobald gesprochen wird, erscheint hier das laufende Transkript. Das Live-Transkript ist vorläufig; beim Abschluss wird es durch den finalen Text ersetzt."
           />

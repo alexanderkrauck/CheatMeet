@@ -6,6 +6,7 @@ export interface SpeechTurn {
   speaker: string;
   text: string;
   final: boolean;
+  source?: "mic" | "system";
 }
 export interface MeetingTranscript {
   provider: "assemblyai";
@@ -14,6 +15,10 @@ export interface MeetingTranscript {
   languages: string[];
   turns: SpeechTurn[];
   speakerNames: Record<string, string>;
+  /** Only names explicitly entered by the user, separate from generated labels. */
+  speakerAliases?: Record<string, string>;
+  speakerNameSuggestions?: Record<string, string>;
+  speakerReview?: "pending" | "reviewed" | "skipped";
   liveWarning?: string;
 }
 export const DEFAULT_LANGUAGES = ["de", "en"];
@@ -42,16 +47,26 @@ function stamp(ms: number) {
     ? `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`
     : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
-export function renderTranscript(doc: MeetingTranscript): string {
+export const CAPTURE_SOURCE_LABELS = { mic: "Mikrofon", system: "Systemaudio" };
+/** Source is capture evidence, independent of a provider's changing identity. */
+export function turnSource(turn: SpeechTurn): "mic" | "system" | null {
+  if (turn.source) return turn.source;
+  const prefix = /^(mic|system):/.exec(turn.id)?.[1]
+    || /^(mic|system):/.exec(turn.speaker)?.[1];
+  return prefix === "mic" || prefix === "system" ? prefix : null;
+}
+export function speakerLabel(doc: MeetingTranscript, turn: SpeechTurn): string {
+  if (turn.speaker.endsWith(":unknown"))
+    return doc.phase === "final" ? "Stimme nicht zugeordnet" : "Stimme wird zugeordnet";
   const speakers = [...new Set(doc.turns.map((t) => t.speaker))];
+  return doc.speakerNames[turn.speaker] || `Sprecher ${speakers.indexOf(turn.speaker) + 1}`;
+}
+export function renderTranscript(doc: MeetingTranscript): string {
   return [...doc.turns]
     .sort((a, b) => a.startMs - b.startMs)
     .map((t) => {
-      const name =
-        doc.speakerNames[t.speaker] ||
-        (t.speaker.endsWith(":unknown")
-          ? "Unbekannt"
-          : `Sprecher ${speakers.indexOf(t.speaker) + 1}`);
+      const source = turnSource(t);
+      const name = `${source ? CAPTURE_SOURCE_LABELS[source] + " · " : ""}${speakerLabel(doc, t)}`;
       return `[${stamp(t.startMs)}] (${name.replace(/[()\r\n]/g, " ")}) ${t.text}`;
     })
     .join("\n\n");
@@ -64,6 +79,7 @@ export function renameSpeaker(
   return {
     ...doc,
     speakerNames: { ...doc.speakerNames, [speaker]: name.slice(0, 80) },
+    speakerAliases: { ...doc.speakerAliases, [speaker]: name.slice(0, 80) },
   };
 }
 export function mergeSpeaker(
@@ -73,14 +89,20 @@ export function mergeSpeaker(
 ): MeetingTranscript {
   if (from === into || !doc.turns.some((t) => t.speaker === into)) return doc;
   const speakerNames = { ...doc.speakerNames };
+  const speakerAliases = { ...doc.speakerAliases };
   delete speakerNames[from];
+  delete speakerAliases[from];
   return {
     ...doc,
     speakerNames,
+    speakerAliases,
     turns: doc.turns.map((t) =>
       t.speaker === from ? { ...t, speaker: into } : t,
     ),
   };
+}
+export function needsSpeakerReview(speech?: MeetingTranscript): boolean {
+  return speech?.phase === "final" && speech.speakerReview === "pending" && speech.turns.length > 0;
 }
 /** Validate provider output without silently dropping malformed utterances. */
 export function batchTranscript(

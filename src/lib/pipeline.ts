@@ -5,6 +5,7 @@ import { errorMessage } from "./session";
 import type { Draft } from "../types";
 import { ensureFinalTranscript } from "./finalTranscription";
 import { auth } from "./firebase";
+import { needsSpeakerReview } from "../../shared/transcription";
 
 export type JobStage =
   | "saving"
@@ -12,6 +13,7 @@ export type JobStage =
   | "analyzing"
   | "exporting"
   | "done"
+  | "review"
   | "error";
 
 export interface JobState {
@@ -37,7 +39,7 @@ let active: JobState[] = [];
 
 function changed() {
   active = [...jobs.values()].filter(
-    (job) => job.stage !== "done" && job.stage !== "error",
+    (job) => job.stage !== "done" && job.stage !== "error" && job.stage !== "review",
   );
   for (const listener of listeners) listener();
 }
@@ -102,6 +104,15 @@ export function startProcessing({
       update("analyzing", "Finales Transkript und Sprecher werden erstellt …", { warning });
       await ensureFinalTranscript(current, token);
       assertOwner();
+      if (needsSpeakerReview(current.report.speech)) {
+        current.report = { ...current.report, status: "pending", error: "" };
+        await putLocal(owner, current.report);
+        assertOwner();
+        const result = await syncReport(current.report, token);
+        assertOwner();
+        update("review", "Sprecher prüfen oder Prüfung überspringen.", { warning: result.warning || warning });
+        return;
+      }
 
       if (analyze) {
         update("analyzing", "Bericht wird erstellt …", { warning });

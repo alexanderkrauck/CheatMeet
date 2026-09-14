@@ -112,3 +112,16 @@ describe("recording audio-source selection", () => {
     expect(vi.mocked(startAssemblyLive).mock.calls[0][0].system).toBeUndefined();
   });
 });
+it("retains a live speaker name through partials and final live updates", async () => {
+  await capture.startCapture(true, async () => {}, "mic");
+  const changed = vi.mocked(startAssemblyLive).mock.calls[0][2];
+  const speech = { provider: "assemblyai", phase: "live", languages: ["de"], speakerNames: { "mic:0:A": "Sprecher 1" },
+    turns: [{ id: "mic:0:0", speaker: "mic:0:A", text: "Hallo", startMs: 0, endMs: 1000, final: true }] } as const;
+  changed(structuredClone(speech) as any);
+  capture.setCaptureSpeakerName("mic:0:A", "Alex");
+  changed({ ...structuredClone(speech), phase: "pending" } as any);
+  expect(capture.captureSnapshot().draft.report.speech?.speakerNames["mic:0:A"]).toBe("Alex");
+  expect(capture.captureSnapshot().draft.report.transcription).toContain("Mikrofon · Alex");
+  await capture.finishTranscription();
+  expect(capture.captureSnapshot().draft.report.transcription).toContain("Mikrofon · Alex");
+});

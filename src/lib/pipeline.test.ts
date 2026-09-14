@@ -159,4 +159,19 @@ describe("processing pipeline", () => {
     expect(syncReport).not.toHaveBeenCalled();
   });
 
+it("exports final text for review and pauses before summary generation without deleting the draft", async () => {
+  account.currentUser = { uid: "user-1" };
+  analyzeDraft.mockClear(); deleteDraft.mockClear();
+  finalTranscript.mockResolvedValue(undefined);
+  const reviewDraft = { ...draft, report: { ...report, speech: {
+    provider: "assemblyai", phase: "final", speakerReview: "pending", languages: ["de"], speakerNames: {},
+    turns: [{ id: "batch:0", speaker: "batch:A", startMs: 0, endMs: 1000, text: "Frage", final: true }],
+  } } };
+  syncReport.mockResolvedValue({ report: reviewDraft.report });
+  await startProcessing({ owner: "user-1", draft: reviewDraft as any, token: "drive-token", analyze: true });
+  expect(analyzeDraft).not.toHaveBeenCalled(); expect(deleteDraft).not.toHaveBeenCalled();
+  expect(jobFor(report.id)?.stage).toBe("review"); expect(activeJobs()).toEqual([]);
+  clearJob(report.id);
+});
+
 });

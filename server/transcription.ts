@@ -23,6 +23,13 @@ class ApiError extends Error {
     super(message);
   }
 }
+class ProviderError extends ApiError {
+  constructor(public upstreamStatus: number) {
+    super(502, `AssemblyAI hat die Anfrage nicht bestätigt (${upstreamStatus}). Die Aufnahme bleibt erhalten.`);
+  }
+}
+// These responses explicitly reject a job; timeouts and 5xx remain uncertain.
+const REJECTED = new Set([400, 401, 403, 404, 413, 415, 422, 429]);
 export function createTranscriptionRouter(
   options: {
     verifyToken?: typeof verifyFirebaseToken;
@@ -56,11 +63,7 @@ export function createTranscriptionRouter(
       headers: { ...init.headers, authorization: key()! },
       signal: AbortSignal.timeout(300000),
     });
-    if (!response.ok)
-      throw new ApiError(
-        502,
-        `AssemblyAI ist nicht erreichbar (${response.status}). Es wird keine Transkription automatisch wiederholt.`,
-      );
+    if (!response.ok) throw new ProviderError(response.status);
     return response.json();
   };
   const base = "https://api.eu.assemblyai.com/v2";
@@ -78,8 +81,12 @@ export function createTranscriptionRouter(
       throw new ApiError(400, "Ungültige Meeting-ID.");
     return value;
   };
-  const fail = (res: express.Response, error: unknown) => {
+  const fail = (res: express.Response, error: unknown, stage = "request") => {
     // Do not expose upstream bodies, upload URLs or keys.
+    console.error(JSON.stringify({ event: "transcription_failure", stage,
+      status: error instanceof ApiError ? error.status : 503,
+      ...(error instanceof ProviderError ? { upstreamStatus: error.upstreamStatus } : {}),
+    }));
     res
       .status(error instanceof ApiError ? error.status : 503)
       .json({
@@ -156,6 +163,11 @@ export function createTranscriptionRouter(
         res.status(404).json({ state: "missing" });
         return;
       }
+      if (job.state === "retryable") {
+        res.setHeader("Cache-Control", "no-store");
+        res.json({ state: "retryable" });
+        return;
+      }
       if (!job.providerId)
         throw new ApiError(
           409,
@@ -210,6 +222,8 @@ export function createTranscriptionRouter(
     async (req, res) => {
       let stream: Readable | undefined;
       let input: Readable | undefined;
+      let reserved: { key: string; job: Submission } | undefined;
+      let stage: "request" | "upload" | "submit" | "checkpoint" = "request";
       try {
         const uid = await owner(req);
         if (!key())
@@ -219,7 +233,8 @@ export function createTranscriptionRouter(
           );
         const id = reportId(req.params.id);
         const storageKey = submissionKey(uid, `${id}:final`);
-        if (await store.get(storageKey)) {
+        const existing = await store.get(storageKey);
+        if (existing && existing.state !== "retryable") {
           res.status(202).json({ state: "existing" });
           return;
         }
@@ -284,10 +299,12 @@ export function createTranscriptionRouter(
             );
           input = Readable.fromWeb(media.body as any);
         } else input = createReadStream(req.file!.path);
-        if (!(await store.reserve(storageKey, job))) {
+        if (!(await (existing ? store.retry(storageKey, job) : store.reserve(storageKey, job)))) {
           res.status(202).json({ state: "existing" });
           return;
         }
+        reserved = { key: storageKey, job };
+        stage = "upload";
         const source = input;
         const maxBytes = options.maxFileBytes ?? MAX_FILE_BYTES;
         stream = Readable.from(
@@ -313,14 +330,12 @@ export function createTranscriptionRouter(
         const languageSettings =
           languages.length === 1
             ? { language_code: languages[0] }
-            : {
-                language_detection: true,
-                ...(languages.includes("en")
-                  ? { language_codes: languages }
-                  : {}),
-              };
+            : { language_detection: true };
+        // Pro handles multilingual speech natively. language_codes selects the
+        // legacy code-switching mode and cannot accompany language_detection.
         // No retry around this POST. Persist the reservation BEFORE it, including
         // uncertain transport failure, so another process cannot create pass three.
+        stage = "submit";
         const submitted = await api(`${base}/transcript`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -339,6 +354,7 @@ export function createTranscriptionRouter(
             502,
             "Transkriptionsauftrag wurde nicht bestätigt.",
           );
+        stage = "checkpoint";
         await store.set(storageKey, {
           ...job,
           state: "submitted",
@@ -346,7 +362,14 @@ export function createTranscriptionRouter(
         });
         res.status(202).json({ state: "processing" });
       } catch (error) {
-        fail(res, error);
+        if (reserved && (stage === "upload" || (stage === "submit" && error instanceof ProviderError && REJECTED.has(error.upstreamStatus)))) {
+          // Uploading alone never starts ASR. Explicit submission rejection also
+          // leaves the final pass unused. Persist that evidence before retrying.
+          await store.set(reserved.key, { ...reserved.job, state: "retryable", failureStage: stage as "upload" | "submit",
+            ...(error instanceof ProviderError ? { upstreamStatus: error.upstreamStatus } : {}),
+          }).catch(() => {}); // On store failure the old reservation stays closed.
+        }
+        fail(res, error, stage);
       } finally {
         stream?.destroy();
         input?.destroy();

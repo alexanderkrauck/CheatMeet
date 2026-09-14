@@ -101,6 +101,9 @@ it("checkpoints the final transcript before summarizing, and ignores the summary
     return Response.json(final());
   });
   const d = draft();
+  await expect(analyzeDraft(d)).rejects.toThrow("Sprecher prüfen");
+  expect(mocks.fetch.mock.calls.map(c => c[0])).not.toContain("/api/analyze");
+  d.report.speech!.speakerReview = "reviewed";
   const result = await analyzeDraft(d);
   expect(result.transcription).toContain("Keine Zusage.");
   expect(result.transcription).not.toContain("Modell-Echo");
@@ -175,4 +178,21 @@ it("uses a small Drive-reference request once audio is backed up", async () => {
     driveAccessToken: "short-drive-grant",
     languages: ["de", "en"],
   });
+});
+it("retries a server-confirmed unused pass but still performs just one accepted final submission", async () => {
+  mocks.fetch.mockResolvedValueOnce(Response.json({ state: "retryable" }))
+    .mockResolvedValueOnce(Response.json({ state: "processing" }, { status: 202 }))
+    .mockResolvedValueOnce(Response.json(final()));
+  const d = draft();
+  const running = ensureFinalTranscript(d);
+  await vi.runAllTimersAsync(); await running;
+  expect(mocks.fetch.mock.calls.map(c => c[1].method || "GET")).toEqual(["GET", "POST", "GET"]);
+  expect(d.report.speech?.speakerReview).toBe("pending");
+});
+it("a deliberate skipped review permits the final text summary without any new ASR call", async () => {
+  const d = draft(); d.report.speech = { ...final().speech, speakerReview: "skipped" } as any;
+  d.report.transcription = "Finaler Text";
+  mocks.fetch.mockResolvedValue(Response.json({ title: "Test", summary: "Zusammenfassung", transcription: "Echo", todos: [], takeaways: [] }));
+  await analyzeDraft(d);
+  expect(mocks.fetch.mock.calls.map(c => c[0])).toEqual(["/api/analyze"]);
 });

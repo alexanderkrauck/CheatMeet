@@ -401,6 +401,7 @@ export default function RecordPage() {
               ) : recording ? (
                 <LiveMeeting
                   transcript={draft.report.transcription}
+                  speech={draft.report.speech}
                   pending={transcribing}
                   paused={state === "paused"}
                   timer={formatTime(durationMs)}
@@ -419,7 +420,7 @@ export default function RecordPage() {
                     </h1>
                     <p>
                       Audio sichern, das finale Transkript mit Sprechern erstellen
-                      und daraus Zusammenfassung, Erkenntnisse und Aufgaben ableiten.
+                      und die Sprecher prüfen. Danach entsteht die Zusammenfassung.
                     </p>
                   </div>
                   {draft.report.speech?.phase !== "final" && <MeetingLanguages value={draft.report.speech?.languages} onChange={setCaptureLanguages} />}
@@ -485,7 +486,7 @@ export default function RecordPage() {
                   <button className="walk-finish" onClick={stopCapture}>
                     <span>
                       <strong>Meeting abschließen</strong>
-                      <small>Weiter zum Sichern &amp; Analysieren</small>
+                      <small>Weiter zum Sichern &amp; Sprecherprüfen</small>
                     </span>
                     <ArrowRight size={22} />
                   </button>
@@ -539,7 +540,7 @@ export default function RecordPage() {
                     onClick={() => process(true)}
                   >
                     <WandSparkles size={21} />
-                    In Drive sichern &amp; analysieren
+                    Sichern &amp; Sprecher prüfen
                     <ArrowRight size={18} />
                   </button>
                   <p className="walk-save-hint">
@@ -547,7 +548,7 @@ export default function RecordPage() {
                       ? "Sobald du online bist, kannst du hier fortfahren."
                       : !driveReady
                         ? "Drive-Freigabe fehlt oder ist abgelaufen. Dein Entwurf bleibt lokal gesichert."
-                        : "Originale sichern → KI-Bericht erstellen → fertig"}
+                        : "Audio sichern → Sprecher prüfen → Zusammenfassung"}
                   </p>
                 </>
               )}

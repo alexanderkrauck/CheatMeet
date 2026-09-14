@@ -63,6 +63,7 @@ export interface TranscriptLine {
   source: TranscriptSource | null;
   text: string;
   speaker?: string;
+  speakerId?: string;
 }
 
 /** Parses the stored transcript back into displayable lines. */
@@ -74,12 +75,13 @@ export function parseTranscript(transcript: string): TranscriptLine[] {
       if (!match) return { at: "", source: null, text: line };
       const label = match[2];
       const source =
-        label === SOURCE_LABELS.mic
+        label === SOURCE_LABELS.mic || label?.startsWith("Mikrofon · ")
           ? ("mic" as const)
-          : label === SOURCE_LABELS.system
+          : label === SOURCE_LABELS.system || label?.startsWith("Systemaudio · ")
             ? ("system" as const)
             : null;
-      return { at: match[1], source, text: line.slice(match[0].length), ...(label && !source ? { speaker: label } : {}) };
+      const speaker = label?.replace(/^(Mikrofon|Systemaudio) · /, "");
+      return { at: match[1], source, text: line.slice(match[0].length), ...(speaker && (!source || speaker !== label) ? { speaker } : {}) };
     })
     .filter((line) => line.text.trim());
 }

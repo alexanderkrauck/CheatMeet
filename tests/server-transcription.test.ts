@@ -210,3 +210,48 @@ it("a rejected Drive grant does not consume the final transcription reservation"
   ).toBe(404);
   expect(provider).toHaveBeenCalledOnce();
 });
+
+it("uses Pro native language detection without the incompatible language_codes parameter", async () => {
+  expect((await submit()).status).toBe(202);
+  const params = JSON.parse(provider.mock.calls.find(([url]) => url.endsWith('/transcript'))![1].body);
+  expect(params.language_detection).toBe(true);
+  expect(params.language_codes).toBeUndefined();
+});
+it("allows one atomic retry after explicit provider rejection, including across restart", async () => {
+  const original = provider.getMockImplementation()!;
+  let reject = true;
+  provider.mockImplementation(async (url, init) => {
+    if (url.endsWith('/transcript') && reject) return Response.json({ error: 'invalid settings' }, { status: 400 });
+    return original(url, init);
+  });
+  expect((await submit()).status).toBe(502);
+  const state = await fetch(`${base}/final/meeting-1`, { headers: { Authorization: 'Bearer alice' } });
+  expect(await state.json()).toEqual({ state: 'retryable' });
+  await new Promise<void>(resolve => server.close(() => resolve())); await listen();
+  reject = false;
+  expect((await Promise.all([submit(), submit()])).map(r => r.status)).toEqual([202, 202]);
+  expect(provider.mock.calls.filter(([url]) => url.endsWith('/transcript'))).toHaveLength(2);
+});
+it("allows upload failure recovery without consuming a transcription pass", async () => {
+  const original = provider.getMockImplementation()!;
+  provider.mockImplementation(async (url, init) => {
+    if (url.endsWith('/upload')) throw new Error('upload disconnected');
+    return original(url, init);
+  });
+  expect((await submit()).status).toBe(503);
+  expect(provider.mock.calls.filter(([url]) => url.endsWith('/transcript'))).toHaveLength(0);
+  provider.mockImplementation(original);
+  expect((await submit()).status).toBe(202);
+});
+it("keeps a 5xx submission outcome blocked and logs only stage/status, not provider bodies", async () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const original = provider.getMockImplementation()!;
+    provider.mockImplementation(async (url, init) => url.endsWith('/transcript')
+      ? Response.json({ error: 'private-url-and-secret' }, { status: 500 }) : original(url, init));
+    expect((await submit()).status).toBe(502);
+    expect((await fetch(`${base}/final/meeting-1`, { headers: { Authorization: 'Bearer alice' } })).status).toBe(409);
+    expect(log.mock.calls.map(c => c[0]).join(' ')).toContain('"stage":"submit"');
+    expect(log.mock.calls.map(c => c[0]).join(' ')).not.toContain('private-url-and-secret');
+  } finally { log.mockRestore(); }
+});

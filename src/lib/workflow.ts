@@ -13,6 +13,7 @@ import { reportToMarkdown } from "./markdown";
 import { withWebmDuration } from "./webmDuration";
 import type { Draft, ReportData } from "../types";
 import { ensureFinalTranscript } from "./finalTranscription";
+import { needsSpeakerReview } from "../../shared/transcription";
 
 // An operation belongs to the account that started it, including across tab sign-outs.
 function ownedOperation() {
@@ -58,6 +59,8 @@ async function summaryPreferences(owner: string): Promise<string> {
 export async function analyzeDraft(draft: Draft): Promise<ReportData> {
   const { owner, run } = ownedOperation();
   await run(() => ensureFinalTranscript(draft));
+  if (needsSpeakerReview(draft.report.speech))
+    throw new Error("Bitte zuerst die Sprecher prüfen oder die Prüfung überspringen.");
   const transcription = draft.report.transcription?.trim() || "";
   // A successful empty final transcript is silence, not permission to send the
   // recording to Gemini for a third transcription.

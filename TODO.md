@@ -3,6 +3,20 @@
 Maintained from real recordings. Each item says what was observed and where, so
 it can be picked up without re-deriving the context.
 
+## Production feedback — 2026-09-14 afternoon
+
+- [x] Inspect Cloud Run logs and the saved report; reproduce the batch parameter rejection without audio submission.
+- [x] Fix mutually exclusive batch language parameters and distinguish confirmed rejection from an uncertain accepted submission.
+- [x] Reconcile only the diagnosed stuck reservation as retryable with user approval; no audio submitted.
+- [x] Preserve visible microphone/system source labels, including unknown live identities; add source/speaker filters and live naming.
+- [x] Fix live hint requests being invalidated by React updates; keep remote meeting speech in assistant context and display the newest hint prominently.
+- [x] Pause for final speaker review before summary, with an explicit skip. Support naming, merging, reassignment, splitting, and playback.
+- [x] Suggest live-entered names using repeated matching passages; require confirmation and decline ambiguous/merged/split matches.
+- [ ] Deploy the pushed fixes through AI Studio; reopen the app and resume the failed report.
+- [ ] Preserve separate durable audio channels for reliable source attribution in the final batch pass. Existing mixed recordings cannot regain an exact channel split.
+
+See [incident details](TRANSCRIPTION_INCIDENT_2026-09-14.md).
+
 ## Current follow-up — 2026-09-14 transcription feedback
 
 The current implementation and rollout checkpoint are in
@@ -38,7 +52,7 @@ earlier research and tradeoffs.
       through the server to AssemblyAI for final transcription.
 - [ ] Configure the server secret, verify runtime job-store permissions and
       provider retention, and run a scoped native/real-provider smoke test.
-      Deployment is not authorized yet.
+      Initial AI Studio deployment is complete; follow-up fixes await the user’s next deployment.
 - [ ] Validate three or more recurring speakers, overlap and cross-source echo.
       Do not replay the existing synthetic sample; its two submissions are spent.
 

@@ -2046,6 +2046,16 @@ body {
   font-weight: 650;
   padding: 0 4px;
 }
+.transcript-source {
+  display: inline-block;
+  margin-right: 7px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 750;
+  letter-spacing: 0;
+}
+.transcript-source.is-mic { background: #e0e7ff; color: #312e81; }
+.transcript-source.is-system { background: #d1fae5; color: #065f46; }
 .chat-time {
   display: block;
   text-align: right;
@@ -2482,5 +2492,24 @@ body {
 .meeting-languages label { display: flex; align-items: center; gap: 5px; }
 .speaker-editor-row { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 12px; }
 .speaker-editor-row label { flex: 1 1 200px; }
+.speaker-editor-row { padding: 14px; border: 1px solid #e2e8f0; border-radius: 10px; }
+.speaker-editor-row > p { order: 1; flex-basis: 100%; margin: 0; }
+.speaker-editor-row > button { order: 2; align-self: flex-start; }
 .speaker-editor .field { display: block; width: 100%; margin-top: 6px; }
 .speaker-turn-edit { margin: 16px 0; }
+
+.live-suggestion { display: flex; align-items: flex-start; gap: 10px; margin: 10px 0; padding: 12px 16px; width: 100%; text-align: left; background: #eef2ff; color: #312e81; border: 1px solid #c7d2fe; border-radius: 10px; line-height: 1.5; }
+.live-suggestion strong { display: block; font-size: 11px; margin-bottom: 3px; }
+.live-suggestion svg { flex-shrink: 0; margin-top: 3px; }
+.live-speakers { margin-bottom: 16px; font-size: 12px; }
+.speaker-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.speaker-filters button { border: 1px solid #cbd5e1; border-radius: 16px; padding: 5px 10px; background: #fff; color: #334155; max-width: 100%; overflow-wrap: anywhere; }
+.speaker-filters button[aria-pressed="true"] { background: #312e81; color: white; border-color: #312e81; }
+.live-speakers summary { cursor: pointer; color: #334155; }
+.live-speakers details p { color: #475569; margin: 8px 0; }
+.live-speakers label { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+.live-speakers label span { flex: 1 1 130px; overflow-wrap: anywhere; }
+.live-speakers input { border: 1px solid #cbd5e1; border-radius: 5px; padding: 6px; min-width: 0; max-width: 100%; }
+.speaker-review { padding: 20px; margin: 20px 0; }
+.speaker-review-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.speaker-example { font-size: 13px; color: #475569; overflow-wrap: anywhere; }

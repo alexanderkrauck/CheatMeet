@@ -4,19 +4,10 @@ import {
   validateInsights,
   type MeetingInsights,
 } from "../../shared/analysis";
-import { parseTranscript } from "./transcriptAssembler";
-
-/**
- * Whatever plays through the speakers — music, a video — is noise for the
- * assistant. When both sources are present, reason over speech only; a
- * single-source recording has nothing to strip.
- */
+/** Both sources can contain meeting participants. Never infer background noise
+ * from the capture device or drop remote participants' questions. */
 export function speechOnly(transcript: string): string {
-  const rows = parseTranscript(transcript);
-  if (!rows.some((row) => row.source === "system")) return transcript;
-  const spoken = rows.filter((row) => row.source !== "system");
-  if (!spoken.length) return transcript;
-  return spoken.map((row) => `[${row.at}] ${row.text}`).join("\n\n");
+  return transcript;
 }
 
 export const emptyInsights = (): MeetingInsights => ({

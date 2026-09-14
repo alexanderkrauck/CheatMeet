@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename, rmdir } from "node:fs/promises";
 import path from "node:path";
 import firebaseConfig from "../firebase-applet-config.json";
 import { serviceAccountToken } from "./tokenStore";
 
 export interface Submission {
-  state: "reserved" | "submitted" | "failed";
+  state: "reserved" | "submitted" | "failed" | "retryable";
+  failureStage?: "upload" | "submit";
+  upstreamStatus?: number;
   providerId?: string;
   languages: string[];
   createdAt: string;
@@ -14,6 +16,7 @@ export interface SubmissionStore {
   get(key: string): Promise<Submission | null>;
   /** Atomic create-if-absent, across instances/restarts. */
   reserve(key: string, value: Submission): Promise<boolean>;
+  retry(key: string, value: Submission): Promise<boolean>;
   set(key: string, value: Submission): Promise<void>;
 }
 export const submissionKey = (owner: string, id: string) =>
@@ -50,6 +53,22 @@ export function fileSubmissionStore(
       const temp = `${file(key)}.${crypto.randomUUID()}.tmp`;
       await writeFile(temp, JSON.stringify(value), { mode: 0o600 });
       await rename(temp, file(key));
+    },
+    async retry(key, value) {
+      const lock = `${file(key)}.lock`;
+      try { await mkdir(lock); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+        throw error;
+      }
+      try {
+        const existing = JSON.parse(await readFile(file(key), "utf8"));
+        if (existing.state !== "retryable") return false;
+        await this.set(key, value);
+        return true;
+      } finally {
+        await rmdir(lock);
+      }
     },
   };
 }
@@ -99,6 +118,18 @@ export function firestoreSubmissionStore(fetchImpl = fetch): SubmissionStore {
       const res = await call(key, { method: "PATCH", body: body(value) });
       if (!res.ok)
         throw new Error("Transkript-Auftrag konnte nicht gesichert werden.");
+    },
+    async retry(key, value) {
+      const current = await call(key);
+      if (!current.ok) throw new Error("Transkript-Auftrag konnte nicht gelesen werden.");
+      const data = await current.json();
+      if (JSON.parse(data.fields.value.stringValue).state !== "retryable") return false;
+      const res = await call(key, { method: "PATCH", body: body(value) },
+        `?currentDocument.updateTime=${encodeURIComponent(data.updateTime)}`);
+      if (res.status === 409 || res.status === 412) return false;
+      if (res.status === 400 && (await res.json()).error?.status === "FAILED_PRECONDITION") return false;
+      if (!res.ok) throw new Error("Transkript-Auftrag konnte nicht erneut reserviert werden.");
+      return true;
     },
   };
 }

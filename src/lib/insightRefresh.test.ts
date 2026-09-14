@@ -1,0 +1,33 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { startInsightRefresh } from "./insightRefresh";
+afterEach(() => vi.useRealTimers());
+it("delivers a pending response while transcript keeps updating, then refreshes without overlapping requests", async () => {
+  vi.useFakeTimers();
+  let text = "Die Frage zum Budget ist noch offen. ".repeat(4);
+  let resolve!: (value: string) => void;
+  const request = vi.fn(() => new Promise<string>(r => { resolve = r; }));
+  const received = vi.fn(), thinking = vi.fn();
+  const stop = startInsightRefresh({ read: () => text, request, received, thinking, failed: vi.fn() });
+  text += "Weitere Worte während der Anfrage.";
+  await vi.advanceTimersByTimeAsync(50000);
+  expect(request).toHaveBeenCalledTimes(1);
+  resolve("Frage nach dem Budget.");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(received).toHaveBeenCalledWith("Frage nach dem Budget.");
+  expect(thinking).toHaveBeenLastCalledWith(false);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(request).toHaveBeenCalledTimes(2);
+  stop(); resolve("Antwort nach Navigation");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(received).toHaveBeenCalledTimes(1);
+});
+it("retries a failed hints request after the interval even without new speech", async () => {
+  vi.useFakeTimers();
+  const request = vi.fn().mockRejectedValueOnce(new Error()).mockResolvedValue("Hinweis");
+  const received = vi.fn(), failed = vi.fn();
+  const stop = startInsightRefresh({ read: () => "Budget? ".repeat(20), request, received, thinking: vi.fn(), failed });
+  await vi.advanceTimersByTimeAsync(45000);
+  expect(failed).toHaveBeenCalledOnce();
+  expect(received).toHaveBeenCalledWith("Hinweis");
+  stop();
+});

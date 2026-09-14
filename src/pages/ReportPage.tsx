@@ -25,7 +25,10 @@ import { clearJob, jobFor, subscribeJobs } from "../lib/pipeline";
 import { reportToMarkdown } from "../lib/markdown";
 import TranscriptTimeline from "../components/TranscriptTimeline";
 import SpeakerEditor from "../components/SpeakerEditor";
-import { renderTranscript } from "../../shared/transcription";
+import { renderTranscript, needsSpeakerReview } from "../../shared/transcription";
+import { ensureFinalTranscript } from "../lib/finalTranscription";
+import { downloadDriveFile } from "../lib/drive";
+import { withWebmDuration } from "../lib/webmDuration";
 
 export default function ReportPage({
   report: initialReport,
@@ -42,6 +45,17 @@ export default function ReportPage({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
+  const [audioUrl, setAudioUrl] = useState("");
+  const [audioLoading, setAudioLoading] = useState(false);
+  const audio = useRef<HTMLAudioElement>(null);
+  const seekTo = useRef(0);
+  const audioRequest = useRef(0);
+  useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
+  useEffect(() => {
+    audioRequest.current++;
+    setAudioUrl("");
+    return () => { audioRequest.current++; };
+  }, [params.id, initialReport?.id]);
 
   useEffect(() => {
     if (initialReport) return;
@@ -100,7 +114,7 @@ export default function ReportPage({
   const job = useSyncExternalStore(subscribeJobs, () =>
     params.id ? jobFor(params.id) : undefined,
   );
-  const running = !!job && job.stage !== "done" && job.stage !== "error";
+  const running = !!job && job.stage !== "done" && job.stage !== "error" && job.stage !== "review";
 
   // The background pipeline writes each step locally; mirror it into the view
   // rather than leaving a stale report on screen.
@@ -112,16 +126,16 @@ export default function ReportPage({
         if (!active || !stored) return;
         setReport(stored.report);
         setDirty(stored.dirty);
+        if (job.stage === "done") {
+          setNotice(job.warning || "In Google Drive gespeichert.");
+          clearJob(job.reportId);
+        }
+        if (job.stage === "error") {
+          setError(job.error || "Der Vorgang ist fehlgeschlagen.");
+          clearJob(job.reportId);
+        }
       })
       .catch(() => {});
-    if (job.stage === "done") {
-      setNotice(job.warning || "In Google Drive gespeichert.");
-      clearJob(job.reportId);
-    }
-    if (job.stage === "error") {
-      setError(job.error || "Der Vorgang ist fehlgeschlagen.");
-      clearJob(job.reportId);
-    }
     return () => {
       active = false;
     };
@@ -160,28 +174,89 @@ export default function ReportPage({
     } catch (e) { setError(errorMessage(e)); } finally { setBusy(""); }
   }
 
-  async function retry() {
-    if (!report || busy) return;
+  async function retry(reviewDecision?: "reviewed" | "skipped") {
+    if (!view || busy) return;
+    const report = view;
     const owner = uid();
+    const checkOwner = () => { if (uid() !== owner) throw new Error("Das Google-Konto wurde gewechselt."); };
     setBusy("Lade...");
+    setError("");
     try {
       const t = (await ensureDriveToken()) || (await connectGoogle());
+      checkOwner();
       const local = await getDraft(owner, report.id);
+      checkOwner();
       const canUseSavedTranscript = report.speech?.phase === "final" || (!report.speech && !!report.transcription.trim());
       const canUseDriveStream = !!report.speech && !!report.rawAudioUrl;
       const d = local?.report.id === report.id && local.audio ? { ...local, report }
         : canUseSavedTranscript || canUseDriveStream ? { report } : await restoreDraft(report, t);
+      checkOwner();
       if (local?.report.id === report.id) await backupDraft(d, t, setBusy);
+      checkOwner();
+      setBusy("Finales Transkript erstellen …");
+      await ensureFinalTranscript(d, t);
+      checkOwner();
+      if (reviewDecision && needsSpeakerReview(d.report.speech)) {
+        d.report = { ...d.report, speech: { ...d.report.speech!, speakerReview: reviewDecision },
+          transcription: renderTranscript(d.report.speech!), error: "" };
+        await putDraft(owner, d);
+        checkOwner();
+      }
+      if (needsSpeakerReview(d.report.speech)) {
+        d.report = { ...d.report, status: "pending", error: "" };
+        await saveReport(d.report);
+        checkOwner();
+        setReport(d.report);
+        setEdited(undefined);
+        const result = await syncReport(d.report, t);
+        checkOwner();
+        setReport(result.report);
+        setNotice(result.warning || "Finales Transkript bereit. Bitte Sprecher prüfen oder Prüfung überspringen.");
+        return;
+      }
       setBusy("Analysiere...");
       const next = await analyzeDraft(d);
+      checkOwner();
       await saveReport(next);
+      checkOwner();
       setReport(next);
+      setEdited(undefined);
       if (local?.report.id === report.id) await putDraft(owner, { ...d, report: next });
       const result = await syncReport(next, t);
+      checkOwner();
       setReport(result.report);
       setDirty(!!result.warning);
       setNotice(result.warning || "Analyse abgeschlossen.");
     } catch (e) { setError(errorMessage(e)); } finally { setBusy(""); }
+  }
+
+  async function listen(atMs: number) {
+    if (!view || audioLoading) return;
+    seekTo.current = atMs / 1000;
+    if (audioUrl && audio.current) {
+      audio.current.currentTime = seekTo.current;
+      void audio.current.play().catch(() => {});
+      return;
+    }
+    const owner = uid();
+    const request = ++audioRequest.current;
+    setAudioLoading(true);
+    try {
+      const draft = await getDraft(owner, view.id);
+      if (uid() !== owner || request !== audioRequest.current) return;
+      let blob = draft?.audio;
+      if (!blob && view.rawAudioUrl) {
+        const token = (await ensureDriveToken()) || (await connectGoogle());
+        if (uid() !== owner || request !== audioRequest.current) return;
+        blob = await downloadDriveFile(view.rawAudioUrl, token);
+      }
+      if (uid() !== owner || request !== audioRequest.current) return;
+      if (!blob) throw new Error("Die Originalaufnahme ist hier nicht verfügbar.");
+      blob = await withWebmDuration(blob, view.durationMs || 0);
+      if (uid() !== owner || request !== audioRequest.current) return;
+      setAudioUrl(URL.createObjectURL(blob));
+    } catch (e) { setError(errorMessage(e)); }
+    finally { setAudioLoading(false); }
   }
 
   function download() {
@@ -269,15 +344,30 @@ export default function ReportPage({
             </div>
           </div>
         ) : (
-          view.status !== "completed" && (
+          view.status !== "completed" && !needsSpeakerReview(view.speech) && (
             <div className="analysis-recovery panel no-print">
               <div>
                 <h2>Analyse erneut starten</h2>
                 <p className="muted">{view.error || "Starte die KI-Analyse."}</p>
               </div>
-              <button className="btn btn-primary" onClick={retry} disabled={!!busy || !!edited}><WandSparkles size={18} /> Bericht erstellen</button>
+              <button className="btn btn-primary" onClick={() => retry()} disabled={!!busy || !!edited}><WandSparkles size={18} /> Bericht erstellen</button>
             </div>
           )
+        )}
+
+        {!running && needsSpeakerReview(view.speech) && (
+          <section className="panel speaker-review no-print">
+            <h2>Sprecher prüfen</h2>
+            <p>Das finale Transkript ist bereit. Prüfe Namen und Zuordnungen, bevor die Zusammenfassung erstellt wird. Vorschläge aus dem Live-Transkript sind mögliche Übereinstimmungen, keine bestätigten Identitäten.</p>
+            {audioLoading && <p role="status">Originalaufnahme laden …</p>}
+            {audioUrl && <audio ref={audio} src={audioUrl} controls style={{ width: "100%" }}
+              onLoadedMetadata={() => { if (audio.current) { audio.current.currentTime = seekTo.current; void audio.current.play().catch(() => {}); } }} />}
+            <SpeakerEditor speech={view.speech!} onListen={listen} onChange={speech => setEdited({ ...view, speech, transcription: renderTranscript(speech), status: "pending", error: "" })} />
+            <div className="speaker-review-actions">
+              <button className="btn btn-primary" onClick={() => retry("reviewed")}>Geprüft · Zusammenfassung erstellen</button>
+              <button className="btn" onClick={() => retry("skipped")}>Prüfung überspringen</button>
+            </div>
+          </section>
         )}
 
         <div className="report-intel">
@@ -314,13 +404,14 @@ export default function ReportPage({
         <section className="report-transcript">
           <h2>Transkript</h2>
           {view.speech && view.speech.phase !== "final" && <p className="muted" role="status">Vorläufiges Live-Transkript. Das finale Transkript wird beim Erstellen des Berichts übernommen.</p>}
-          {edited && view.speech?.phase === "final" ? (
+          {edited && !needsSpeakerReview(view.speech) && view.speech?.phase === "final" ? (
             <SpeakerEditor speech={view.speech} onChange={speech => setEdited({ ...view, speech, transcription: renderTranscript(speech), status: "pending", error: "Transkript korrigiert. Bericht aus dem finalen Text erneut erstellen." })} />
-          ) : edited ? (
+          ) : edited && !needsSpeakerReview(view.speech) ? (
             <textarea className="field" value={view.transcription} onChange={e => setEdited({ ...view, transcription: e.target.value })} />
           ) : (
             <TranscriptTimeline
               transcript={view.transcription}
+              speech={view.speech}
               startedAt={view.date}
               empty="Für dieses Meeting wurde kein Transkript gespeichert."
             />

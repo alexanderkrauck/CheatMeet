@@ -1,7 +1,8 @@
 # AssemblyAI as the default
 
 The user approved AssemblyAI as the default, with no opt-in switch. This change
-is implemented locally and has not been deployed. New recordings use Pro
+was deployed by the user through AI Studio. The incident fixes and speaker-review
+flow below are local changes pending the next user deployment. New recordings use Pro
 streaming plus one independent Pro batch pass; imports use the batch pass only.
 Existing reports retain
 their saved transcript; this does not bulk-retranscribe historical audio.
@@ -25,7 +26,8 @@ their saved transcript; this does not bulk-retranscribe historical audio.
 - Finishing waits for final live events and speaker revisions, up to ten seconds.
   The report then backs up the mixed audio to Drive and requests the final batch
   pass. It automatically replaces the provisional transcript, including speaker
-  identities. Summary generation receives only this final text.
+  identities. The report pauses for speaker review (or an explicit skip) before
+  summary generation receives this final text.
 - The final pass reads the private Drive file through the server and streams
   bytes to AssemblyAI. The small browser request avoids Cloud Run's HTTP/1
   upload-size limit. Drive credentials are used only with Google, never included
@@ -34,7 +36,11 @@ their saved transcript; this does not bulk-retranscribe historical audio.
   A successful empty transcript means silence; it never triggers Gemini audio
   transcription. Failure keeps the original audio and prevents a provisional
   transcript from silently becoming the report's summary source.
-- Final speakers can be renamed/merged and individual turns reassigned or edited.
+- Live speakers can be named and filtered by source or identity. Source badges
+  remain visible even for pending identities. Final speakers can be renamed/merged
+  and individual turns reassigned, split at a text cursor, or edited. Matching
+  passages may suggest a live-entered name; suggestions require confirmation.
+  The original audio can be played at each contribution during review.
   Corrections mark the summary for regeneration; regenerating uses text only.
   Provider IDs from live and batch are never assumed to be the same identity.
 
@@ -44,6 +50,8 @@ Each captured sample is sent at most once through the live transport, with one
 final batch submission per meeting ID. Reconnects do not resend previous audio.
 The final-job reservation is atomic and durable before calling AssemblyAI.
 Concurrent requests, page retries and server restarts reuse its saved provider ID.
+An upload failure or an explicit provider rejection is persisted as retryable,
+with atomic reclamation so concurrent retries still create only one accepted job.
 A provider submission with an uncertain outcome is blocked from automatic replay.
 The raw audio is retained; this conservative case needs manual reconciliation,
 not deletion of the reservation or another transcription under a new ID.
@@ -73,7 +81,7 @@ that these results are deleted after export. Confirm that policy before rollout.
 
 ## Verification and practical limits
 
-Local checks on 2026-09-14: **216 tests across 22 files**, TypeScript check,
+Local checks after the incident fixes on 2026-09-14: **229 tests across 25 files**, TypeScript check,
 production build, five PWA integration tests, nine deployment-config tests and
 `git diff --check` passed. The deployment smoke script passed against the local
 production bundle with placeholder keys (no provider calls). Playwright verified
@@ -95,3 +103,5 @@ real-meeting accuracy benchmark. This local implementation does not establish
 speaker accuracy for overlap, cross-source echo or all native Teams capture
 setups. Real OS picker, long-duration and production-provider checks remain
 rollout acceptance work. Default behavior does not mean those limits disappear.
+
+Incident diagnosis and recovery: see [TRANSCRIPTION_INCIDENT_2026-09-14.md](TRANSCRIPTION_INCIDENT_2026-09-14.md).

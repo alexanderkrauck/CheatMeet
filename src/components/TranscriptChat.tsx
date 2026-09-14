@@ -1,7 +1,9 @@
+import { CAPTURE_SOURCE_LABELS, type MeetingTranscript } from "../../shared/transcription";
+import { transcriptRows } from "../lib/transcriptRows";
+import type { SpeakerFilter } from "./LiveSpeakers";
 import {
   SOURCE_LABELS,
   parseTimestamp,
-  parseTranscript,
 } from "../lib/transcriptAssembler";
 
 /**
@@ -15,10 +17,14 @@ import {
  */
 export default function TranscriptChat({
   transcript,
+  speech,
+  filter = "all",
   startedAt,
   empty = "Kein Transkript vorhanden.",
 }: {
   transcript: string;
+  speech?: MeetingTranscript;
+  filter?: SpeakerFilter;
   /** Recording start, so a relative offset can also be shown as a wall clock. */
   startedAt?: string;
   empty?: string;
@@ -32,21 +38,23 @@ export default function TranscriptChat({
       minute: "2-digit",
     });
   };
-  const rows = parseTranscript(transcript);
+  const rows = transcriptRows(transcript, speech).filter(row =>
+    filter === "all" || row.source === filter || `speaker:${row.speakerId}` === filter);
   if (!rows.length) return <p className="live-empty">{empty}</p>;
   const labelled = rows.some((row) => row.speaker || row.source === "system");
   return (
     <div className="chat">
       {rows.map((row, index) => {
         // Only label a change of speaker, so a run of turns reads as one voice.
-        const continued = index > 0 && (rows[index - 1].speaker || rows[index - 1].source) === (row.speaker || row.source);
+        const continued = index > 0 && rows[index - 1].source === row.source && (rows[index - 1].speakerId || rows[index - 1].speaker || rows[index - 1].source) === (row.speakerId || row.speaker || row.source);
         return (
           <div
             className={`chat-turn is-${labelled ? row.source || "unknown" : "single"}${continued ? " is-continued" : ""}`}
             key={index}
           >
-            {labelled && (row.speaker || row.source) && !continued && (
-              <span className="chat-meta">{row.speaker || SOURCE_LABELS[row.source!]}</span>
+            {labelled && (row.speaker || row.source) && (!continued || row.source) && (
+              <span className="chat-meta">{row.source && <span className={`transcript-source is-${row.source}`}>{CAPTURE_SOURCE_LABELS[row.source]}</span>}
+                      {row.speaker || SOURCE_LABELS[row.source!]}</span>
             )}
             <p className="chat-bubble">
               <span>{row.text}</span>

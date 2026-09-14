@@ -12,7 +12,7 @@ import { errorMessage } from "./session";
 import { auth } from "./firebase";
 import type { AudioSourcePreference } from "./audioSources";
 import { startAssemblyLive } from "./assemblyLive";
-import { DEFAULT_LANGUAGES, renderTranscript, validLanguages } from "../../shared/transcription";
+import { DEFAULT_LANGUAGES, renderTranscript, validLanguages, renameSpeaker } from "../../shared/transcription";
 
 export type CaptureState = "ready" | "recording" | "paused" | "review";
 
@@ -250,6 +250,13 @@ export const setCaptureTitle = (title: string) =>
 export const setCaptureError = (error: string) => emit({ error });
 export const setCaptureBusy = (busy: string) => emit({ busy });
 export const setCaptureHint = (hint: string) => emit({ hint });
+export const setCaptureSpeakerName = (speaker: string, name: string) => {
+  if (ownerChanged() || !snapshot.draft.report.speech) return;
+  const speech = renameSpeaker(snapshot.draft.report.speech, speaker, name);
+  void persist({ ...snapshot.draft, report: { ...snapshot.draft.report,
+    speech, transcription: renderTranscript(speech),
+  } }).catch(() => {});
+};
 export const setCaptureLanguages = (languages: string[]) => {
   if (isCapturing() || !validLanguages(languages)) return;
   void persist({ ...snapshot.draft, report: { ...snapshot.draft.report,
@@ -351,6 +358,9 @@ export async function startCapture(
       elapsed,
       (speech) => {
         if (ownerChanged()) return;
+        const aliases = snapshot.draft.report.speech?.speakerAliases;
+        speech = { ...speech, speakerAliases: aliases,
+          speakerNames: { ...speech.speakerNames, ...aliases } };
         const transcription = renderTranscript(speech);
         emit({
           ...(speech.liveWarning ? { warning: speech.liveWarning } : {}),
@@ -530,6 +540,7 @@ export function finishTranscription(): Promise<string> {
   transcriptionDone ||= pipeline.finish().then((transcription) => {
     if (snapshot.owner !== captureOwner || snapshot.draft.report.id !== reportId) return transcription;
     live = null;
+    if (snapshot.draft.report.speech) transcription = renderTranscript(snapshot.draft.report.speech);
     const draft = {
       ...snapshot.draft,
       report: { ...snapshot.draft.report, transcription },

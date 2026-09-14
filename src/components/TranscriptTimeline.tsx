@@ -1,9 +1,10 @@
+import { CAPTURE_SOURCE_LABELS, type MeetingTranscript } from "../../shared/transcription";
+import { transcriptRows } from "../lib/transcriptRows";
 import { useMemo, useState } from "react";
 import { Check, Copy, Search, X } from "lucide-react";
 import {
   SOURCE_LABELS,
   parseTimestamp,
-  parseTranscript,
 } from "../lib/transcriptAssembler";
 
 /** Splits a line so matches can be marked without dangerously setting HTML. */
@@ -34,16 +35,18 @@ function highlight(text: string, query: string) {
  */
 export default function TranscriptTimeline({
   transcript,
+  speech,
   startedAt,
   empty = "Kein Transkript vorhanden.",
 }: {
   transcript: string;
+  speech?: MeetingTranscript;
   startedAt?: string;
   empty?: string;
 }) {
   const [query, setQuery] = useState("");
   const [copied, setCopied] = useState<boolean | "failed">(false);
-  const rows = useMemo(() => parseTranscript(transcript), [transcript]);
+  const rows = useMemo(() => transcriptRows(transcript, speech), [transcript, speech]);
   const began = startedAt ? Date.parse(startedAt) : NaN;
 
   const clock = (at: string) => {
@@ -117,7 +120,7 @@ export default function TranscriptTimeline({
         <ol className="timeline">
           {visible.map((row, index) => {
             const previous = visible[index - 1];
-            const sameSpeaker = previous && (previous.speaker || previous.source) === (row.speaker || row.source);
+            const sameSpeaker = previous && previous.source === row.source && (previous.speakerId || previous.speaker || previous.source) === (row.speakerId || row.speaker || row.source);
             return (
               <li
                 key={index}
@@ -130,6 +133,7 @@ export default function TranscriptTimeline({
                 <div className="timeline-body">
                   {labelled && (row.speaker || row.source) && !sameSpeaker && (
                     <span className="timeline-speaker">
+                      {row.source && <span className={`transcript-source is-${row.source}`}>{CAPTURE_SOURCE_LABELS[row.source]}</span>}
                       {row.speaker || SOURCE_LABELS[row.source!]}
                     </span>
                   )}
