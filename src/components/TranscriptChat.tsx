@@ -1,6 +1,7 @@
 import { CAPTURE_SOURCE_LABELS, type MeetingTranscript } from "../../shared/transcription";
 import { transcriptRows } from "../lib/transcriptRows";
 import type { SpeakerFilter } from "./LiveSpeakers";
+import type { ReactNode } from "react";
 import InlineSpeakerName from "./InlineSpeakerName";
 import {
   SOURCE_LABELS,
@@ -22,6 +23,8 @@ export default function TranscriptChat({
   filter = "all",
   onRename,
   onEditing,
+  query = "",
+  renderText,
   startedAt,
   empty = "Kein Transkript vorhanden.",
 }: {
@@ -30,6 +33,8 @@ export default function TranscriptChat({
   filter?: SpeakerFilter;
   onRename?: (id: string, name: string) => void;
   onEditing?: (editing: boolean) => void;
+  query?: string;
+  renderText?: (text: string) => ReactNode;
   /** Recording start, so a relative offset can also be shown as a wall clock. */
   startedAt?: string;
   empty?: string;
@@ -44,7 +49,8 @@ export default function TranscriptChat({
     });
   };
   const rows = transcriptRows(transcript, speech).filter(row =>
-    filter === "all" || row.source === filter || `speaker:${row.speakerId}` === filter);
+    (filter === "all" || row.source === filter || `speaker:${row.speakerId}` === filter)
+    && row.text.toLowerCase().includes(query.trim().toLowerCase()));
   if (!rows.length) return <p className="live-empty">{empty}</p>;
   const labelled = rows.some((row) => row.speaker || row.source === "system");
   return (
@@ -59,6 +65,7 @@ export default function TranscriptChat({
           >
             {labelled && (row.speaker || row.source) && (!continued || row.source) && (
               <span className="chat-meta">{row.source && <span className={`transcript-source is-${row.source}`}>{CAPTURE_SOURCE_LABELS[row.source]}</span>}
+                {!row.source && speech?.phase === "final" && <span className="transcript-source is-unknown">Audioquelle offen</span>}
                 {onRename && row.speakerId && !row.speakerId.endsWith(":unknown")
                   ? <InlineSpeakerName key={row.speakerId} id={row.speakerId} name={row.speaker!}
                       source={row.source ? CAPTURE_SOURCE_LABELS[row.source] : "Audio"}
@@ -66,7 +73,7 @@ export default function TranscriptChat({
                   : row.speaker || SOURCE_LABELS[row.source!]}</span>
             )}
             <p className="chat-bubble">
-              <span>{row.text}</span>
+              <span>{renderText ? renderText(row.text) : row.text}</span>
               {row.at && (
                 <time className="chat-time">
                   {row.at}

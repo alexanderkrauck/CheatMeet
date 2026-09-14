@@ -196,3 +196,36 @@ it("a deliberate skipped review permits the final text summary without any new A
   await analyzeDraft(d);
   expect(mocks.fetch.mock.calls.map(c => c[0])).toEqual(["/api/analyze"]);
 });
+
+it("automatically carries live names and sources into the saved final transcript and summary", async () => {
+  const d = draft();
+  const text = "Wir haben heute den Vertrag gemeinsam geprüft und noch keine Zusage erteilt";
+  d.report.speech!.turns = [{id:"mic:0:0",speaker:"mic:0:A",startMs:0,endMs:1000,text,final:true}];
+  d.report.speech!.speakerNames = {"mic:0:A":"Alex"};
+  d.report.speech!.speakerAliases = {"mic:0:A":"Alex"};
+  mocks.fetch.mockImplementation(async (url, init) => {
+    if (url === "/api/analyze") {
+      expect(init.body.get("audio")).toBeNull();
+      expect(init.body.get("transcription")).toContain("Mikrofon · Alex");
+      return Response.json({title:"Test",summary:"Alex prüft den Vertrag.",transcription:"Echo",todos:[],takeaways:[]});
+    }
+    const response=final();response.speech.turns[0].text=text;return Response.json(response);
+  });
+  const result=await analyzeDraft(d);
+  expect(result.speech?.speakerReview).toBe("matched");
+  expect(result.transcription).toContain("Mikrofon · Alex");
+  expect(mocks.putDraft).toHaveBeenCalled();
+  expect(mocks.fetch.mock.calls.map(c=>c[0])).toEqual(["/api/transcription/final/meeting","/api/analyze"]);
+});
+
+it("matches against the user-maintained reference before late provider label revisions", async () => {
+  const d=draft();
+  const text="Wir haben heute den Vertrag gemeinsam geprüft und noch keine Zusage erteilt";
+  d.speakerReference={...d.report.speech!,turns:[{id:"mic:0:0",speaker:"mic:0:A",text,startMs:0,endMs:1000,final:true}],speakerNames:{"mic:0:A":"Alex"},speakerAliases:{"mic:0:A":"Alex"}};
+  d.report.speech={...d.speakerReference,turns:d.speakerReference.turns.map(t=>({...t,speaker:"mic:0:B"})),speakerNames:{"mic:0:B":"Nina"}};
+  const response=final();response.speech.turns[0].text=text;
+  mocks.fetch.mockResolvedValue(Response.json(response));
+  await ensureFinalTranscript(d);
+  expect(d.report.speech?.turns[0].speaker).toBe("mic:0:A");
+  expect(d.report.speech?.speakerAliases?.["mic:0:A"]).toBe("Alex");
+});

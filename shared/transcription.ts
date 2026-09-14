@@ -7,6 +7,14 @@ export interface SpeechTurn {
   text: string;
   final: boolean;
   source?: "mic" | "system";
+  sourceEvidence?: "live-match" | "manual";
+  providerSpeaker?: string;
+}
+export interface SpeakerIssue {
+  speaker: string;
+  turnIds: string[];
+  candidates: string[];
+  reason: "unmatched" | "ambiguous";
 }
 export interface MeetingTranscript {
   provider: "assemblyai";
@@ -18,7 +26,10 @@ export interface MeetingTranscript {
   /** Only names explicitly entered by the user, separate from generated labels. */
   speakerAliases?: Record<string, string>;
   speakerNameSuggestions?: Record<string, string>;
-  speakerReview?: "pending" | "reviewed" | "skipped";
+  speakerReview?: "pending" | "reviewed" | "skipped" | "matched";
+  speakerMatchingVersion?: 1;
+  liveSpeakers?: Record<string, { name: string; source?: "mic" | "system"; alias?: string }>;
+  speakerIssues?: SpeakerIssue[];
   liveWarning?: string;
   liveStartDelayed?: boolean;
 }
@@ -60,7 +71,10 @@ export function speakerLabel(doc: MeetingTranscript, turn: SpeechTurn): string {
   if (turn.speaker.endsWith(":unknown"))
     return "Stimme nicht zugeordnet";
   const speakers = [...new Set(doc.turns.map((t) => t.speaker))];
-  return doc.speakerNames[turn.speaker] || `Sprecher ${speakers.indexOf(turn.speaker) + 1}`;
+  // Older reports stored conservatively matched live names only as suggestions.
+  // Reuse those when no later user name exists, as with new automatic matching.
+  return doc.speakerNames[turn.speaker] || doc.speakerNameSuggestions?.[turn.speaker]
+    || `Sprecher ${speakers.indexOf(turn.speaker) + 1}`;
 }
 export function renderTranscript(doc: MeetingTranscript): string {
   return [...doc.turns]

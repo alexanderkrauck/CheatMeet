@@ -32,3 +32,9 @@ it("filters by reliable source and keeps source labels through exports and renam
   const markup = renderToStaticMarkup(createElement(TranscriptChat, { transcript: "", speech: named, filter: "system" }));
   expect(markup).toContain("Frage aus Teams"); expect(markup).not.toContain("Meine Antwort");
 });
+
+it("retains a legacy matched name without overriding a later user correction", () => {
+  const legacy = { ...speech, phase: "final" as const, speakerNames: {}, speakerNameSuggestions: { "mic:0:A": "Alex" } };
+  expect(transcriptRows("", legacy)[0].speaker).toBe("Alex");
+  expect(transcriptRows("", renameSpeaker(legacy, "mic:0:A", "Alexander"))[0].speaker).toBe("Alexander");
+});

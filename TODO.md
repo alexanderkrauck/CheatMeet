@@ -3,6 +3,25 @@
 Maintained from real recordings. Each item says what was observed and where, so
 it can be picked up without re-deriving the context.
 
+## Final speaker continuity — 2026-09-14 late afternoon
+
+- [x] Automatically carry maintained live names and source metadata into final
+      utterances using text overlap and matching times. Accept a single long
+      match, reconcile batch splits, and separate merged labels where each
+      final utterance has clear independent evidence.
+- [x] Preserve the user-maintained reference locally before provider termination
+      revisions; retain the complete live name/source roster in the final report.
+- [x] Pause only for unresolved groups. Offer one person selector, listen/keep,
+      skip, and collapsed advanced corrections; fully matched results proceed
+      straight to the final-text summary.
+- [x] Use the live conversation layout, source/person filters, search and inline
+      names in the final view. Legacy stored name suggestions remain readable.
+- [ ] User deploys through AI Studio and validates a fresh named recording.
+- [ ] Historical report `ad21260a` retains only the `Fireship` name suggestion in
+      the synced final JSON. Its complete live names/source mapping could not be
+      recovered: the Drive connector cannot read that JSON revision. No original
+      recording was resubmitted or historical Drive file modified.
+
 ## Live transcript usability — 2026-09-14 follow-up
 
 Recording `b075cb3b` in Drive folder `1xQw5G1KzrlEvTOTo3RGmQQ9wJ7j6STrn`

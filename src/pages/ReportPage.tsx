@@ -24,8 +24,9 @@ import { getDraft, getLocal, putDraft } from "../lib/local";
 import { clearJob, jobFor, subscribeJobs } from "../lib/pipeline";
 import { reportToMarkdown } from "../lib/markdown";
 import TranscriptTimeline from "../components/TranscriptTimeline";
+import SpeakerReview from "../components/SpeakerReview";
 import SpeakerEditor from "../components/SpeakerEditor";
-import { renderTranscript, needsSpeakerReview } from "../../shared/transcription";
+import { renderTranscript, needsSpeakerReview, renameSpeaker } from "../../shared/transcription";
 import { ensureFinalTranscript } from "../lib/finalTranscription";
 import { downloadDriveFile } from "../lib/drive";
 import { withWebmDuration } from "../lib/webmDuration";
@@ -41,6 +42,7 @@ export default function ReportPage({
   const [report, setReport] = useState<ReportData | undefined>(initialReport);
   const [dirty, setDirty] = useState(initialDirty || false);
   const [edited, setEdited] = useState<ReportData>();
+  const [editFields, setEditFields] = useState(false);
   const [loading, setLoading] = useState(!initialReport);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -156,6 +158,7 @@ export default function ReportPage({
       setReport(next);
       setDirty(!!warning);
       setEdited(undefined);
+      setEditFields(false);
       const connected = await connection;
       if (uid() !== owner) throw new Error("Das Google-Konto wurde gewechselt.");
       if (connected.error) {
@@ -191,6 +194,7 @@ export default function ReportPage({
       const d = local?.report.id === report.id && local.audio ? { ...local, report }
         : canUseSavedTranscript || canUseDriveStream ? { report } : await restoreDraft(report, t);
       checkOwner();
+      if (local?.speakerReference) d.speakerReference = local.speakerReference;
       if (local?.report.id === report.id) await backupDraft(d, t, setBusy);
       checkOwner();
       setBusy("Finales Transkript erstellen …");
@@ -208,6 +212,7 @@ export default function ReportPage({
         checkOwner();
         setReport(d.report);
         setEdited(undefined);
+        setEditFields(false);
         const result = await syncReport(d.report, t);
         checkOwner();
         setReport(result.report);
@@ -221,6 +226,7 @@ export default function ReportPage({
       checkOwner();
       setReport(next);
       setEdited(undefined);
+      setEditFields(false);
       if (local?.report.id === report.id) await putDraft(owner, { ...d, report: next });
       const result = await syncReport(next, t);
       checkOwner();
@@ -289,7 +295,7 @@ export default function ReportPage({
             <Link className="report-back no-print" to="/dashboard">
               <ArrowLeft size={14} /> Zur Übersicht
             </Link>
-            {edited ? (
+            {edited && editFields ? (
               <input className="title-input" value={view.title} onChange={e => setEdited({ ...view, title: e.target.value })} />
             ) : (
               <h1>{view.title}</h1>
@@ -306,18 +312,18 @@ export default function ReportPage({
             {edited ? (
               <>
                 <button className="btn btn-primary" onClick={() => save(true)}><Save size={16} /> Speichern</button>
-                <button className="btn" onClick={() => setEdited(undefined)}>Abbrechen</button>
+                <button className="btn" onClick={() => { setEdited(undefined); setEditFields(false); }}>Abbrechen</button>
               </>
             ) : !view.driveSyncedAt ? (
               <button className="btn btn-primary" onClick={() => save(true)}><CloudUpload size={16} /> In Drive speichern</button>
             ) : (
-              <button className="btn" onClick={() => setEdited(structuredClone(view))}><Edit3 size={16} /> Bearbeiten</button>
+              <button className="btn" onClick={() => { setEdited(structuredClone(view)); setEditFields(true); }}><Edit3 size={16} /> Bearbeiten</button>
             )}
             <details className="report-menu" ref={menu}>
               <summary aria-label="Weitere Aktionen"><MoreHorizontal size={18} /></summary>
               <div>
                 {!edited && !view.driveSyncedAt && (
-                  <button onClick={() => setEdited(structuredClone(view))}><Edit3 size={16} /> Bearbeiten</button>
+                  <button onClick={() => { setEdited(structuredClone(view)); setEditFields(true); }}><Edit3 size={16} /> Bearbeiten</button>
                 )}
                 <button onClick={() => window.print()} disabled={!!edited}><Printer size={16} /> Als PDF drucken</button>
                 <button onClick={download}><Download size={16} /> Markdown laden</button>
@@ -344,7 +350,7 @@ export default function ReportPage({
             </div>
           </div>
         ) : (
-          view.status !== "completed" && !needsSpeakerReview(view.speech) && (
+          view.status !== "completed" && !edited && !needsSpeakerReview(view.speech) && (
             <div className="analysis-recovery panel no-print">
               <div>
                 <h2>Analyse erneut starten</h2>
@@ -357,14 +363,17 @@ export default function ReportPage({
 
         {!running && needsSpeakerReview(view.speech) && (
           <section className="panel speaker-review no-print">
-            <h2>Sprecher prüfen</h2>
-            <p>Das finale Transkript ist bereit. Prüfe Namen und Zuordnungen, bevor die Zusammenfassung erstellt wird. Vorschläge aus dem Live-Transkript sind mögliche Übereinstimmungen, keine bestätigten Identitäten.</p>
+            <h2>Nur offene Zuordnungen</h2>
+            <p>Passende Live-Namen und Audioquellen sind übernommen. Hier bleiben nur unklare Beiträge. Du kannst sie zuordnen oder direkt fortfahren.</p>
             {audioLoading && <p role="status">Originalaufnahme laden …</p>}
             {audioUrl && <audio ref={audio} src={audioUrl} controls style={{ width: "100%" }}
               onLoadedMetadata={() => { if (audio.current) { audio.current.currentTime = seekTo.current; void audio.current.play().catch(() => {}); } }} />}
-            <SpeakerEditor speech={view.speech!} onListen={listen} onChange={speech => setEdited({ ...view, speech, transcription: renderTranscript(speech), status: "pending", error: "" })} />
+            <SpeakerReview speech={view.speech!} onListen={listen} onChange={speech => setEdited({ ...view, speech, transcription: renderTranscript(speech), status: "pending", error: "" })} />
+            <details className="speaker-advanced"><summary>Weitere Korrekturen</summary>
+              <SpeakerEditor speech={view.speech!} onListen={listen} onChange={speech => setEdited({ ...view, speech, transcription: renderTranscript(speech), status: "pending", error: "" })} />
+            </details>
             <div className="speaker-review-actions">
-              <button className="btn btn-primary" onClick={() => retry("reviewed")}>Geprüft · Zusammenfassung erstellen</button>
+              <button className="btn btn-primary" onClick={() => retry("reviewed")}>Weiter zur Zusammenfassung</button>
               <button className="btn" onClick={() => retry("skipped")}>Prüfung überspringen</button>
             </div>
           </section>
@@ -373,7 +382,7 @@ export default function ReportPage({
         <div className="report-intel">
           <section className="is-summary">
             <h2><FileText size={15} /> Zusammenfassung</h2>
-            {edited ? (
+            {edited && editFields ? (
               <textarea className="field" value={view.summary} onChange={e => setEdited({ ...view, summary: e.target.value })} />
             ) : (
               <p>{view.summary || "Noch keine Zusammenfassung erstellt."}</p>
@@ -381,7 +390,7 @@ export default function ReportPage({
           </section>
           <section>
               <h2><CheckSquare size={15} /> Aufgaben</h2>
-              {edited ? (
+              {edited && editFields ? (
                 <textarea className="field" value={view.todos.join("\n")} onChange={e => setEdited({ ...view, todos: e.target.value.split("\n") })} />
               ) : view.todos?.length ? (
                 <ul>{view.todos.map((t, i) => <li key={i}>{t}</li>)}</ul>
@@ -391,7 +400,7 @@ export default function ReportPage({
             </section>
             <section>
               <h2><Lightbulb size={15} /> Erkenntnisse</h2>
-              {edited ? (
+              {edited && editFields ? (
                 <textarea className="field" value={view.takeaways.join("\n")} onChange={e => setEdited({ ...view, takeaways: e.target.value.split("\n") })} />
               ) : view.takeaways?.length ? (
                 <ul>{view.takeaways.map((t, i) => <li key={i}>{t}</li>)}</ul>
@@ -404,17 +413,23 @@ export default function ReportPage({
         <section className="report-transcript">
           <h2>Transkript</h2>
           {view.speech && view.speech.phase !== "final" && <p className="muted" role="status">Vorläufiges Live-Transkript. Das finale Transkript wird beim Erstellen des Berichts übernommen.</p>}
-          {edited && !needsSpeakerReview(view.speech) && view.speech?.phase === "final" ? (
-            <SpeakerEditor speech={view.speech} onChange={speech => setEdited({ ...view, speech, transcription: renderTranscript(speech), status: "pending", error: "Transkript korrigiert. Bericht aus dem finalen Text erneut erstellen." })} />
-          ) : edited && !needsSpeakerReview(view.speech) ? (
+          {view.speech ? (
+            <>
+              <TranscriptTimeline transcript={view.transcription} speech={view.speech} startedAt={view.date}
+                onRename={(id, name) => {
+                  const speech = renameSpeaker(view.speech!, id, name);
+                  setEdited({ ...view, speech, transcription: renderTranscript(speech),
+                    status: "pending", error: "Sprechernamen geändert. Zusammenfassung aus dem finalen Transkript aktualisieren." });
+                }} />
+              {edited && !needsSpeakerReview(view.speech) && <details className="speaker-advanced"><summary>Weitere Transkriptkorrekturen</summary>
+                <SpeakerEditor speech={view.speech} onChange={speech => setEdited({ ...view, speech, transcription: renderTranscript(speech), status: "pending", error: "Transkript korrigiert. Bericht aus dem finalen Text erneut erstellen." })} />
+              </details>}
+            </>
+          ) : edited ? (
             <textarea className="field" value={view.transcription} onChange={e => setEdited({ ...view, transcription: e.target.value })} />
           ) : (
-            <TranscriptTimeline
-              transcript={view.transcription}
-              speech={view.speech}
-              startedAt={view.date}
-              empty="Für dieses Meeting wurde kein Transkript gespeichert."
-            />
+            <TranscriptTimeline transcript={view.transcription} startedAt={view.date}
+              empty="Für dieses Meeting wurde kein Transkript gespeichert." />
           )}
         </section>
       </fieldset>

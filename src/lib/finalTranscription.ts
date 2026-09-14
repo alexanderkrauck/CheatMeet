@@ -8,7 +8,7 @@ import {
 import { withWebmDuration } from "./webmDuration";
 import type { Draft } from "../types";
 import { ensureDriveToken } from "./session";
-import { suggestSpeakerNames } from "./speakerMatches";
+import { reconcileSpeakers } from "./speakerMatches";
 
 const active = new Map<string, Promise<void>>();
 /** Final result is checkpointed before summary generation. Retry only polls the
@@ -113,8 +113,7 @@ export function ensureFinalTranscript(
       speech.turns.some((t) => !t.final || typeof t.text !== "string")
     )
       throw new Error("Kein finales Transkript erhalten.");
-    speech = { ...speech, speakerReview: speech.turns.length ? "pending" : "skipped",
-      speakerNameSuggestions: suggestSpeakerNames(draft.report.speech!, speech) };
+    speech = reconcileSpeakers(draft.speakerReference || draft.report.speech!, speech);
     draft.report = {
       ...draft.report,
       speech,

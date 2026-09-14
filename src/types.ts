@@ -27,5 +27,7 @@ export interface ReportData {
 
 export interface Draft {
   report: ReportData;
+  /** Local matching evidence frozen before late provider speaker revisions. */
+  speakerReference?: MeetingTranscript;
   audio?: Blob;
 }

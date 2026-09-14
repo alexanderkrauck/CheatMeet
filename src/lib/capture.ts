@@ -537,6 +537,11 @@ export function finishTranscription(): Promise<string> {
     return Promise.resolve(snapshot.draft.report.transcription || "");
   const reportId = snapshot.draft.report.id;
   const captureOwner = snapshot.owner;
+  if (!transcriptionDone && snapshot.draft.report.speech) {
+    // Preserve the labels the user maintained, before termination can relabel
+    // the entire stream. This local reference is never used as summary text.
+    emit({ draft: { ...snapshot.draft, speakerReference: structuredClone(snapshot.draft.report.speech) } });
+  }
   transcriptionDone ||= pipeline.finish().then((transcription) => {
     if (snapshot.owner !== captureOwner || snapshot.draft.report.id !== reportId) return transcription;
     live = null;

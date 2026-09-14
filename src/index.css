@@ -2513,3 +2513,35 @@ body {
 .speaker-review { padding: 20px; margin: 20px 0; }
 .speaker-review-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 .speaker-example { font-size: 13px; color: #475569; overflow-wrap: anywhere; }
+
+/* Final and live transcripts use the same conversation layout. */
+.final-transcript-panel { border: 1px solid #dbe3f2; border-radius: 16px; overflow: hidden; background: #f8faff; }
+.final-transcript-tools { padding: 10px 12px; border-bottom: 1px solid #dbe3f2; background: #f5f7ff; }
+.final-transcript-tools .live-speakers { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 8px; }
+.final-transcript-tools .speaker-filters { margin: 0; }
+.final-transcript-tools .speaker-picker { flex: 1; min-width: 150px; display: block; margin: 0; }
+.final-transcript-tools .timeline-tools { margin: 0; }
+.final-transcript-scroll { padding: 16px; max-height: 72vh; min-height: 160px; overflow-y: auto; }
+.final-transcript-scroll .chat-meta { color: #475569; }
+.final-transcript-scroll .chat-time { color: #64748b; }
+.final-transcript-scroll .is-mic .chat-time { color: #dbeafe; }
+.final-transcript-scroll mark { background: #fef08a; color: #1e293b; }
+.speaker-quick-review { display: grid; gap: 12px; }
+.speaker-quick-row { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; }
+.speaker-quick-row strong, .speaker-quick-row small { display: block; }
+.speaker-quick-row small { color: #64748b; }
+.speaker-quick-row p { margin: 8px 0; font-size: 14px; }
+.speaker-quick-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.speaker-quick-actions select { flex: 1; width: auto; min-width: 140px; }
+.speaker-advanced { margin: 16px 0; }
+.speaker-advanced > summary { cursor: pointer; color: #475569; }
+@media (max-width: 600px) {
+ .final-transcript-tools .timeline-tools { flex-wrap: wrap; gap: 8px; }
+ .final-transcript-tools .timeline-search { flex-basis: 100%; }
+ .final-transcript-scroll { padding: 10px; }
+}
+@media print {
+ .final-transcript-scroll { max-height: none; overflow: visible; }
+ .final-transcript-panel { overflow: visible; border: 0; }
+ .inline-speaker-name svg { display: none; }
+}
