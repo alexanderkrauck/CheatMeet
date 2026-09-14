@@ -11,6 +11,10 @@ interface Turn {
   end_of_turn: boolean;
   words: Word[];
 }
+function assignedSpeaker(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "PENDING" && value !== "UNKNOWN" && value.trim()
+    ? value : undefined;
+}
 /** Replace provider turn IDs; never stitch or rewrite text through another LLM. */
 export class AssemblyEvents {
   private turns = new Map<number, Turn>();
@@ -39,10 +43,10 @@ export class AssemblyEvents {
           start: w.start,
           end: w.end,
           text: w.text,
-          speaker:
-            typeof w.speaker === "string" && w.speaker !== "PENDING"
-              ? w.speaker
-              : undefined,
+          // Use the documented turn-level fallback only for omitted word labels.
+          // Explicit UNKNOWN/PENDING must never become a guessed identity.
+          speaker: assignedSpeaker(w.speaker === undefined && w.word_is_final !== false
+            ? data.speaker_label : w.speaker),
         };
       });
       if (
@@ -68,8 +72,7 @@ export class AssemblyEvents {
             (w: any) => w.start === word.start && w.end === word.end,
           );
           if (match && typeof match.speaker === "string")
-            word.speaker =
-              match.speaker === "PENDING" ? undefined : match.speaker;
+            word.speaker = assignedSpeaker(match.speaker);
         }
       }
     }
@@ -85,7 +88,7 @@ export class AssemblyEvents {
         const speaker = `${this.namespace}:${word.speaker || "unknown"}`;
         if (!group || group.speaker !== speaker) {
           group = {
-            id: `${this.namespace}:${turn.turn_order}:${entries.length}`,
+            id: `${this.namespace}:${turn.turn_order}:${word.start}`,
             speaker,
             startMs: this.mapTime(word.start),
             endMs: this.mapTime(word.end),

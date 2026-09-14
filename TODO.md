@@ -3,6 +3,28 @@
 Maintained from real recordings. Each item says what was observed and where, so
 it can be picked up without re-deriving the context.
 
+## Live transcript usability — 2026-09-14 follow-up
+
+Recording `b075cb3b` in Drive folder `1xQw5G1KzrlEvTOTo3RGmQQ9wJ7j6STrn`
+completed with final transcript and summary. The user's recorded feedback near
+0:48 also calls out unresolved speaker labels; treat it as product feedback.
+
+- [x] Remove the invented failed-section count: AssemblyAI exposes a warning
+      flag, not a count of failed sections. Distinguish slow startup from dropped
+      live frames; a quick resume must not count total meeting time as latency.
+- [x] Rename known speakers directly at their live transcript name. Keep focus
+      stable during new turns/revisions, support Enter/blur to save and Escape
+      to cancel, and retain names when stopping.
+- [x] Enlarge the live transcript, keep source/person filters outside its scroll
+      area, and use a compact person selector that does not grow with speakers.
+- [x] Replace indefinite “Stimme wird zugeordnet” with “Stimme nicht zugeordnet”.
+      Use the provider's documented turn-level label when a final word omits its
+      label; preserve explicit UNKNOWN/PENDING without inventing identities.
+- [ ] Deploy these follow-up fixes through AI Studio and check a fresh recording.
+- [ ] Preserve durable mic/system channels (see below). The new final recording
+      still combines German microphone speech and English playback in some
+      speaker groups; changing display names cannot restore source separation.
+
 ## Production feedback — 2026-09-14 afternoon
 
 - [x] Inspect Cloud Run logs and the saved report; reproduce the batch parameter rejection without audio submission.
@@ -12,7 +34,7 @@ it can be picked up without re-deriving the context.
 - [x] Fix live hint requests being invalidated by React updates; keep remote meeting speech in assistant context and display the newest hint prominently.
 - [x] Pause for final speaker review before summary, with an explicit skip. Support naming, merging, reassignment, splitting, and playback.
 - [x] Suggest live-entered names using repeated matching passages; require confirmation and decline ambiguous/merged/split matches.
-- [ ] Deploy the pushed fixes through AI Studio; reopen the app and resume the failed report.
+- [x] User deployed the incident fixes; the previously stuck report is now completed in Drive.
 - [ ] Preserve separate durable audio channels for reliable source attribution in the final batch pass. Existing mixed recordings cannot regain an exact channel split.
 
 See [incident details](TRANSCRIPTION_INCIDENT_2026-09-14.md).

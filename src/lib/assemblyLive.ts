@@ -18,6 +18,7 @@ export function startAssemblyLive(
   const owner = auth.currentUser?.uid;
   const events: AssemblyEvents[] = [];
   let warning = "",
+    startDelayed = false,
     stopped = false,
     paused = false,
     generation = 0,
@@ -36,14 +37,14 @@ export function startAssemblyLive(
         names[turn.speaker] = turn.speaker.endsWith(":unknown")
           ? "Unbekannt"
           : `Sprecher ${++speakerCount}`;
-    return { ...current, speakerNames: { ...names } };
+    return { ...current, speakerNames: { ...names }, ...(startDelayed ? { liveStartDelayed: true } : {}) };
   };
   const publish = () => {
     if (owned()) changed(doc());
   };
   const failed = () => {
     warning =
-      "Das Live-Transkript hat Lücken. Beim Abschluss wird die gesicherte Aufnahme vollständig transkribiert.";
+      "Das vorläufige Live-Transkript kann Lücken enthalten. Beim Abschluss wird die gespeicherte Aufnahme für das finale Transkript verarbeitet.";
     publish();
   };
   let transitions = Promise.resolve();
@@ -58,6 +59,7 @@ export function startAssemblyLive(
     sequence: number,
     attempt = 0,
   ) {
+    const requestedAt = now();
     let context: AudioContext | undefined, socket: WebSocket | undefined;
     let closed = false,
       begun = false,
@@ -239,7 +241,10 @@ export function startAssemblyLive(
                 failed();
                 return;
               }
-              if (!blocks.length && now() > 500) failed();
+              if (!blocks.length && now() - requestedAt > 500 && !startDelayed) {
+                startDelayed = true;
+                publish();
+              }
               blocks.push({ sent: sentMs, at: now() - Math.max(0, lag) - 100 });
               sentMs += 100;
               socket!.send(frame.pcm);

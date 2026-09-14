@@ -436,9 +436,9 @@ export default function RecordPage() {
                     )}
                     {failed > 0 && (
                       <p className="walk-gap">
-                        {failed} Abschnitt(e) konnten nicht transkribiert
-                        werden — das Transkript hat Lücken. Die Originalaufnahme
-                        ist vollständig und wird gesichert.
+                        Das vorläufige Live-Transkript kann Lücken enthalten.
+                        Beim nächsten Schritt wird das finale Transkript aus
+                        der gespeicherten Aufnahme erstellt.
                       </p>
                     )}
                   </div>
@@ -482,14 +482,14 @@ export default function RecordPage() {
                       )}
                       <span>{state === "paused" ? "Weiter" : "Pause"}</span>
                     </button>
+                    <button className="walk-finish" onClick={stopCapture}>
+                      <span>
+                        <strong>Meeting abschließen</strong>
+                        <small>Weiter zum Sichern &amp; Sprecherprüfen</small>
+                      </span>
+                      <ArrowRight size={22} />
+                    </button>
                   </div>
-                  <button className="walk-finish" onClick={stopCapture}>
-                    <span>
-                      <strong>Meeting abschließen</strong>
-                      <small>Weiter zum Sichern &amp; Sprecherprüfen</small>
-                    </span>
-                    <ArrowRight size={22} />
-                  </button>
                 </>
               ) : state === "ready" ? (
                 <>

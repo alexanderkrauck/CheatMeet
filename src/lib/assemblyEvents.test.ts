@@ -111,3 +111,26 @@ describe("AssemblyAI transcript assembly", () => {
     );
   });
 });
+
+it("uses turn labels for omitted final word labels but preserves explicit uncertainty", () => {
+  const events = new AssemblyEvents("mic:0", t => t);
+  events.apply({ type: "Turn", turn_order: 0, end_of_turn: true, speaker_label: "B", words: [
+    {text:"Hallo",start:0,end:100,word_is_final:true},
+    word("Ja",100,"UNKNOWN"), word("Hm",200,"PENDING"),
+    {text:"Vielleicht",start:300,end:400,word_is_final:false},
+  ] });
+  expect(events.entries().map(t => [t.speaker,t.text])).toEqual([
+    ["mic:0:B","Hallo"], ["mic:0:unknown","Ja Hm Vielleicht"],
+  ]);
+  events.apply({type:"SpeakerRevision", revisions:[{turn_order:0,words:[word("Hallo",0,"UNKNOWN")]}]});
+  expect(events.entries()[0].speaker).toBe("mic:0:unknown");
+});
+it("keeps later utterance IDs stable when an earlier turn splits into speakers", () => {
+  const events = new AssemblyEvents("mic:0", t => t);
+  events.apply({type:"Turn",turn_order:0,end_of_turn:true,words:[word("Frage",0),word("Antwort",100)]});
+  events.apply({type:"Turn",turn_order:1,end_of_turn:true,words:[word("Später",500)]});
+  const laterId = events.entries().at(-1)!.id;
+  events.apply({type:"SpeakerRevision",revisions:[{turn_order:0,words:[word("Antwort",100,"B")]}]});
+  expect(events.entries()).toHaveLength(3);
+  expect(events.entries().at(-1)!.id).toBe(laterId);
+});

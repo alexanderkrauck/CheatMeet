@@ -20,6 +20,7 @@ export interface MeetingTranscript {
   speakerNameSuggestions?: Record<string, string>;
   speakerReview?: "pending" | "reviewed" | "skipped";
   liveWarning?: string;
+  liveStartDelayed?: boolean;
 }
 export const DEFAULT_LANGUAGES = ["de", "en"];
 export const LANGUAGES: Record<string, string> = {
@@ -57,7 +58,7 @@ export function turnSource(turn: SpeechTurn): "mic" | "system" | null {
 }
 export function speakerLabel(doc: MeetingTranscript, turn: SpeechTurn): string {
   if (turn.speaker.endsWith(":unknown"))
-    return doc.phase === "final" ? "Stimme nicht zugeordnet" : "Stimme wird zugeordnet";
+    return "Stimme nicht zugeordnet";
   const speakers = [...new Set(doc.turns.map((t) => t.speaker))];
   return doc.speakerNames[turn.speaker] || `Sprecher ${speakers.indexOf(turn.speaker) + 1}`;
 }

@@ -81,13 +81,14 @@ export default function LiveMeeting({
 
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const editingName = useRef(false);
   const latest = useRef(transcript);
   latest.current = speech ? renderTranscript(speech) : transcript;
 
   // Follow the conversation, unless the user has scrolled back to re-read.
   useEffect(() => {
     const node = scroller.current;
-    if (node && pinned.current) node.scrollTop = node.scrollHeight;
+    if (node && pinned.current && !editingName.current) node.scrollTop = node.scrollHeight;
   }, [transcript]);
 
   useEffect(() => {
@@ -151,8 +152,8 @@ export default function LiveMeeting({
           {paused
             ? "Transkription pausiert"
             : pending > 0
-              ? `${pending} Abschnitt(e) werden transkribiert`
-              : "Vorläufiges Live-Transkript"}
+              ? "Live-Verbindung wird aufgebaut …"
+              : speech?.liveStartDelayed ? "Live-Start leicht verzögert" : "Vorläufiges Live-Transkript"}
         </span>
       </div>
 
@@ -187,21 +188,25 @@ export default function LiveMeeting({
       {insightError && <p className="live-error" role="status">Hinweise konnten nicht geladen werden. Der Assistent versucht es erneut.</p>}
 
       <div className="live-panes" data-tab={tab}>
-        <div className="live-pane live-transcript" ref={scroller}
-          onScroll={(e) => {
-            const node = e.currentTarget;
-            pinned.current =
-              node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-          }}
-        >
-          {speech && <LiveSpeakers speech={speech} filter={speakerFilter} onFilter={setSpeakerFilter} onRename={setCaptureSpeakerName} />}
-          <TranscriptChat
-            transcript={transcript}
-            speech={speech}
-            filter={speakerFilter}
-            startedAt={startedAt}
-            empty="Sobald gesprochen wird, erscheint hier das laufende Transkript. Das Live-Transkript ist vorläufig; beim Abschluss wird es durch den finalen Text ersetzt."
-          />
+        <div className="live-pane live-transcript">
+          {speech && <LiveSpeakers speech={speech} filter={speakerFilter} onFilter={setSpeakerFilter} />}
+          <div className="live-transcript-scroll" ref={scroller}
+            onScroll={(e) => {
+              const node = e.currentTarget;
+              pinned.current =
+                node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+            }}
+          >
+            <TranscriptChat
+              transcript={transcript}
+              speech={speech}
+              filter={speakerFilter}
+              onRename={setCaptureSpeakerName}
+              onEditing={editing => { editingName.current = editing; }}
+              startedAt={startedAt}
+              empty="Sobald gesprochen wird, erscheint hier das laufende Transkript. Das Live-Transkript ist vorläufig; beim Abschluss wird es durch den finalen Text ersetzt."
+            />
+          </div>
         </div>
 
         <div className="live-pane live-assist">

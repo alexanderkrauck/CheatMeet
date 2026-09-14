@@ -227,3 +227,31 @@ it("pauses without sending paused audio and resumes with a distinct speaker sess
   });
   expect(changed.mock.calls.at(-1)?.[0].turns[0].speaker).toBe("mic:1:A");
 });
+
+it("reports slow stream startup separately from dropped audio", async () => {
+  const changed = vi.fn();
+  live = startAssemblyLive({ mic: {} as MediaStream }, () => clock, changed, "meeting", ["de"]);
+  await begin();
+  clock = 1800;
+  nodes[0].port.onmessage!({ data: { pcm: new ArrayBuffer(3200), contextTime: 1 } });
+  expect(sockets[0].sent).toHaveLength(1);
+  expect(live.failedSegments).toBe(0);
+  expect(changed.mock.calls.at(-1)?.[0]).toMatchObject({ liveStartDelayed: true });
+  expect(changed.mock.calls.at(-1)?.[0].liveWarning).toBeUndefined();
+});
+it("does not treat elapsed meeting time as delayed startup after resume", async () => {
+  const changed = vi.fn();
+  live = startAssemblyLive({ mic: {} as MediaStream }, () => clock, changed, "meeting", ["de"]);
+  await begin();
+  nodes[0].port.onmessage!({ data: { pcm: new ArrayBuffer(3200), contextTime: 1 } });
+  const paused = live.pause();
+  await vi.waitFor(() => expect(sockets[0].sent).toHaveLength(2));
+  sockets[0].message({ type: "Termination" });
+  await paused;
+  clock = 100000;
+  await live.resume();
+  await begin();
+  nodes[1].port.onmessage!({ data: { pcm: new ArrayBuffer(3200), contextTime: 1 } });
+  expect(live.failedSegments).toBe(0);
+  expect(changed.mock.calls.at(-1)?.[0].liveStartDelayed).toBeUndefined();
+});

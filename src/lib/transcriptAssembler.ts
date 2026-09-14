@@ -59,6 +59,7 @@ export function parseTimestamp(at: string): number | null {
 }
 
 export interface TranscriptLine {
+  id?: string;
   at: string;
   source: TranscriptSource | null;
   text: string;

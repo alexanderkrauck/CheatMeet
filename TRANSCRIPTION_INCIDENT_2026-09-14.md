@@ -76,3 +76,37 @@ exists in the live data; the final batch result cannot recover an exact source
 channel from a mixed recording. Preserving separate durable channels remains an
 explicit follow-up. Speaker review makes this limitation visible; it does not
 promise correct automatic diarization.
+
+
+## Follow-up: completed recording and misleading live warning
+
+The 14:39 UTC recording `b075cb3b` (Drive folder
+`1xQw5G1KzrlEvTOTo3RGmQQ9wJ7j6STrn`) finished successfully: saved status
+`completed`, final transcript, summary, 26 utterances. Cloud Run shows the final
+submission accepted (202) and subsequent polling successful (200). This proves
+final-job completion, not perfect transcription or absence of live gaps.
+
+The client converted every streaming warning into `failedSegments = 1`, then
+presented it as one failed audio section. Worse, the first audio frame flagged a
+failure when the *meeting clock* exceeded 500 ms, including normal startup and
+resumption. Startup latency now has a separate informational flag measured from
+the individual connection request; dropped frames and connection failures retain
+an explicit possible-live-gap warning without a fabricated count. The saved
+report does not retain enough live diagnostics to identify which warning fired
+in this particular session.
+
+The user also called out unresolved voices in their recorded feedback around
+0:48. Unknown attribution now states “Stimme nicht zugeordnet”, without promising
+ongoing analysis. Missing final-word labels use the documented turn-level fallback;
+explicit UNKNOWN/PENDING remains unattributed. Reference:
+https://www.assemblyai.com/docs/streaming/label-speakers-and-separate-channels
+
+Live naming now happens on the transcript's speaker name. Source/person filters
+remain outside the scrolling transcript, the pane uses more screen space, and
+speaker revisions preserve later utterance keys to protect editing focus.
+
+Follow-up verification: 233 tests in 25 files, typecheck, build and five PWA checks
+pass. Mocked-provider browser checks at 1440×900, 390×844 and 390×667 cover pinned
+filters, source filtering, inline rename/cancel, focus retention during earlier
+speaker revisions, neutral unknown labels, and name persistence after stop.
+No paid transcription was submitted for this follow-up.

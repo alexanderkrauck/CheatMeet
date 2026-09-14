@@ -16,7 +16,7 @@ const speech: MeetingTranscript = {
 it("renders microphone and system on distinct sides even with identical or unknown speaker names", () => {
   const rows = transcriptRows("old generic labels", speech);
   expect(rows.map(r => r.source)).toEqual(["mic", "system", "mic"]);
-  expect(rows[2].speaker).toBe("Stimme wird zugeordnet");
+  expect(rows[2].speaker).toBe("Stimme nicht zugeordnet");
   const markup = renderToStaticMarkup(createElement(TranscriptChat, { transcript: "", speech }));
   expect(markup.match(/chat-turn is-mic/g)).toHaveLength(2);
   expect(markup.match(/chat-turn is-system/g)).toHaveLength(1);

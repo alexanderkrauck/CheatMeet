@@ -1,6 +1,7 @@
 import { CAPTURE_SOURCE_LABELS, type MeetingTranscript } from "../../shared/transcription";
 import { transcriptRows } from "../lib/transcriptRows";
 import type { SpeakerFilter } from "./LiveSpeakers";
+import InlineSpeakerName from "./InlineSpeakerName";
 import {
   SOURCE_LABELS,
   parseTimestamp,
@@ -19,12 +20,16 @@ export default function TranscriptChat({
   transcript,
   speech,
   filter = "all",
+  onRename,
+  onEditing,
   startedAt,
   empty = "Kein Transkript vorhanden.",
 }: {
   transcript: string;
   speech?: MeetingTranscript;
   filter?: SpeakerFilter;
+  onRename?: (id: string, name: string) => void;
+  onEditing?: (editing: boolean) => void;
   /** Recording start, so a relative offset can also be shown as a wall clock. */
   startedAt?: string;
   empty?: string;
@@ -50,11 +55,15 @@ export default function TranscriptChat({
         return (
           <div
             className={`chat-turn is-${labelled ? row.source || "unknown" : "single"}${continued ? " is-continued" : ""}`}
-            key={index}
+            key={row.id || index}
           >
             {labelled && (row.speaker || row.source) && (!continued || row.source) && (
               <span className="chat-meta">{row.source && <span className={`transcript-source is-${row.source}`}>{CAPTURE_SOURCE_LABELS[row.source]}</span>}
-                      {row.speaker || SOURCE_LABELS[row.source!]}</span>
+                {onRename && row.speakerId && !row.speakerId.endsWith(":unknown")
+                  ? <InlineSpeakerName key={row.speakerId} id={row.speakerId} name={row.speaker!}
+                      source={row.source ? CAPTURE_SOURCE_LABELS[row.source] : "Audio"}
+                      onRename={onRename} onEditing={onEditing} />
+                  : row.speaker || SOURCE_LABELS[row.source!]}</span>
             )}
             <p className="chat-bubble">
               <span>{row.text}</span>

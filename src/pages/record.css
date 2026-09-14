@@ -1359,3 +1359,36 @@
   font-size: 11px;
   color: #5b6577;
 }
+
+/* Keep source controls outside the transcript's scrolling region. */
+.live-panes > .live-transcript { flex: 2.3; flex-direction: column; overflow: hidden; padding: 0; }
+.live-panes[data-tab="transcript"] > .live-transcript { display: flex; }
+.live-transcript-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; overflow-anchor: none; }
+.live-transcript .live-speakers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; margin: 0; padding: 10px 12px; border-bottom: 1px solid #dbe3f2; background: #f5f7ff; border-radius: 16px 16px 0 0; }
+.live-speakers .speaker-filters { flex-wrap: nowrap; margin: 0; gap: 4px; }
+.live-speakers .speaker-picker { flex: 1; min-width: 110px; margin: 0; display: block; }
+.speaker-picker select { width: 100%; min-width: 0; padding: 7px 4px; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #334155; }
+.inline-speaker-name { display: inline-flex; align-items: center; gap: 5px; padding: 3px 2px; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-align: inherit; }
+.inline-speaker-name:hover, .inline-speaker-name:focus-visible { background: #dbeafe; outline: 1px solid #93c5fd; }
+.inline-speaker-input { max-width: 180px; width: 100%; border: 1px solid #6366f1; border-radius: 5px; padding: 4px 6px; background: white; color: #1e293b; font-size: 14px; }
+.walk-recording .walk-frame, .walk-paused .walk-frame { width: min(100%, 1480px); }
+.walk-recording .walk-content, .walk-paused .walk-content { padding: 10px 16px; gap: 8px; }
+.walk-recording .walk-dock, .walk-paused .walk-dock { padding: 10px 16px; gap: 5px; }
+.walk-recording .walk-header, .walk-paused .walk-header { padding-top: 7px; padding-bottom: 7px; }
+.walk-capture-controls { margin: 0; }
+.walk-capture-controls .walk-pause { flex: 0 0 86px; min-height: 48px; width: auto; flex-direction: row; }
+.walk-capture-controls .walk-finish { flex: 1; min-height: 48px; }
+.walk-recording .walk-lock-status, .walk-paused .walk-lock-status { display: none; }
+.walk-recording .live, .walk-paused .live { gap: 6px; }
+.live .live-suggestion { margin: 0; padding: 8px 12px; flex-shrink: 0; }
+.live .live-suggestion strong { font-size: 10px; }
+@media (min-width: 820px) {
+  .live-panes > .live-transcript { display: flex; }
+  .live-panes > .live-assist { flex: 1; max-width: 360px; }
+}
+@media (max-width: 819px) {
+  .live-panes[data-tab="assist"] > .live-transcript { display: none; }
+  .live-transcript .live-speakers { gap: 6px; padding: 8px; }
+  .live-speakers .speaker-filters button { padding: 6px 7px; font-size: 11px; }
+  .live-suggestion span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+}

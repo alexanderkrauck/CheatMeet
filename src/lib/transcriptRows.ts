@@ -5,6 +5,7 @@ import { formatTimestamp, parseTranscript, type TranscriptLine } from "./transcr
 export function transcriptRows(transcript: string, speech?: MeetingTranscript): TranscriptLine[] {
   if (!speech) return parseTranscript(transcript);
   return [...speech.turns].sort((a, b) => a.startMs - b.startMs).map(turn => ({
+    id: turn.id,
     at: formatTimestamp(turn.startMs),
     source: turnSource(turn),
     speaker: speakerLabel(speech, turn),

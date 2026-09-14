@@ -550,7 +550,7 @@ export function finishTranscription(): Promise<string> {
       transcribing: 0,
       failed: pipeline.failedSegments,
       warning: pipeline.failedSegments
-        ? `${pipeline.failedSegments} Abschnitt(e) konnten nicht transkribiert werden. Das Transkript ist möglicherweise unvollständig; die Originalaufnahme ist vollständig.`
+        ? snapshot.draft.report.speech?.liveWarning || "Das vorläufige Live-Transkript kann Lücken enthalten. Das finale Transkript wird aus der gespeicherten Aufnahme erstellt."
         : snapshot.warning,
     });
     pendingSnapshot = chunks.length ? { ...draft, audio: undefined } : draft;
