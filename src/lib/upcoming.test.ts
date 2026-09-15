@@ -59,17 +59,21 @@ describe("isMeeting", () => {
 });
 
 describe("isRecordable", () => {
-  it("rejects what has no sitting to attend", () => {
-    expect(isRecordable(event({ allDay: true }))).toBe(false);
+  it("rejects what has nobody to meet", () => {
     expect(isRecordable(event({ kind: "birthday" }))).toBe(false);
     expect(isRecordable(event({ kind: "workingLocation" }))).toBe(false);
     // A ticket Gmail parsed out of a confirmation mail is not a meeting.
     expect(isRecordable(event({ kind: "fromGmail" }))).toBe(false);
   });
 
-  it("accepts a plain timed entry, attendees or not", () => {
+  it("accepts a plain entry, attendees or not", () => {
     expect(isRecordable(event())).toBe(true);
     expect(isRecordable(event({ attendees: [] }))).toBe(true);
+  });
+
+  it("keeps a whole-day entry recordable — a day-long workshop is a sitting", () => {
+    // Only the countdown excludes all-day entries; the offer to record must not.
+    expect(isRecordable(event({ allDay: true }))).toBe(true);
   });
 });
 

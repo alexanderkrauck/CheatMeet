@@ -87,6 +87,26 @@ describe("buildAgenda", () => {
     expect(entries.map((e) => (e.kind === "event" ? e.event.id : ""))).toEqual(["g", "e"]);
   });
 
+  it("keeps a whole-day entry on its own day rather than at the top of the month", () => {
+    // The month-wide list is ordered only by this sort, so an all-day-first
+    // rule applied across days printed a holiday on the 28th above a meeting
+    // on the 16th.
+    const holiday = event({
+      id: "h",
+      allDay: true,
+      startMs: at(0, 0, 28),
+      endMs: at(0, 0, 29),
+    });
+    const meeting = event({ id: "m", startMs: at(9, 0, 16), endMs: at(10, 0, 16) });
+    const entries = buildAgenda([], [holiday, meeting], new Set());
+    expect(entries.map((e) => (e.kind === "event" ? e.event.id : ""))).toEqual(["m", "h"]);
+  });
+
+  it("tells each entry which day it belongs to", () => {
+    const [entry] = buildAgenda([report()], [], new Set());
+    expect(entry.dayKey).toBe("2026-09-16");
+  });
+
   it("marks an entry with nobody in it as quiet rather than hiding it", () => {
     const karaoke = event({ id: "k", attendees: [], title: "ROX Karaoke Night" });
     const [entry] = buildAgenda([], [karaoke], new Set());

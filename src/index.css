@@ -968,9 +968,15 @@ textarea {
   width: 9px;
   border-radius: 3px;
 }
-.day.is-selected .day-dot,
-.day.level-3 .day-dot {
+.day.is-selected .day-dot {
   opacity: 0.9;
+}
+/* Raising the opacity of a brand-blue dot on a brand-blue fill only made it
+   vanish more confidently; the darker cells need a light dot instead. */
+.day.level-2 .day-dot,
+.day.level-3 .day-dot {
+  background: #fff;
+  opacity: 0.92;
 }
 .calendar-day,
 .undated {
@@ -2484,6 +2490,20 @@ body {
 /* The month in both tenses, under the navigator that moves between them. */
 .month-meta {
   margin: -6px 0 14px;
+}
+
+/* Which day a row belongs to, in the month-wide list where the rows themselves
+   only carry a clock. */
+.agenda-day {
+  margin: 10px 0 -2px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.agenda-day:first-child {
+  margin-top: 0;
 }
 
 @media (max-width: 560px) {

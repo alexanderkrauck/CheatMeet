@@ -30,11 +30,12 @@ const NOT_AN_APPOINTMENT = new Set([
 ]);
 
 /**
- * Could be recorded, whatever it turns out to be. An all-day block has no
- * start to arrive at, so it never triggers anything time-based.
+ * Could be recorded, whatever it turns out to be. A whole-day entry counts: a
+ * workshop blocked out across a day is a sitting you can sit in. What does not
+ * count is an entry with nobody to meet — see above.
  */
 export const isRecordable = (event: CalendarEvent) =>
-  !event.allDay && !NOT_AN_APPOINTMENT.has(event.kind);
+  !NOT_AN_APPOINTMENT.has(event.kind);
 
 /** Over, so not something you can still record. A running one is not over. */
 export const isOver = (event: CalendarEvent, nowMs: number) =>
@@ -65,6 +66,9 @@ export function imminentMeeting(
   const candidates = events.filter(
     (event) =>
       isRecordable(event) &&
+      // A whole-day block has no start to arrive at, so counting down to it
+      // would be counting down to midnight.
+      !event.allDay &&
       !isOver(event, nowMs) &&
       event.startMs - nowMs <= leadMs,
   );

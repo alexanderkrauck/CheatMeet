@@ -11,9 +11,10 @@ import { isMeeting } from "./upcoming";
  * ten-o'clock meeting you recorded and a four-o'clock one you have not is one
  * sequence, not two lists.
  */
+type Timed = { atMs: number; dayKey: string; allDay: boolean };
 export type AgendaEntry =
-  | { kind: "report"; atMs: number; allDay: false; report: ReportSummary }
-  | { kind: "event"; atMs: number; allDay: boolean; event: CalendarEvent; quiet: boolean };
+  | (Timed & { kind: "report"; allDay: false; report: ReportSummary })
+  | (Timed & { kind: "event"; event: CalendarEvent; quiet: boolean });
 
 /**
  * Events that still need recording, by local day.
@@ -49,7 +50,7 @@ export const recordedEventIds = (reports: ReportSummary[]): Set<string> =>
  * Recordings and still-unrecorded events in one chronological list.
  *
  * Callers narrow to a day or a month first; this only orders. A whole-day
- * entry has no time to sort by, so it leads the day rather than landing at
+ * entry has no time to sort by, so it leads its own day rather than landing at
  * midnight ahead of an 08:00 meeting it does not precede.
  */
 export function buildAgenda(
@@ -60,6 +61,7 @@ export function buildAgenda(
   const entries: AgendaEntry[] = reports.map((report) => ({
     kind: "report",
     atMs: Date.parse(report.date) || 0,
+    dayKey: localDayKey(report.date),
     allDay: false,
     report,
   }));
@@ -68,6 +70,7 @@ export function buildAgenda(
     entries.push({
       kind: "event",
       atMs: event.startMs,
+      dayKey: localDayKey(new Date(event.startMs).toISOString()),
       allDay: event.allDay,
       event,
       // Not hidden, not shouting. The karaoke night stays reachable; it just
@@ -76,6 +79,10 @@ export function buildAgenda(
     });
   }
   return entries.sort((a, b) => {
+    // Day first. The all-day lead is a rule *within* a day: applied across a
+    // whole month it floated every holiday and vacation block above meetings
+    // three weeks earlier, in a list whose only ordering cue is its order.
+    if (a.dayKey !== b.dayKey) return a.dayKey < b.dayKey ? -1 : 1;
     if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
     return a.atMs - b.atMs;
   });

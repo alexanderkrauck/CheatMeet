@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { CalendarOff, ChevronLeft, ChevronRight, Mic } from "lucide-react";
 import EventRow from "../components/EventRow";
@@ -42,19 +42,23 @@ import { useReports } from "../lib/useReports";
 export default function CalendarPage() {
   const { reports, dirty, running, loading, error } = useReports();
   const [params, setParams] = useSearchParams();
-  const [now] = useState(() => new Date());
   const [removalWarning, setRemovalWarning] = useState("");
-
+  // Recomputed every render rather than pinned at mount: a tab left open past
+  // midnight was keeping yesterday's ring, yesterday's "Heute" and yesterday's
+  // fetch window. The memos below key on the day string, so this costs nothing.
+  const now = new Date();
+  const thisMonth = monthKeyOf(now.toISOString());
   // ?m= is user input; a bad value must fall back rather than render NaN.
   const raw = params.get("m");
-  const thisMonth = monthKeyOf(now.toISOString());
   const month = isMonthKey(raw) ? raw : thisMonth;
   const today = localDayKey(now.toISOString());
   // Opening the page answers "what have I got today" before anything else, so
   // an absent ?d= selects today whenever today is on screen.
   const selected = params.get("d") || (month === thisMonth ? today : "");
 
-  const range = useMemo(() => monthEventRange(month, now), [month, now]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `today` is `now`'s
+  // only observable part here, and it is what changes at midnight.
+  const range = useMemo(() => monthEventRange(month, now), [month, today]);
   const feed = useCalendarEvents(range);
 
   const recorded = useMemo(() => recordedEventIds(reports), [reports]);
@@ -64,7 +68,8 @@ export default function CalendarPage() {
   );
   const weeks = useMemo(
     () => buildMonthGrid(month, reports, now, scheduled),
-    [month, reports, now, scheduled],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- as above.
+    [month, reports, today, scheduled],
   );
 
   const inMonth = reports.filter(
@@ -154,23 +159,25 @@ export default function CalendarPage() {
               {selected ? dayHeading(selected, now) : monthLabel(month, now)}
             </h2>
             {entries.length ? (
-              entries.map((entry) =>
-                entry.kind === "report" ? (
-                  <MeetingRow
-                    key={entry.report.id}
-                    report={entry.report}
-                    dirty={dirty.includes(entry.report.id)}
-                    running={running.has(entry.report.id)}
-                    onWarning={setRemovalWarning}
-                  />
-                ) : (
-                  <EventRow
-                    key={entry.event.id}
-                    event={entry.event}
-                    quiet={entry.quiet}
-                  />
-                ),
-              )
+              entries.map((entry, index) => (
+                <Fragment key={entry.kind === "report" ? entry.report.id : entry.event.id}>
+                  {/* Only in month mode, where a row shows a clock but no date
+                      and the day is otherwise left to be inferred. */}
+                  {!selected && entry.dayKey !== entries[index - 1]?.dayKey && (
+                    <h3 className="agenda-day">{dayHeading(entry.dayKey, now)}</h3>
+                  )}
+                  {entry.kind === "report" ? (
+                    <MeetingRow
+                      report={entry.report}
+                      dirty={dirty.includes(entry.report.id)}
+                      running={running.has(entry.report.id)}
+                      onWarning={setRemovalWarning}
+                    />
+                  ) : (
+                    <EventRow event={entry.event} quiet={entry.quiet} />
+                  )}
+                </Fragment>
+              ))
             ) : (
               <p className="calendar-empty">
                 <CalendarOff size={18} />
