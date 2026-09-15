@@ -971,9 +971,9 @@ textarea {
 .day.is-selected .day-dot {
   opacity: 0.9;
 }
-/* Raising the opacity of a brand-blue dot on a brand-blue fill only made it
-   vanish more confidently; the darker cells need a light dot instead. */
-.day.level-2 .day-dot,
+/* Raising the opacity of a brand-blue dot on the deep blue level-3 fill only
+   made it vanish more confidently. Only that cell is dark enough to need a
+   light dot; on the pale level-1 and level-2 fills white is the weaker one. */
 .day.level-3 .day-dot {
   background: #fff;
   opacity: 0.92;
