@@ -218,6 +218,31 @@ describe("fromArchive refuses only what it must", () => {
     );
   });
 
+  it("drops a transcript whose turns are malformed rather than breaking the list", () => {
+    // speakerNamesOf indexes into every turn on each list render, so one bad
+    // record would otherwise take down the whole meeting list.
+    const restored = fromArchive(
+      { ...full(), speech: { turns: [{ text: "ohne Sprecher" }] } },
+      IDS,
+    );
+    expect(restored.speech).toBeUndefined();
+    expect(restored.title).toBe("Meeting");
+  });
+
+  it("clamps a hand-edited retention promise instead of trusting it", () => {
+    const tampered = {
+      ...consent,
+      facts: {
+        ...consent.facts,
+        retention: { audioDays: -5, textDays: null },
+      },
+    };
+    // An unusable number becomes "kept indefinitely", so a corrupt file can
+    // never make the sweep delete the audio sooner than promised.
+    const restored = fromArchive({ ...full(), consent: tampered }, IDS);
+    expect(restored.consent?.facts.retention.audioDays ?? null).toBeNull();
+  });
+
   it("never lets an unknown key out of the file", () => {
     const restored = fromArchive(
       { ...toArchive(full(), DATE), boshaft: "<script>", status: "completed" },

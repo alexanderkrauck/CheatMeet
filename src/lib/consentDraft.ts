@@ -1,4 +1,5 @@
 import {
+  acceptConsentParts,
   validateConsentParts,
   type ConsentFacts,
   type ConsentParts,
@@ -36,10 +37,12 @@ export async function draftConsentNotice(
       data.error ||
         "Die Formulierung hat nicht geklappt. Der Standardtext bleibt gültig.",
     );
-  const parts = validateConsentParts(data.parts);
+  // Checked against the facts here too, so the armed screen shows exactly the
+  // wording that will be recorded rather than one the record would reject.
+  const parts = acceptConsentParts(facts, validateConsentParts(data.parts));
   if (!Object.keys(parts).length)
     throw new Error(
-      "Die Formulierung kam leer zurück. Der Standardtext bleibt gültig.",
+      "Die Formulierung gab die Angaben nicht korrekt wieder. Der Standardtext bleibt gültig.",
     );
   return parts;
 }

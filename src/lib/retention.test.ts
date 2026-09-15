@@ -9,7 +9,6 @@ import {
   MAX_ATTEMPTS,
   audioExpiresAt,
   dueAudio,
-  retentionLabel,
   sweepable,
 } from "./retention";
 import type { ReportData } from "../types";
@@ -120,18 +119,5 @@ describe("the promise and the deletion come from one number", () => {
 
     expect(assembleConsentText(facts)).toContain("nach 7 Tagen");
     expect(audioExpiresAt(meeting)).toBe(Date.parse(DATE) + 7 * DAY);
-  });
-});
-
-describe("retentionLabel", () => {
-  it("names days and indefinite retention the way the settings panel reads", () => {
-    expect(retentionLabel({ audioDays: 30, textDays: null })).toEqual({
-      audio: "30 Tage",
-      text: "unbegrenzt",
-    });
-    expect(retentionLabel({ audioDays: 1, textDays: 90 })).toEqual({
-      audio: "1 Tag",
-      text: "90 Tage",
-    });
   });
 });

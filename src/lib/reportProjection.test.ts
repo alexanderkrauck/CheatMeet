@@ -134,6 +134,16 @@ describe("projectReport", () => {
     expect(projected.transcriptChars).toBe("Alles Gesagte".length);
   });
 
+  it("does not forget that a transcript exists when re-projecting a stub", () => {
+    // Any ordinary save on a second device re-projects the stub it holds. If
+    // the marker were recomputed from the empty string, every guard keyed on
+    // it would fall open and the Drive archive could be overwritten.
+    const twice = projectReport(projectReport(full()));
+
+    expect(twice.transcriptChars).toBe("Alles Gesagte".length);
+    expect(transcriptIsElsewhere(twice)).toBe(true);
+  });
+
   it("resolves what cannot be recomputed without the turns", () => {
     const imported = projectReport(
       full({

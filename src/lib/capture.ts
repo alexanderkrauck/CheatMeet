@@ -164,6 +164,14 @@ function watchSystemAudio(system?: MediaStream) {
     // reopens a paid streaming connection for a track that is gone.
     live?.dropSource?.("system");
     emit({
+      // Re-resolved, not just warned about: the consent notice on the armed
+      // screen is rendered from this list and would otherwise keep promising
+      // the other participants' voices under a banner saying the opposite.
+      sources: describeAudioSources({
+        requested: armedSources?.requested ?? "mic",
+        displayMediaSupported: armedSources?.displayMediaSupported ?? false,
+        system: undefined,
+      }).sources,
       warning:
         "Die Bildschirmfreigabe wurde beendet. Es wird weiter nur das Mikrofon aufgenommen.",
     });
@@ -371,7 +379,10 @@ export async function armCapture(
 ) {
   if (busyOperation || hasOpenDevices()) return;
   busyOperation = true;
-  emit({ busy: "Aufnahme vorbereiten …", error: "", warning: "", localStartOffered: false });
+  // A previous attempt may have left a dead stream in the device bag, and
+  // beginRecording deliberately reads that bag rather than what arm saw.
+  releaseCapture();
+  emit({ busy: "Aufnahme vorbereiten …", error: "", warning: "", localStartOffered: false, sources: [] });
   const captureOwner = snapshot.owner;
   let share: Promise<MediaStream | undefined> | undefined;
   // Request display capture during the actual click, before Drive/mic awaits
@@ -396,7 +407,7 @@ export async function armCapture(
         throw e;
       }
     }
-    if (ownerChanged()) return;
+    if (ownerChanged()) { releaseCapture(); return; }
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder)
       throw new Error(
         "Aufnahme wird in diesem Browser nicht unterstützt. Bitte eine Audiodatei importieren oder einen aktuellen Browser über HTTPS verwenden.",

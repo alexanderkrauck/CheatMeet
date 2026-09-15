@@ -5,7 +5,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createAnalysisRouter } from "../server/analysis";
-import { consentFacts } from "../shared/consent";
+import { assembleConsentText, consentFacts } from "../shared/consent";
 
 const report = {
   title: "Weekly Sync",
@@ -643,10 +643,11 @@ describe("analysis endpoints", () => {
 
       expect(response.status).toBe(200);
       expect(data.parts).toEqual({ opening: "Kurz vorab:", purpose: "Ich schreibe mit." });
-      // The elements it omitted are still in the assembled text.
-      expect(data.text).toContain("Die Audioaufnahme lösche ich nach 30 Tagen");
-      expect(data.text).toContain("AssemblyAI");
-      expect(data.text.trim().endsWith("?")).toBe(true);
+      // The elements it omitted are still in the notice the caller assembles.
+      const assembled = assembleConsentText(facts, data.parts);
+      expect(assembled).toContain("Die Audioaufnahme lösche ich nach 30 Tagen");
+      expect(assembled).toContain("AssemblyAI");
+      expect(assembled.trim().endsWith("?")).toBe(true);
       // The facts reached the prompt, so it cannot invent a different setup.
       const prompt = client.models.generateContent.mock.calls[0][0].contents[0].parts[0].text;
       expect(prompt).toContain("Sergio von StackFuel");
@@ -661,6 +662,20 @@ describe("analysis endpoints", () => {
     it("needs an account and a description of the recording", async () => {
       expect((await draft({ facts }, "")).status).toBe(401);
       expect((await draft({})).status).toBe(400);
+    });
+
+    it("normalises a half-built facts object instead of failing with a 500", async () => {
+      client.models.generateContent.mockResolvedValueOnce({
+        text: JSON.stringify({ opening: "Kurz vorab:" }),
+      });
+
+      // Only `sources`: everything else must be filled in server-side.
+      const response = await draft({ facts: { sources: ["mic"] } });
+
+      expect(response.status).toBe(200);
+      const prompt = client.models.generateContent.mock.calls[0][0].contents[0].parts[0].text;
+      expect(prompt).toContain("AssemblyAI");
+      expect(prompt).toContain("unbefristet");
     });
   });
 });

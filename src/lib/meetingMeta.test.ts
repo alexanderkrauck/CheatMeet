@@ -515,6 +515,13 @@ describe("summarise for a report whose transcript is elsewhere", () => {
     expect(result.transcriptLocal).toBe(false);
   });
 
+  it("does not mistake a silent meeting for one stored elsewhere", () => {
+    // No transcript and no marker: the meeting simply contained no speech.
+    const result = summarise({ ...base, summary: "Keine Sprache erkannt." } as never);
+
+    expect(result.transcriptLocal).toBe(true);
+  });
+
   it("still prefers the real transcript when this device has it", () => {
     const result = summarise({
       ...base,

@@ -13,11 +13,11 @@ import firebaseConfig from "../firebase-applet-config.json";
 import { MAX_CONSENT_TURNS } from "../shared/analysis";
 import {
   CONSENT_ORDER,
-  assembleConsentText,
+  consentFacts,
   consentPartsSchema,
   consentSentences,
   validateConsentParts,
-  type ConsentFacts,
+  type ConsentInput,
 } from "../shared/consent";
 import {
   MAX_ASSIST_CONTEXT_CHARS,
@@ -252,10 +252,13 @@ export function createAnalysisRouter(options: Options = {}) {
   router.post("/consent-notice", express.json({ limit: "64kb" }), async (req, res) => {
     try {
       const owner = await authenticate(req);
-      const body = req.body as { facts?: ConsentFacts; instructions?: unknown };
-      const facts = body.facts;
-      if (!facts || typeof facts !== "object" || !Array.isArray(facts.sources))
+      const body = req.body as { facts?: ConsentInput; instructions?: unknown };
+      if (!body.facts || typeof body.facts !== "object")
         throw new RequestError(400, "Die Angaben zur Aufnahme fehlen.");
+      // Normalised server-side: consentFacts is total and applies every cap,
+      // so the prompt's size is a function of the templates rather than of
+      // whatever the request body happened to contain.
+      const facts = consentFacts(body.facts);
       if (drafting.has(owner))
         throw new RequestError(429, "Es läuft bereits eine Formulierung.");
       const instructions = (Array.isArray(body.instructions) ? body.instructions : [])
@@ -287,6 +290,9 @@ ${instructions.length ? `\nSituation, die die aufnehmende Person beschreibt:\n""
 Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
 
       drafting.add(owner);
+      // The client gives up after 30s while the provider call may run far
+      // longer; without this the retry the UI invites is refused as busy.
+      req.on("close", () => drafting.delete(owner));
       try {
         const client = getAi();
         const response = await withRetry(() =>
@@ -312,8 +318,9 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
             502,
             "Die Formulierung kam unbrauchbar zurück. Der Standardtext bleibt gültig.",
           );
-        // Returned assembled as well, so the caller never has to re-derive it.
-        res.json({ parts, text: assembleConsentText(facts, parts) });
+        // Phrasing only: the caller assembles, because the facts on screen
+        // can have changed since the request was sent.
+        res.json({ parts });
       } finally {
         drafting.delete(owner);
       }

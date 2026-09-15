@@ -16,7 +16,10 @@ export function projectReport(report: ReportData): ReportData {
   return {
     ...rest,
     transcription: "",
-    transcriptChars: (transcription || "").length,
+    // Re-projecting an already-projected report must not zero the marker: a
+    // second device would then look like a meeting that never had a
+    // transcript, and every guard keyed on it would fall open.
+    transcriptChars: (transcription || "").length || (report.transcriptChars ?? 0),
     // Resolved here because the projection is the only copy another device
     // sees, and these cannot be recomputed without the turns.
     participants: speakerNamesOf(speech),

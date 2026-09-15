@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   ASSEMBLYAI_PROCESSOR,
+  acceptConsentParts,
   CONSENT_TEMPLATE_VERSION,
   GEMINI_PROCESSOR,
   assembleConsentText,
   buildConsentRecord,
+  validateConsentParts,
   consentFacts,
   retentionDays,
   validateConsentRecord,
@@ -227,5 +229,84 @@ describe("validateConsentRecord", () => {
     expect(() =>
       validateConsentRecord({ ...built, text: truncated }),
     ).toThrow(/retention/);
+  });
+});
+
+describe("acceptConsentParts", () => {
+  const base = facts({ sources: ["mic", "system"] });
+
+  it("keeps a warmer wording that still states the facts", () => {
+    const kept = acceptConsentParts(base, {
+      opening: "Kurz vorab:",
+      purpose: "Ich schreibe mit, damit ich dir zuhören kann.",
+      means: `Mikro und Call-Ton, verarbeitet von AssemblyAI und Google Gemini.`,
+      recipients: `Alles landet in meinem Drive-Ordner „${FOLDER}“.`,
+      retention: "Die Aufnahme lösche ich nach 30 Tagen, den Text behalte ich.",
+    });
+
+    expect(Object.keys(kept).sort()).toEqual(
+      ["opening", "purpose", "means", "recipients", "retention"].sort(),
+    );
+  });
+
+  it("drops a retention sentence that names the wrong period", () => {
+    const kept = acceptConsentParts(base, {
+      retention: "Die Aufnahme lösche ich nach 90 Tagen.",
+    });
+    expect(kept.retention).toBeUndefined();
+  });
+
+  it("drops a deadline invented for audio that is kept indefinitely", () => {
+    const indefinite = facts({ retention: { audioDays: null, textDays: null } });
+    expect(
+      acceptConsentParts(indefinite, {
+        retention: "Ich lösche das alles nach 14 Tagen.",
+      }).retention,
+    ).toBeUndefined();
+  });
+
+  it("drops a means sentence that forgets a processor", () => {
+    expect(
+      acceptConsentParts(base, {
+        means: "Aufgenommen wird alles, transkribiert von AssemblyAI.",
+      }).means,
+    ).toBeUndefined();
+  });
+
+  it("drops a means sentence that claims the others are recorded when they are not", () => {
+    const micOnly = facts({ sources: ["mic"] });
+    expect(
+      acceptConsentParts(micOnly, {
+        means:
+          "Aufgenommen wird der ganze Call mit allen Teilnehmenden, von AssemblyAI und Google Gemini verarbeitet.",
+      }).means,
+    ).toBeUndefined();
+  });
+
+  it("drops a recipients sentence that names no storage location", () => {
+    expect(
+      acceptConsentParts(base, { recipients: "Das sieht sonst niemand." })
+        .recipients,
+    ).toBeUndefined();
+  });
+
+  it("is what stops a rephrasing from reaching the record", () => {
+    const record = buildConsentRecord(base, {
+      ...meta,
+      parts: { retention: "Gelöscht wird nach 365 Tagen." },
+    });
+
+    expect(record.parts).toBeNull();
+    // The deterministic promise is spoken instead.
+    expect(record.text).toContain("Die Audioaufnahme lösche ich nach 30 Tagen");
+    expect(() => validateConsentRecord(record)).not.toThrow();
+  });
+});
+
+describe("validateConsentParts", () => {
+  it("rejects an element too long to be spoken rather than cutting it short", () => {
+    const parts = validateConsentParts({ purpose: "x".repeat(601) });
+    expect(parts.purpose).toBeUndefined();
+    expect(validateConsentParts({ purpose: "x".repeat(600) }).purpose).toHaveLength(600);
   });
 });

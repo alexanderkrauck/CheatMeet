@@ -63,11 +63,11 @@ export function RetentionSettings() {
         "Audioaufnahme",
         "Die Audiodatei ist das heikelste Stück und selten lange nützlich.",
       )}
-      {row(
-        "textDays",
-        "Transkript und Zusammenfassung",
-        "Der Text ist das Archiv — auch für spätere Recherche durch dich oder deine KI-Werkzeuge.",
-      )}
+      <p className="muted">
+        Transkript und Zusammenfassung werden nicht gelöscht. Sie sind das
+        Archiv — auch für spätere Recherche durch dich oder deine
+        KI-Werkzeuge — und der Einwilligungstext sagt genau das.
+      </p>
       <p className="muted small">
         Gelöscht wird, während CheatMeet auf einem deiner Geräte geöffnet ist:
         es gibt keinen Server, der in deinem Drive aufräumt. Gelöschte Dateien

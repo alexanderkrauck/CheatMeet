@@ -312,9 +312,70 @@ export function validateConsentParts(value: unknown): ConsentParts {
   const parts: ConsentParts = {};
   for (const key of CONSENT_ORDER) {
     const text = typeof raw[key] === "string" ? (raw[key] as string).trim() : "";
-    if (text) parts[key] = text.slice(0, MAX_PART_CHARS);
+    // Over-length is unusable, not trimmable: a sentence cut mid-word would
+    // be spoken in place of a complete one.
+    if (text && text.length <= MAX_PART_CHARS) parts[key] = text;
   }
   return parts;
+}
+
+/** Phrases that claim the other participants are being recorded. */
+const SYSTEM_AUDIO_CLAIMS = [
+  "call",
+  "teilnehm",
+  "anderen",
+  "participants",
+  "meeting",
+];
+
+/**
+ * Drops any rephrasing that no longer states the fact it replaced.
+ *
+ * Structural coverage only guarantees that every element is *present*. It
+ * cannot stop a warm rewrite from naming the wrong retention period, omitting
+ * a processor, or claiming the other participants are recorded when only the
+ * microphone is. A dropped element falls back to the deterministic sentence,
+ * which is the designed degradation.
+ */
+export function acceptConsentParts(
+  facts: ConsentFacts,
+  parts?: ConsentParts | null,
+): ConsentParts {
+  if (!parts) return {};
+  const kept: ConsentParts = {};
+  for (const [key, value] of Object.entries(parts) as [
+    ConsentElement,
+    string,
+  ][]) {
+    const text = (value || "").trim();
+    if (!text) continue;
+    const lower = text.toLowerCase();
+    if (key === "retention") {
+      const days = [facts.retention.audioDays, facts.retention.textDays];
+      // Every promised period must still be named …
+      if (days.some((value) => value !== null && !text.includes(String(value))))
+        continue;
+      // … and an indefinite one must not acquire a deadline.
+      if (days.every((value) => value === null) && /\d/.test(text)) continue;
+    }
+    if (key === "means") {
+      if (facts.processors.some((p) => !lower.includes(p.name.toLowerCase())))
+        continue;
+      if (
+        !facts.sources.includes("system") &&
+        SYSTEM_AUDIO_CLAIMS.some((claim) => lower.includes(claim))
+      )
+        continue;
+    }
+    if (
+      key === "recipients" &&
+      facts.storage.folder &&
+      !lower.includes(facts.storage.folder.toLowerCase())
+    )
+      continue;
+    kept[key] = text;
+  }
+  return kept;
 }
 
 export type ConsentMethod = "spoken" | "chat" | "calendar" | "other";
@@ -381,7 +442,9 @@ export function buildConsentRecord(
     parts?: ConsentParts | null;
   },
 ): ConsentRecord {
-  const parts = meta.parts && Object.keys(meta.parts).length ? meta.parts : null;
+  // A rephrasing that no longer states the facts never enters the record.
+  const checked = acceptConsentParts(facts, meta.parts);
+  const parts = Object.keys(checked).length ? checked : null;
   return {
     version: 1,
     templateVersion: CONSENT_TEMPLATE_VERSION,
@@ -431,9 +494,18 @@ export function validateConsentRecord(value: unknown): ConsentRecord {
   if (!METHODS.includes(record.method)) fail("die Art der Aufklärung fehlt.");
   if (typeof record.allInformed !== "boolean")
     fail("es ist nicht festgehalten, ob alle Anwesenden informiert waren.");
+  // Rebuilt through the clamp: a hand-edited archive file could otherwise
+  // hand the sweep an arbitrary deadline and have it trash the audio at once.
+  facts.retention = {
+    audioDays: retentionDays(facts.retention.audioDays),
+    textDays: retentionDays(facts.retention.textDays),
+  };
   const sentences = consentSentences(facts);
+  // Re-checked against the facts, so a stored record cannot prove itself with
+  // a rephrasing that contradicts what it says it agreed to.
+  const accepted = acceptConsentParts(facts, record.parts);
   for (const key of CONSENT_REQUIRED) {
-    const expected = (record.parts?.[key] || "").trim() || sentences[key];
+    const expected = accepted[key] || sentences[key];
     if (!expected || !record.text.includes(expected))
       fail(`der Teil „${key}“ kommt im Text nicht vor.`);
   }

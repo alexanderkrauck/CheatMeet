@@ -1,4 +1,3 @@
-import type { RetentionPolicy } from "../../shared/consent";
 import type { ReportData } from "../types";
 
 /** After this many failed attempts a file is left alone rather than retried forever. */
@@ -51,14 +50,4 @@ export function dueAudio(
       !busy.has(report.id) &&
       (audioExpiresAt(report) as number) <= now,
   );
-}
-
-const days = (value: number | null) =>
-  value === null ? "unbegrenzt" : `${value} ${value === 1 ? "Tag" : "Tage"}`;
-
-export function retentionLabel(policy: RetentionPolicy): {
-  audio: string;
-  text: string;
-} {
-  return { audio: days(policy.audioDays), text: days(policy.textDays) };
 }

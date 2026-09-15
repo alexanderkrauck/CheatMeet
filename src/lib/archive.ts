@@ -4,6 +4,10 @@ import type { ReportData } from "../types";
 
 export const ARCHIVE_VERSION = 1;
 
+/** The folder a meeting lives in. Named once, used by every writer and reader. */
+export const reportFolderName = (report: ReportData) =>
+  `Meeting ${report.date.slice(0, 10)} – ${report.id}`;
+
 /**
  * The contract for `bericht_daten.json` — the boundary between the app's own
  * report shape and the files a person, another device or an AI agent reads out
@@ -126,7 +130,24 @@ export function fromArchive(
     consent = undefined;
   }
 
-  const speech = raw.speech as ReportData["speech"];
+  // speakerNamesOf and speakerLabel index into these on every list render, so
+  // one malformed turn in one file would break the whole meeting list.
+  const rawSpeech = raw.speech as ReportData["speech"];
+  const speech =
+    rawSpeech &&
+    typeof rawSpeech === "object" &&
+    Array.isArray(rawSpeech.turns) &&
+    rawSpeech.turns.every(
+      (turn) =>
+        turn &&
+        typeof turn === "object" &&
+        typeof turn.speaker === "string" &&
+        typeof turn.text === "string" &&
+        Number.isFinite(turn.startMs) &&
+        Number.isFinite(turn.endMs),
+    )
+      ? { ...rawSpeech, speakerNames: rawSpeech.speakerNames || {} }
+      : undefined;
   const calendar: Record<string, string> = {};
   for (const field of CALENDAR_FIELDS) {
     const value = text(raw[field]);
@@ -150,9 +171,7 @@ export function fromArchive(
     ...(text(raw.suggestedTitle)
       ? { suggestedTitle: text(raw.suggestedTitle) }
       : {}),
-    ...(speech && typeof speech === "object" && Array.isArray(speech.turns)
-      ? { speech }
-      : {}),
+    ...(speech ? { speech } : {}),
     ...(typeof raw.durationMs === "number" && Number.isFinite(raw.durationMs)
       ? { durationMs: raw.durationMs }
       : {}),

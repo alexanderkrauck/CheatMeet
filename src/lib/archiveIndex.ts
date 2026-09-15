@@ -1,5 +1,5 @@
-import { meetingDurationMs } from "./meetingMeta";
-import { ARCHIVE_VERSION } from "./archive";
+import { meetingDurationMs, speakerNamesOf } from "./meetingMeta";
+import { ARCHIVE_VERSION, reportFolderName } from "./archive";
 import type { ReportData } from "../types";
 
 /**
@@ -18,6 +18,8 @@ export interface ArchiveIndexEntry {
   date: string;
   title: string;
   folder: string;
+  /** Addressed by id, because the name is only a guess at where it lives. */
+  folder_id: string;
   duration_ms: number;
   participants: string[];
   summary: string;
@@ -40,9 +42,6 @@ export interface ArchiveIndex {
 export const ARCHIVE_INDEX_NAME = "index.json";
 export const ARCHIVE_SCHEMA_NAME = "SCHEMA.md";
 
-const folderName = (report: ReportData) =>
-  `Meeting ${report.date.slice(0, 10)} – ${report.id}`;
-
 export function archiveIndexEntry(report: ReportData): ArchiveIndexEntry {
   const files: Record<string, string> = {};
   if (report.driveMarkdownId) files["zusammenfassung.md"] = report.driveMarkdownId;
@@ -54,9 +53,12 @@ export function archiveIndexEntry(report: ReportData): ArchiveIndexEntry {
     id: report.id,
     date: report.date,
     title: report.title,
-    folder: folderName(report),
+    folder: reportFolderName(report),
+    folder_id: report.driveFolderId || "",
     duration_ms: meetingDurationMs(report),
-    participants: report.participants || [],
+    participants: report.speech
+      ? speakerNamesOf(report.speech)
+      : report.participants || [],
     summary: report.summary || "",
     todos: (report.todos || []).map((todo) => todo.text),
     takeaways: report.takeaways || [],

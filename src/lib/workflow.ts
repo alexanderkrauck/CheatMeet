@@ -9,7 +9,7 @@ import {
   downloadDriveFile,
 } from "./drive";
 import { audioExtension, validateAnalysis } from "../../shared/analysis";
-import { toArchive } from "./archive";
+import { reportFolderName, toArchive } from "./archive";
 import { transcriptIsElsewhere } from "./reportProjection";
 import {
   consentToMarkdown,
@@ -175,7 +175,7 @@ export async function backupDraft(
     const parent = await run(() => getRootFolder(token));
     report.driveFolderId = await run(() =>
       createSubFolder(
-        `Meeting ${report.date.slice(0, 10)} – ${report.id}`,
+        reportFolderName(report),
         parent,
         token,
       ),
@@ -227,7 +227,7 @@ export async function syncReport(report: ReportData, token: string) {
     const parent = await run(() => getRootFolder(token));
     next.driveFolderId = await run(() =>
       createSubFolder(
-        `Meeting ${report.date.slice(0, 10)} – ${report.id}`,
+        reportFolderName(report),
         parent,
         token,
       ),

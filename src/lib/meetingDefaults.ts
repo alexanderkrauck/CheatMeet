@@ -83,7 +83,9 @@ export function savedRetention(): RetentionPolicy {
     const parsed = JSON.parse(stored);
     return {
       audioDays: retentionDays(parsed?.audioDays),
-      textDays: retentionDays(parsed?.textDays),
+      // Nothing deletes transcripts, so nothing may promise to. The text is
+      // the archive, and the notice says so: "bewahre ich unbefristet auf".
+      textDays: null,
     };
   } catch {
     return DEFAULT_RETENTION;
@@ -93,8 +95,5 @@ export function savedRetention(): RetentionPolicy {
 export const setSavedRetention = (policy: RetentionPolicy) =>
   write(
     RETENTION_KEY,
-    JSON.stringify({
-      audioDays: retentionDays(policy.audioDays),
-      textDays: retentionDays(policy.textDays),
-    }),
+    JSON.stringify({ audioDays: retentionDays(policy.audioDays) }),
   );

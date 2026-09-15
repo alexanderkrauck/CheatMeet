@@ -4,6 +4,7 @@ import {
   consentSentences,
   type ConsentRecord,
 } from "../../shared/consent";
+import { meetingDurationMs, speakerNamesOf } from "./meetingMeta";
 import type { ReportData } from "../types";
 
 function escapeText(text: string): string {
@@ -48,8 +49,11 @@ export function meetingFrontmatter(report: ReportData): string {
     ["id", report.id],
     ["date", report.date],
     ["title", report.title],
-    ["duration_ms", report.durationMs ?? null],
-    ["participants", report.participants ?? []],
+    ["duration_ms", meetingDurationMs(report)],
+    [
+      "participants",
+      report.speech ? speakerNamesOf(report.speech) : (report.participants ?? []),
+    ],
     ["sources", report.captureSources ?? []],
     ["consent_obtained_at", report.consent?.obtainedAt ?? null],
     ["retention_audio_days", report.consent?.facts.retention.audioDays ?? null],

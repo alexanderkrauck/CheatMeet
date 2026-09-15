@@ -29,12 +29,10 @@ import { draftConsentNotice } from "../lib/consentDraft";
 import { savedRetention } from "../lib/meetingDefaults";
 import {
   assembleConsentText,
-  consentFacts,
   decisionFacts,
   type ConsentDecision,
   type ConsentParts,
 } from "../../shared/consent";
-import { describeAudioSources } from "../lib/audioSourceState";
 import {
   audioSourcePreference,
   setAudioSourcePreference,
@@ -117,12 +115,13 @@ export default function RecordPage() {
 
   // What the user decides before consenting. The notice is derived from it, so
   // the text on screen and the text in the record are the same function.
-  const [decision, setDecision] = useState<ConsentDecision>(() => ({
+  // The folder is not a decision made here: it comes from settings and is
+  // read at render time, so it cannot go stale while the notice is on screen.
+  const [decision, setDecision] = useState<Omit<ConsentDecision, "folderName">>(() => ({
     method: "spoken",
     allInformed: false,
     language: "de",
     address: "du",
-    folderName: savedDriveFolder()?.name || DEFAULT_FOLDER_NAME,
     retention: savedRetention(),
   }));
   const [consentParts, setConsentParts] = useState<ConsentParts | null>(null);
@@ -254,7 +253,16 @@ export default function RecordPage() {
 
   // The notice on screen and the notice in the record come from the same pure
   // functions over the same inputs, so they cannot disagree.
-  const consentFactsNow = decisionFacts(decision, liveSources.length ? liveSources : ["mic"]);
+  // Read at render time, not frozen at mount: the storage folder can be
+  // changed from this very screen, and the notice names where files go.
+  const decisionNow: ConsentDecision = {
+    ...decision,
+    folderName: folder?.name || DEFAULT_FOLDER_NAME,
+  };
+  const consentFactsNow = decisionFacts(
+    decisionNow,
+    liveSources.length ? liveSources : ["mic"],
+  );
   const consentText = assembleConsentText(consentFactsNow, consentParts);
 
   async function refineNotice(instruction: string) {
@@ -284,7 +292,7 @@ export default function RecordPage() {
   }
 
   function consentGiven() {
-    void beginRecording({ ...decision, parts: consentParts }).catch((e) =>
+    void beginRecording({ ...decisionNow, parts: consentParts }).catch((e) =>
       setCaptureError(errorMessage(e)),
     );
   }
@@ -537,7 +545,7 @@ export default function RecordPage() {
                 <ArmedMeeting
                   sources={liveSources}
                   text={consentText}
-                  decision={decision}
+                  decision={decisionNow}
                   onDecision={(patch) =>
                     setDecision((current) => ({ ...current, ...patch }))
                   }

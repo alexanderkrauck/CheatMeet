@@ -4,6 +4,7 @@ import {
   type MeetingTranscript,
 } from "../../shared/transcription";
 import type { ReportData } from "../types";
+import { transcriptIsElsewhere } from "./reportProjection";
 
 /**
  * Facts about a meeting that the list, the calendar and the row renderer all
@@ -400,7 +401,7 @@ export function summarise(report: ReportData): ReportSummary {
     calendarSyncedAt: report.calendarSyncedAt,
     calendarError: report.calendarError,
     transcription: report.transcription || "",
-    transcriptLocal: !!report.transcription,
+    transcriptLocal: !transcriptIsElsewhere(report),
     items: [
       ...(report.todos || []).map((todo) => `${todo.text} ${todo.owner || ""}`),
       ...(report.takeaways || []),
