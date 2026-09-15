@@ -221,6 +221,24 @@ export function buildMonthGrid(
 
 /** Three discrete steps, not a continuous heatmap: with a handful of meetings
  *  a day, a smooth scale reads as noise rather than as information. */
+/**
+ * Where a meeting stands with Google Calendar. Four states, because "linked"
+ * and "written back" are genuinely different: a report can point at an event
+ * whose notes were never updated, and saying nothing about that is how the
+ * write-back silently stops working.
+ */
+export type CalendarState = "none" | "linked" | "synced" | "error";
+
+export const calendarState = (report: {
+  calendarEventId?: string;
+  calendarSyncedAt?: string;
+  calendarError?: string;
+}): CalendarState => {
+  if (report.calendarError) return "error";
+  if (!report.calendarEventId) return "none";
+  return report.calendarSyncedAt ? "synced" : "linked";
+};
+
 export const dayIntensity = (cell: DayCell): 0 | 1 | 2 | 3 =>
   !cell.count ? 0 : cell.minutes >= 120 ? 3 : cell.minutes >= 30 ? 2 : 1;
 
@@ -332,6 +350,8 @@ export interface ReportSummary {
   driveSyncedAt?: string;
   /** Lets an upcoming event show its report instead of offering a re-record. */
   calendarEventId?: string;
+  calendarSyncedAt?: string;
+  calendarError?: string;
   /** Kept whole: search matches on it and the row quotes it back. */
   transcription: string;
   /** To-dos and takeaways as one string, so search still reaches them. */
@@ -369,6 +389,8 @@ export function summarise(report: ReportData): ReportSummary {
     driveFolderId: report.driveFolderId,
     driveSyncedAt: report.driveSyncedAt,
     calendarEventId: report.calendarEventId,
+    calendarSyncedAt: report.calendarSyncedAt,
+    calendarError: report.calendarError,
     transcription: report.transcription || "",
     items: [
       ...(report.todos || []).map((todo) => `${todo.text} ${todo.owner || ""}`),

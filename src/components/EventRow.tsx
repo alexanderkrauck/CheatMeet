@@ -1,7 +1,11 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Mic, Users } from "lucide-react";
 import type { CalendarEvent } from "../lib/calendar";
 import { guestLabel, isRecordable, timeLabel } from "../lib/upcoming";
+
+/** The drag payload a meeting row writes, and the only one this row accepts. */
+export const MIME = "application/x-cheatmeet-report";
 
 export const recordHref = (event: CalendarEvent) =>
   `/record?new=1&event=${encodeURIComponent(event.id)}`;
@@ -16,13 +20,44 @@ export const recordHref = (event: CalendarEvent) =>
 export default function EventRow({
   event,
   quiet = false,
+  onDropReport,
 }: {
   event: CalendarEvent;
   quiet?: boolean;
+  /** Receives a recording dragged onto this event, by its report id. */
+  onDropReport?: (reportId: string) => void;
 }) {
   const guests = guestLabel(event);
+  const [over, setOver] = useState(false);
+  // Only the app's own payload counts: a dragged file or link must not look
+  // droppable here.
+  const carriesReport = (types: readonly string[]) =>
+    types.includes(MIME);
+
+  const drops = onDropReport
+    ? {
+        onDragOver: (drag: React.DragEvent) => {
+          if (!carriesReport(drag.dataTransfer.types)) return;
+          drag.preventDefault();
+          drag.dataTransfer.dropEffect = "link";
+          setOver(true);
+        },
+        onDragLeave: () => setOver(false),
+        onDrop: (drag: React.DragEvent) => {
+          if (!carriesReport(drag.dataTransfer.types)) return;
+          drag.preventDefault();
+          setOver(false);
+          const id = drag.dataTransfer.getData(MIME);
+          if (id) onDropReport(id);
+        },
+      }
+    : {};
+
   return (
-    <div className={`event-row${quiet ? " is-quiet" : ""}`}>
+    <div
+      className={`event-row${quiet ? " is-quiet" : ""}${over ? " is-drop" : ""}`}
+      {...drops}
+    >
       <span className="event-time">{timeLabel(event)}</span>
       <span className="event-body">
         <strong title={event.title}>{event.title}</strong>

@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { CalendarOff, ChevronLeft, ChevronRight, Mic } from "lucide-react";
+import AssignEvent from "../components/AssignEvent";
 import EventRow from "../components/EventRow";
 import MeetingRow from "../components/MeetingRow";
 import MonthGrid from "../components/MonthGrid";
@@ -25,6 +26,8 @@ import {
   shiftMonth,
 } from "../lib/meetingMeta";
 import { useCalendarEvents } from "../lib/useCalendarEvents";
+import type { CalendarEvent } from "../lib/calendar";
+import type { ReportSummary } from "../lib/meetingMeta";
 import { useReports } from "../lib/useReports";
 
 /**
@@ -43,6 +46,11 @@ export default function CalendarPage() {
   const { reports, dirty, running, loading, error } = useReports();
   const [params, setParams] = useSearchParams();
   const [removalWarning, setRemovalWarning] = useState("");
+  // A recording dropped onto an event, waiting for the user to confirm.
+  const [dropped, setDropped] = useState<{
+    report: ReportSummary;
+    event: CalendarEvent;
+  } | null>(null);
   // Recomputed every render rather than pinned at mount: a tab left open past
   // midnight was keeping yesterday's ring, yesterday's "Heute" and yesterday's
   // fetch window. The memos below key on the day string, so this costs nothing.
@@ -171,10 +179,18 @@ export default function CalendarPage() {
                       report={entry.report}
                       dirty={dirty.includes(entry.report.id)}
                       running={running.has(entry.report.id)}
+                      draggable
                       onWarning={setRemovalWarning}
                     />
                   ) : (
-                    <EventRow event={entry.event} quiet={entry.quiet} />
+                    <EventRow
+                      event={entry.event}
+                      quiet={entry.quiet}
+                      onDropReport={(id) => {
+                        const match = reports.find((r) => r.id === id);
+                        if (match) setDropped({ report: match, event: entry.event });
+                      }}
+                    />
                   )}
                 </Fragment>
               ))
@@ -193,6 +209,15 @@ export default function CalendarPage() {
             )}
           </div>
         </div>
+      )}
+
+      {dropped && (
+        <AssignEvent
+          report={dropped.report}
+          event={dropped.event}
+          onClose={() => setDropped(null)}
+          onWarning={setRemovalWarning}
+        />
       )}
 
       {undated.length > 0 && (

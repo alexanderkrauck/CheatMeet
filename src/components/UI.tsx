@@ -1,7 +1,13 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ArrowUpRight, Loader2 } from "lucide-react";
-import { isValidDate, type MeetingStatus } from "../lib/meetingMeta";
+import { ArrowUpRight, CalendarDays, Loader2 } from "lucide-react";
+import {
+  calendarState,
+  isValidDate,
+  type CalendarState,
+  type MeetingStatus,
+} from "../lib/meetingMeta";
+import { hasCalendarGrant, subscribeDriveSession } from "../lib/session";
 
 /** Sized by CSS per surface, so callers only say where it goes. */
 export function Brand({ className = "" }: { className?: string }) {
@@ -81,6 +87,50 @@ const STATUS_TONE = {
  * mid-analysis is persisted as "analyzing", so without it the badge reads
  * "Analyse unterbrochen?" directly beneath a pill saying the analysis is live.
  */
+const CALENDAR_TEXT: Record<CalendarState, string> = {
+  none: "Kein Termin",
+  linked: "Termin verknüpft",
+  synced: "Im Kalender",
+  error: "Kalender-Fehler",
+};
+const CALENDAR_TONE: Record<CalendarState, string> = {
+  none: "",
+  linked: "amber",
+  synced: "green",
+  error: "red",
+};
+
+/**
+ * Where this meeting stands with Google Calendar. "Verknüpft" and "im
+ * Kalender" are deliberately different words: a report can point at an event
+ * whose notes were never written, and only naming that makes a silently failed
+ * write-back visible.
+ */
+export function CalendarStatus({
+  report,
+}: {
+  report: Parameters<typeof calendarState>[0];
+}) {
+  const granted = useSyncExternalStore(
+    subscribeDriveSession,
+    hasCalendarGrant,
+    () => false,
+  );
+  // Without a grant every row would claim "Kein Termin", which is a statement
+  // about the account, not about the meeting.
+  if (!granted) return null;
+  const state = calendarState(report);
+  return (
+    <span
+      className={`badge ${CALENDAR_TONE[state]}`}
+      title={state === "error" ? report.calendarError : undefined}
+    >
+      <CalendarDays size={12} aria-hidden="true" />
+      {CALENDAR_TEXT[state]}
+    </span>
+  );
+}
+
 export function Status({
   status,
   syncedAt,
