@@ -1201,10 +1201,11 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-/* Sized to be read aloud; a long notice scrolls inside its own card rather
-   than pushing the confirmation off the screen. */
+/* Sized to be read aloud. It takes the height it needs and no more; only a
+   notice longer than the column scrolls inside its own card, rather than
+   pushing the confirmation off the screen. */
 .consent-text {
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
   border: 1px solid #d5dae2;
@@ -1222,7 +1223,7 @@
   flex-shrink: 0;
 }
 .consent-ask input {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   border: 1px solid #c8d6ef;
   border-radius: 10px;
@@ -1232,7 +1233,17 @@
 }
 .consent-ask .walk-secondary {
   flex: 0 0 auto;
+  width: auto;
   margin: 0;
+  padding: 8px 14px;
+  border: 1px solid #c8d6ef;
+  border-radius: 10px;
+  background: #eef4ff;
+  font-size: 0.92rem;
+}
+.consent-ask .walk-secondary:disabled {
+  background: #f1f3f6;
+  color: #9aa6b8;
 }
 .consent-reset {
   display: inline-flex;
