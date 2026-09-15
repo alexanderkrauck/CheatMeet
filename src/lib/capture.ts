@@ -685,6 +685,12 @@ export async function importAudio(file: File) {
   return snapshot.draft.report.id;
 }
 
+/**
+ * Throws the take away and resets to an empty capture. It deliberately returns
+ * nothing: it used to hand back the id of the fresh blank draft, and the only
+ * caller read that as somewhere to navigate — which left the user standing on
+ * the recorder after asking to discard.
+ */
 export async function discardCapture() {
   await queue.catch(() => {});
   await deleteDraft(snapshot.owner, snapshot.draft.report.id);
@@ -697,7 +703,6 @@ export async function discardCapture() {
   transcriptionDone = null;
   snapshot = blank(snapshot.owner);
   emit({});
-  return snapshot.draft.report.id;
 }
 
 /** Clears the session after its draft has been handed to the save pipeline. */

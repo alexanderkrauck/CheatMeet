@@ -366,6 +366,14 @@ export default function RecordPage() {
             <main className={`walk-content${state === "ready" ? " is-ready" : ""}`}>
               {state === "ready" ? (
                 <>
+                  {/* Above the title on purpose: picking an event fills the
+                      field below it, so the field cannot come first. */}
+                  <CalendarMatch
+                    atMs={Date.parse(draft.report.date) || Date.now()}
+                    selectedId={draft.report.calendarEventId}
+                    label="TERMIN"
+                    onPick={(event) => setCaptureEvent(event)}
+                  />
                   <label className="walk-project">
                     <span>PROJEKT / MEETING</span>
                     <input
@@ -375,15 +383,7 @@ export default function RecordPage() {
                       onChange={(e) => setCaptureTitle(e.target.value)}
                     />
                   </label>
-                  <CalendarMatch
-                    atMs={Date.parse(draft.report.date) || Date.now()}
-                    selectedId={draft.report.calendarEventId}
-                    onPick={(event) => setCaptureEvent(event)}
-                  />
                   <div className="walk-ready-intro">
-                    <div className="walk-mic-symbol">
-                      <Mic size={32} />
-                    </div>
                     <h1>
                       Ein Meeting.
                       <br />
@@ -474,6 +474,7 @@ export default function RecordPage() {
                   <CalendarMatch
                     atMs={Date.parse(draft.report.date) || Date.now()}
                     selectedId={draft.report.calendarEventId}
+                    label="TERMIN"
                     onPick={(event) => setCaptureEvent(event)}
                   />
                   <div className="walk-review-media">
@@ -820,9 +821,12 @@ export default function RecordPage() {
                 disabled={recording}
                 onClick={() => {
                   void discardCapture()
-                    .then((id) => {
+                    .then(() => {
                       setSheet(null);
-                      navigate(`/record?draft=${id}`, { replace: true });
+                      // Discarding means leaving. Navigating to the fresh blank
+                      // draft discardCapture returns kept the user standing on
+                      // the recorder, looking at the take they just threw away.
+                      navigate("/dashboard", { replace: true });
                     })
                     .catch((e) => setCaptureError(errorMessage(e)));
                 }}
