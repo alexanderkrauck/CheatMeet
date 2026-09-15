@@ -58,6 +58,10 @@
   color: inherit;
 }
 .walk-icon:hover {
+  background: #eff6ff;
+}
+/* The sheets' close button is a .walk-icon on a light surface. */
+.walk-frame .walk-icon:hover {
   background: #1b2436;
 }
 /* 0.2 was tuned for a dark glyph on a pale page; white at 20% on this ground
@@ -303,15 +307,24 @@
   justify-content: center;
   gap: 10px;
   border-radius: 10px;
-  /* The one thing you came here to press is the brightest object in the room. */
-  background: #f2f6fc;
-  color: #0b1220;
+  background: #2563eb;
+  color: #fff;
   font-size: 15px;
   font-weight: 650;
   width: 100%;
   text-align: center;
 }
 .walk-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+/* Only inside the dark frame. The sheets reuse .walk-primary on their own light
+   surface, where a near-white slab has no visible edge at all. */
+.walk-frame .walk-primary {
+  /* The one thing you came here to press is the brightest object in the room. */
+  background: #f2f6fc;
+  color: #0b1220;
+}
+.walk-frame .walk-primary:hover:not(:disabled) {
   background: #ffffff;
 }
 .walk-primary:focus-visible {
@@ -322,13 +335,16 @@
   min-height: 40px;
   padding: 8px;
   background: none;
-  color: #cbd7e8;
+  color: #1d4ed8;
   font-size: 13px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   width: 100%;
+}
+.walk-frame .walk-secondary {
+  color: #cbd7e8;
 }
 .walk-local-status {
   display: flex;
@@ -424,7 +440,7 @@
   justify-content: space-between;
   gap: 10px;
   font-size: 12px;
-  color: #6a7483;
+  color: #aebbce;
   margin-bottom: 12px;
 }
 .walk-review-stats span,
@@ -435,7 +451,8 @@
 }
 .walk-review-stats button {
   border: 0;
-  background: #e5e9f1;
+  background: #22314a;
+  color: #f2f6fc;
   border-radius: 5px;
   padding: 8px;
   font-size: 12px;
@@ -721,13 +738,6 @@
     grid-column: 1/-1;
   }
 }
-.walk-lock-status {
-  text-align: center;
-  font-size: 12px;
-  color: #aebbce;
-  line-height: 1.3;
-  margin: 0;
-}
 
 .walk-busy {
   display: flex;
@@ -839,7 +849,7 @@
 .live-transcript p {
   font-size: 14.5px;
   line-height: 1.72;
-  color: #1e3a5f;
+  color: #e6edf7;
   white-space: pre-wrap;
 }
 .live-assist {
@@ -858,7 +868,7 @@
 }
 .live-empty {
   font-size: 12.5px;
-  color: #7b899e;
+  color: #aebbce;
   line-height: 1.6;
 }
 .live-thinking {
@@ -866,16 +876,16 @@
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  color: #5b7cb5;
+  color: #9fb0c6;
 }
 .insight-group h3 {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10.5px;
+  font-size: 11px;
   letter-spacing: 1.1px;
   text-transform: uppercase;
-  color: #5b7cb5;
+  color: #9fb0c6;
   margin-bottom: 7px;
   font-weight: 650;
 }
@@ -890,7 +900,7 @@
 .insight-group dd {
   font-size: 13.5px;
   line-height: 1.55;
-  color: #1e3a5f;
+  color: #dbe6f5;
 }
 .insight-group dl {
   margin: 0;
@@ -901,7 +911,7 @@
 .insight-group dt {
   font-size: 13px;
   font-weight: 650;
-  color: #1e40af;
+  color: #7dd3fc;
 }
 .insight-group dd {
   margin: 2px 0 0;
@@ -913,19 +923,19 @@
 .live-question {
   font-size: 13px;
   font-weight: 600;
-  color: #1e40af;
+  color: #7dd3fc;
   margin-bottom: 5px;
 }
 .live-answer {
   font-size: 13.5px;
   line-height: 1.6;
-  color: #1e3a5f;
+  color: #dbe6f5;
   display: flex;
   align-items: baseline;
   gap: 6px;
 }
 .live-answer.is-error {
-  color: #b4472f;
+  color: #ff9d8a;
 }
 .live-ask {
   flex-shrink: 0;
@@ -939,10 +949,10 @@
   min-width: 0;
   padding: 11px 13px;
   border-radius: 9px;
-  border: 1px solid #c3d5f2;
-  background: #fff;
+  border: 1px solid #64748b;
+  background: #131c2e;
   font-size: 16px;
-  color: #1e3a5f;
+  color: #f2f6fc;
 }
 .live-ask button {
   width: 46px;
@@ -955,7 +965,7 @@
 .live-error {
   padding: 0 12px 10px;
   font-size: 11.5px;
-  color: #b4472f;
+  color: #ff9d8a;
 }
 
 /* One pane at a time until there is room for both. */
@@ -970,8 +980,11 @@
   .live-panes > .live-assist { display: flex; }}
 
 /* --- Glass ---------------------------------------------------------------
-   Translucent surfaces over the page's colour field, with a hairline top
-   highlight so each pane reads as a physical sheet rather than a flat box. */
+   Translucent surfaces over the page's ground, with a hairline top highlight
+   so each pane reads as a physical sheet rather than a flat box. The alphas
+   are dark: white alpha over a near-black ground composites to a mid-grey that
+   is neither a light surface nor a dark one, and every ink rule inside it
+   then fails against both. */
 .live-bar {
   background: linear-gradient(140deg, #1e40afe0, #3b2f9ae0);
   backdrop-filter: blur(22px) saturate(170%);
@@ -982,12 +995,12 @@
     0 10px 26px -14px #1e293b6e;
 }
 .live-tabs button {
-  background: #ffffff70;
+  background: #1b2436b8;
   backdrop-filter: blur(16px) saturate(160%);
   -webkit-backdrop-filter: blur(16px) saturate(160%);
-  border: 1px solid #ffffff6b;
-  box-shadow: inset 0 1px 0 #ffffffb0;
-  color: #35507f;
+  border: 1px solid #ffffff1f;
+  box-shadow: inset 0 1px 0 #ffffff17;
+  color: #cbd7e8;
   transition: background 0.16s ease, color 0.16s ease;
 }
 .live-tabs button.active {
@@ -999,51 +1012,53 @@
     0 8px 20px -12px #2563ebcc;
 }
 .live-pane {
-  background: linear-gradient(150deg, #ffffff85, #ffffff5c);
-  backdrop-filter: blur(30px) saturate(190%);
-  -webkit-backdrop-filter: blur(30px) saturate(190%);
-  border: 1px solid #ffffff7a;
+  background: linear-gradient(150deg, #1d2739e8, #161f2ee0);
+  backdrop-filter: blur(30px) saturate(140%);
+  -webkit-backdrop-filter: blur(30px) saturate(140%);
+  border: 1px solid #ffffff1a;
   border-radius: 17px;
   box-shadow:
-    inset 0 1px 0 #ffffffc4,
-    0 18px 42px -26px #1e293b73;
+    inset 0 1px 0 #ffffff1f,
+    0 18px 42px -26px #00000099;
 }
 .live-assist {
-  background: linear-gradient(150deg, #ffffff70, #ffffff45);
+  background: linear-gradient(150deg, #19222fe8, #131b27e0);
 }
 .live-ask {
-  border-top: 1px solid #ffffff8f;
-  background: #ffffff59;
+  border-top: 1px solid #ffffff1a;
+  background: #ffffff0a;
   border-radius: 0 0 17px 17px;
 }
 .live-ask input {
-  background: #ffffffab;
-  border: 1px solid #ffffff9e;
-  box-shadow: inset 0 1px 2px #1e293b12;
+  background: #131c2e;
+  border: 1px solid #64748b;
+  box-shadow: none;
 }
 .live-ask input:focus {
   outline: none;
-  border-color: #2563eb80;
-  box-shadow: 0 0 0 3px #2563eb26;
+  border-color: #7dd3fc;
+  box-shadow: 0 0 0 3px #7dd3fc33;
 }
 .live-ask button {
   background: linear-gradient(140deg, #2563eb, #4f46e5);
   box-shadow: 0 8px 18px -10px #2563ebd9;
 }
 .live-exchange {
-  border-top: 1px solid #ffffff9e;
+  border-top: 1px solid #ffffff1a;
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  .live-pane, .live-tabs button, .live-ask input { backdrop-filter: none; background: #fff; }}
+  .live-pane, .live-tabs button { backdrop-filter: none; background: #1b2436; }
+  .live-assist { background: #19222f; }
+  .live-ask input { backdrop-filter: none; background: #131c2e; }}
 
 .walk-gap {
   margin-top: 10px;
   font-size: 11.5px;
   line-height: 1.5;
-  color: #8a5a1f;
-  background: #fef3c7ad;
-  border: 1px solid #fcd9a0;
+  color: #ffd79a;
+  background: #2e2411;
+  border: 1px solid #6b5320;
   border-radius: 9px;
   padding: 9px 11px;
 }
@@ -1059,17 +1074,23 @@
 }
 .audio-preview small {
   font-size: 11px;
-  color: #5b6577;
+  color: #aebbce;
 }
 
 /* Keep source controls outside the transcript's scrolling region. */
 .live-panes > .live-transcript { flex: 2.3; flex-direction: column; overflow: hidden; padding: 0; }
 .live-panes[data-tab="transcript"] > .live-transcript { display: flex; }
 .live-transcript-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; overflow-anchor: none; }
-.live-transcript .live-speakers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; margin: 0; padding: 10px 12px; border-bottom: 1px solid #dbe3f2; background: #f5f7ff; border-radius: 16px 16px 0 0; }
+.live-transcript .live-speakers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; margin: 0; padding: 10px 12px; border-bottom: 1px solid #232f45; background: #151e2e; border-radius: 16px 16px 0 0; }
 .live-speakers .speaker-filters { flex-wrap: nowrap; margin: 0; gap: 4px; }
 .live-speakers .speaker-picker { flex: 1; min-width: 110px; margin: 0; display: block; }
 .speaker-picker select { width: 100%; min-width: 0; padding: 7px 4px; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #334155; }
+.walk-frame .speaker-picker select { border-color: #64748b; background: #1b2436; color: #f2f6fc; }
+.walk-frame .speaker-filters button { background: #1b2436; border-color: #64748b; color: #cbd7e8; }
+.walk-frame .speaker-filters button[aria-pressed="true"] { background: #7dd3fc; border-color: #7dd3fc; color: #0b1220; }
+.walk-frame .live-speakers summary { color: #cbd7e8; }
+.walk-frame .inline-speaker-name:hover, .walk-frame .inline-speaker-name:focus-visible { background: #22314a; outline-color: #7dd3fc; }
+.walk-frame .inline-speaker-input { background: #131c2e; border-color: #7dd3fc; color: #f2f6fc; }
 .inline-speaker-name { display: inline-flex; align-items: center; gap: 5px; padding: 3px 2px; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-align: inherit; }
 .inline-speaker-name:hover, .inline-speaker-name:focus-visible { background: #dbeafe; outline: 1px solid #93c5fd; }
 .inline-speaker-input { max-width: 180px; width: 100%; border: 1px solid #6366f1; border-radius: 5px; padding: 4px 6px; background: white; color: #1e293b; font-size: 14px; }
@@ -1080,7 +1101,6 @@
 .walk-capture-controls { margin: 0; }
 .walk-capture-controls .walk-pause { flex: 0 0 86px; min-height: 48px; width: auto; flex-direction: row; }
 .walk-capture-controls .walk-finish { flex: 1; min-height: 48px; }
-.walk-recording .walk-lock-status, .walk-paused .walk-lock-status { display: none; }
 .walk-recording .live, .walk-paused .live { gap: 6px; }
 .live .live-suggestion { margin: 0; padding: 8px 12px; flex-shrink: 0; }
 .live .live-suggestion strong { font-size: 10px; }
@@ -1156,6 +1176,14 @@
 .walk-frame .calendar-match .choice small,
 .walk-frame .calendar-match > p {
   color: #aebbce;
+}
+/* index.css's `.calendar-picked.is-unknown` ties with a single-class-scoped
+   override and wins on source order, so this has to out-specify it. */
+.walk-frame .calendar-match .calendar-picked.is-unknown {
+  color: #aebbce;
+}
+.walk-frame .calendar-match .calendar-picked.is-unknown strong {
+  color: #f2f6fc;
 }
 /* The picked event is the one lit panel: brighter fill, cool border. */
 .walk-frame .calendar-picked {

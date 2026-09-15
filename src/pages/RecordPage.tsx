@@ -602,13 +602,6 @@ export default function RecordPage() {
                   </p>
                 </>
               )}
-              {recording && (
-                <p className="walk-lock-status">
-                  {wakeLock === "active"
-                    ? "Bildschirm bleibt wach · du kannst zur Übersicht wechseln"
-                    : "Aufnahme läuft weiter, auch wenn du die Seite wechselst"}
-                </p>
-              )}
               <p className="walk-local-status">
                 {recording ? (
                   checkpointMs > 0 ? (
