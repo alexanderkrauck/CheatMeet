@@ -220,3 +220,68 @@ describe("server-held drive authorization", () => {
     ).toBe(false);
   });
 });
+
+describe("hasCalendarGrant", () => {
+  it("is false without a token, whatever was stored", async () => {
+    const { rememberToken, hasCalendarGrant } = await import("./session");
+    rememberToken(undefined);
+    expect(hasCalendarGrant()).toBe(false);
+  });
+  it("follows the grant the token was minted under", async () => {
+    const { rememberToken, hasCalendarGrant } = await import("./session");
+    rememberToken("t", 60_000, undefined, true);
+    expect(hasCalendarGrant()).toBe(true);
+    rememberToken("t", 60_000, undefined, false);
+    expect(hasCalendarGrant()).toBe(false);
+  });
+  it("defaults to false, so a Drive-only grant never claims the calendar", async () => {
+    const { rememberToken, hasCalendarGrant } = await import("./session");
+    rememberToken("t", 60_000);
+    expect(hasCalendarGrant()).toBe(false);
+  });
+  it("survives a reload: the flag rides with the stored session, not a module flag", async () => {
+    const first = await import("./session");
+    first.rememberToken("t", 60_000, undefined, true);
+    vi.resetModules();
+    const reloaded = await import("./session");
+    expect(reloaded.hasCalendarGrant()).toBe(true);
+  });
+});
+
+describe("serverAuthAvailable", () => {
+  it("remembers a real answer", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ serverAuth: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const { serverAuthAvailable } = await import("./session");
+    expect(await serverAuthAvailable()).toBe(true);
+    expect(await serverAuthAvailable()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache a failure, so one flaky request cannot downgrade the tab", async () => {
+    vi.resetModules();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue({ ok: true, json: async () => ({ serverAuth: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const { serverAuthAvailable } = await import("./session");
+    expect(await serverAuthAvailable()).toBe(false);
+    expect(await serverAuthAvailable()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats a non-2xx response as a failure it will retry", async () => {
+    vi.resetModules();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) })
+      .mockResolvedValue({ ok: true, json: async () => ({ serverAuth: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const { serverAuthAvailable } = await import("./session");
+    expect(await serverAuthAvailable()).toBe(false);
+    expect(await serverAuthAvailable()).toBe(true);
+  });
+});

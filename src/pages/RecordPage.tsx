@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   Check,
@@ -17,6 +17,7 @@ import {
   CloudUpload,
   Volume2,
   MonitorUp,
+  Settings2,
 } from "lucide-react";
 import { AudioPreview } from "../components/UI";
 import LiveMeeting from "../components/LiveMeeting";
@@ -30,7 +31,10 @@ import {
 import "./record.css";
 import { putLocal } from "../lib/local";
 import { uid } from "../lib/reports";
-import { verifyDriveAccess } from "../lib/drive";
+import { DEFAULT_FOLDER_NAME, verifyDriveAccess } from "../lib/drive";
+import PeopleDatalist from "../components/PeopleDatalist";
+import CalendarMatch from "../components/CalendarMatch";
+import { getEvent } from "../lib/calendar";
 import {
   errorMessage,
   connectGoogle,
@@ -53,6 +57,8 @@ import {
   setCaptureBusy,
   setCaptureError,
   setCaptureTitle,
+  isCapturing,
+  setCaptureEvent,
   setCaptureLanguages,
   setCaptureSingleSpeaker,
   startCapture,
@@ -72,6 +78,9 @@ export default function RecordPage() {
   const [searchParams] = useSearchParams();
   const requestedDraft = useRef(searchParams.get("draft")).current;
   const startNew = useRef(searchParams.has("new")).current;
+  // Arriving from an upcoming meeting: the recording is tied to that event
+  // before a single second is captured.
+  const requestedEvent = useRef(searchParams.get("event")).current;
   const [accountId] = useState(uid);
   // The session lives outside this component so that leaving the screen does
   // not end the meeting.
@@ -107,7 +116,11 @@ export default function RecordPage() {
   const audioInput = useRef<HTMLInputElement>(null);
   const saveButton = useRef<HTMLButtonElement>(null);
   const recording = state === "recording" || state === "paused";
-  const driveReady = !!driveToken(state === "ready" ? 10 * 60 * 1000 : 0);
+  // The readiness label must never be stricter than the gate the action
+  // itself applies: a 10-minute preflight against ensureDriveToken's 5-minute
+  // renewal margin made the button read "Google Drive freigeben" and then
+  // start recording instead.
+  const driveReady = !!driveToken();
 
   useEffect(() => {
     const update = () => refreshDriveSession((n) => n + 1);
@@ -145,7 +158,16 @@ export default function RecordPage() {
   useEffect(() => {
     let cancelled = false;
     openDraft(accountId, requestedDraft || undefined, startNew)
-      .then((id) => {
+      .then(async (id) => {
+        if (cancelled) return;
+        // Only for a session this navigation actually started: arriving here
+        // while another meeting is recording must leave that one alone.
+        if (requestedEvent && !isCapturing()) {
+          // A failed lookup must not block the recording; the picker on this
+          // screen is still there to link it by hand.
+          const event = await getEvent("primary", requestedEvent).catch(() => null);
+          if (!cancelled && event && !isCapturing()) setCaptureEvent(event);
+        }
         if (!cancelled) navigate(`/record?draft=${id}`, { replace: true });
       })
       .catch((e) => !cancelled && setCaptureError(errorMessage(e)))
@@ -153,7 +175,7 @@ export default function RecordPage() {
     return () => {
       cancelled = true;
     };
-  }, [accountId, requestedDraft, startNew, navigate]);
+  }, [accountId, requestedDraft, startNew, requestedEvent, navigate]);
 
   async function authorizeDrive() {
     if (operation.current) return;
@@ -290,6 +312,7 @@ export default function RecordPage() {
 
   return (
     <div className={`walk-page walk-${state}`}>
+      <PeopleDatalist />
       <div className="walk-frame" inert={sheet !== null}>
         <header className="walk-header">
           <button
@@ -352,6 +375,11 @@ export default function RecordPage() {
                       onChange={(e) => setCaptureTitle(e.target.value)}
                     />
                   </label>
+                  <CalendarMatch
+                    atMs={Date.parse(draft.report.date) || Date.now()}
+                    selectedId={draft.report.calendarEventId}
+                    onPick={(event) => setCaptureEvent(event)}
+                  />
                   <div className="walk-ready-intro">
                     <div className="walk-mic-symbol">
                       <Mic size={32} />
@@ -374,7 +402,7 @@ export default function RecordPage() {
                       <FolderOpen size={18} />
                       <span>
                         <small>SPEICHERORT</small>
-                        <strong>{folder?.name || "CheatMeet Recordings"}</strong>
+                        <strong>{folder?.name || DEFAULT_FOLDER_NAME}</strong>
                       </span>
                     </button>
                     <button
@@ -440,6 +468,14 @@ export default function RecordPage() {
                     </p>
                   </div>
                   {draft.report.transcriptionOrigin === "import" && draft.report.speech?.phase !== "final" && <MeetingLanguages value={draft.report.speech?.languages} onChange={setCaptureLanguages} />}
+                  {/* The link can still be made after the fact: before this the
+                      picker existed only on the pre-recording screen, so a
+                      recording started without one could never be attached. */}
+                  <CalendarMatch
+                    atMs={Date.parse(draft.report.date) || Date.now()}
+                    selectedId={draft.report.calendarEventId}
+                    onPick={(event) => setCaptureEvent(event)}
+                  />
                   <div className="walk-review-media">
                     <div className="walk-review-stats">
                       <span>
@@ -464,7 +500,7 @@ export default function RecordPage() {
                     <FolderOpen size={18} />
                     <span>
                       <small>SPEICHERORT IN GOOGLE DRIVE</small>
-                      <strong>{folder?.name || "CheatMeet Recordings"}</strong>
+                      <strong>{folder?.name || DEFAULT_FOLDER_NAME}</strong>
                     </span>
                     <ArrowRight size={17} />
                   </button>
@@ -636,7 +672,21 @@ export default function RecordPage() {
           onClose={() => setSheet(null)}
         >
           {sheet === "settings" ? (
-            <DriveSettings />
+            <div className="sheet-stack">
+              <DriveSettings />
+              {/* Leaving mid-capture would abandon the recording, and the
+                  settings page can sign you out. Offer the exit only when
+                  there is nothing running to lose. */}
+              {state === "recording" || state === "paused" ? (
+                <p className="muted small">
+                  Weitere Einstellungen nach dem Ende der Aufnahme.
+                </p>
+              ) : (
+                <Link className="btn" to="/settings">
+                  <Settings2 size={16} /> Alle Einstellungen
+                </Link>
+              )}
+            </div>
           ) : sheet === "sources" ? (
             <div className="walk-sources" role="group" aria-label="Audioquelle auswählen">
               <button

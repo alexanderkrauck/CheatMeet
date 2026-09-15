@@ -15,6 +15,12 @@ const active = new Map<string, Promise<void>>();
 export function prepareTranscript(
   draft: Draft,
   driveToken?: string,
+  /**
+   * Whether the paid provider round-trip may run. The local branch below still
+   * does — it is what finalises a live capture, and skipping it would throw
+   * the live turns away with the draft.
+   */
+  { batch = true }: { batch?: boolean } = {},
 ): Promise<void> {
   if (
     !draft.report.speech &&
@@ -93,6 +99,12 @@ export function prepareTranscript(
       assertOwner();
       return;
     }
+    if (!batch)
+      // The user chose "Nur in Drive sichern, ohne Analyse". Submitting a paid
+      // transcription anyway also burns this report's single reservation.
+      throw new Error(
+        "Audio ist in Drive gesichert. Für das Transkript bitte „Sichern & Zusammenfassen“ verwenden.",
+      );
     const url = `/api/transcription/import/${encodeURIComponent(draft.report.id)}`;
     const request = async (init: RequestInit = {}) => {
       assertOwner();

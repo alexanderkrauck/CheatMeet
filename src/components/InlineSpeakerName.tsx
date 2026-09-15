@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
+import { PEOPLE_LIST_ID } from "./PeopleDatalist";
 
 /** Edit at the utterance, retaining the provider identity behind the name. */
 export default function InlineSpeakerName({
@@ -37,6 +38,7 @@ export default function InlineSpeakerName({
   return editing ? (
     <input
       className="inline-speaker-input"
+      list={PEOPLE_LIST_ID}
       autoFocus
       maxLength={80}
       aria-label={`Name für ${source} ${name}`}

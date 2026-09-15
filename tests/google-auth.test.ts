@@ -145,6 +145,8 @@ describe("drive token endpoint", () => {
     expect(await response.json()).toEqual({
       accessToken: "fresh",
       expiresInSeconds: 3599,
+      // A grant made before calendar was enabled stays Drive-only.
+      calendar: false,
     });
     expect(String((fetchImpl.mock.calls[0][1] as RequestInit).body)).toContain(
       "refresh_token=stored-refresh",
@@ -186,6 +188,7 @@ describe("drive token endpoint", () => {
   it("reports whether the deployment can mint tokens at all", async () => {
     expect(await (await fetch(`${base}/api/auth/config`)).json()).toEqual({
       serverAuth: true,
+      calendar: false,
       clientId: true,
       clientSecret: true,
     });
@@ -198,7 +201,12 @@ describe("drive token endpoint", () => {
     // diagnosable without reading the container's environment.
     expect(
       await (await fetch(`http://127.0.0.1:${port}/api/auth/config`)).json(),
-    ).toEqual({ serverAuth: false, clientId: true, clientSecret: false });
+    ).toEqual({
+      serverAuth: false,
+      calendar: false,
+      clientId: true,
+      clientSecret: false,
+    });
     expect(
       (
         await fetch(`http://127.0.0.1:${port}/api/drive-token`, {
@@ -336,7 +344,12 @@ describe("drive token endpoint", () => {
     const port = (bare.address() as never as { port: number }).port;
     expect(
       await (await fetch(`http://127.0.0.1:${port}/api/auth/config`)).json(),
-    ).toEqual({ serverAuth: false, clientId: false, clientSecret: true });
+    ).toEqual({
+      serverAuth: false,
+      calendar: false,
+      clientId: false,
+      clientSecret: true,
+    });
     await new Promise<void>((r) => bare.close(() => r()));
   });
 
@@ -348,5 +361,67 @@ describe("drive token endpoint", () => {
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("Ungültiger Anmeldevorgang");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("calendar scope", () => {
+  const original = process.env.GOOGLE_CALENDAR;
+  afterEach(() => {
+    if (original === undefined) delete process.env.GOOGLE_CALENDAR;
+    else process.env.GOOGLE_CALENDAR = original;
+  });
+
+  it("is absent from the authorization request unless enabled", async () => {
+    delete process.env.GOOGLE_CALENDAR;
+    const { buildAuthUrl: build, CALENDAR_SCOPE, DRIVE_SCOPE } = await import(
+      "../server/googleAuth"
+    );
+    const off = build({ clientId: "c", redirectUri: "https://x/cb", state: "s" });
+    expect(off).toContain(encodeURIComponent(DRIVE_SCOPE));
+    expect(off).not.toContain(encodeURIComponent(CALENDAR_SCOPE));
+
+    process.env.GOOGLE_CALENDAR = "true";
+    const on = build({ clientId: "c", redirectUri: "https://x/cb", state: "s" });
+    // Drive is never traded away for it.
+    expect(on).toContain(encodeURIComponent(DRIVE_SCOPE));
+    expect(on).toContain(encodeURIComponent(CALENDAR_SCOPE));
+  });
+
+  it("only counts as enabled for the exact string 'true'", async () => {
+    const { calendarEnabled } = await import("../server/googleAuth");
+    for (const value of ["", "false", "1", "yes"]) {
+      process.env.GOOGLE_CALENDAR = value;
+      expect(calendarEnabled()).toBe(false);
+    }
+    process.env.GOOGLE_CALENDAR = "TRUE";
+    expect(calendarEnabled()).toBe(true);
+  });
+});
+
+describe("grantsCalendar", () => {
+  it("accepts the scope the app asks for", async () => {
+    const { grantsCalendar, CALENDAR_SCOPE, DRIVE_SCOPE } = await import(
+      "../server/googleAuth"
+    );
+    expect(grantsCalendar(`openid ${DRIVE_SCOPE} ${CALENDAR_SCOPE}`)).toBe(true);
+  });
+  it("accepts the broader calendar scope, which can do strictly more", async () => {
+    const { grantsCalendar } = await import("../server/googleAuth");
+    expect(
+      grantsCalendar("openid https://www.googleapis.com/auth/calendar"),
+    ).toBe(true);
+  });
+  it("rejects a Drive-only grant and anything merely calendar-shaped", async () => {
+    const { grantsCalendar, DRIVE_SCOPE } = await import("../server/googleAuth");
+    expect(grantsCalendar(`openid email ${DRIVE_SCOPE}`)).toBe(false);
+    expect(grantsCalendar("")).toBe(false);
+    expect(grantsCalendar(undefined)).toBe(false);
+    // Readonly cannot write the summary back, so it must not count.
+    expect(
+      grantsCalendar("https://www.googleapis.com/auth/calendar.readonly"),
+    ).toBe(false);
+    expect(
+      grantsCalendar("https://www.googleapis.com/auth/calendar.events.readonly"),
+    ).toBe(false);
   });
 });

@@ -1,265 +1,175 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { FileText, Mic, SearchX, X } from "lucide-react";
+import AttentionQueue from "../components/AttentionQueue";
+import MeetingRow from "../components/MeetingRow";
+import { Busy, Notice, dateLabel } from "../components/UI";
 import {
-  ArrowRight,
-  FileText,
-  Search,
-  Settings2,
-  Mic,
-  RefreshCw,
-} from "lucide-react";
-import { errorMessage } from "../lib/session";
-import { watchReports, saveReport, uid } from "../lib/reports";
-import { listDrafts } from "../lib/local";
-import { Shell, Notice, Busy, Status, dateLabel } from "../components/UI";
-import type { Draft, ReportData } from "../types";
-import DriveSettings from "../components/DriveSettings";
-import Preferences from "../components/Preferences";
+  groupByMonth,
+  isValidDate,
+  knownSpeakers,
+  matchesQuery,
+  plural,
+} from "../lib/meetingMeta";
+import { rememberPeople } from "../lib/people";
+import { uid } from "../lib/reports";
+import { useReports } from "../lib/useReports";
+
+const FILTERS = [
+  { id: "all", label: "Alle" },
+  { id: "open", label: "Offen" },
+] as const;
+
+type Filter = (typeof FILTERS)[number]["id"];
+
+const inFilter = (status: string, filter: Filter) =>
+  filter === "all" || status !== "completed";
+
 export default function Dashboard() {
-  const [reports, setReports] = useState<ReportData[]>([]);
-  const [dirty, setDirty] = useState<string[]>([]);
-  const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [params] = useSearchParams();
-  const [search, setSearch] = useState(params.get("q") || "");
+  const workspace = useReports();
+  const { reports, dirty, running, loading, error } = workspace;
+  const [params, setParams] = useSearchParams();
+  const query = (params.get("q") || "").trim().toLowerCase();
+  const [filter, setFilter] = useState<Filter>("all");
+  const [removalWarning, setRemovalWarning] = useState("");
+
+  // The archive is the address book: every name already typed becomes a
+  // suggestion the next time a speaker needs naming.
   useEffect(() => {
-    setSearch(params.get("q") || "");
-  }, [params]);
-  const [filter, setFilter] = useState("all");
-  const [settings, setSettings] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  useEffect(() => {
-    listDrafts(uid(), { includeAudio: false })
-      .then(setDrafts)
-      .catch((e) => setError(errorMessage(e)));
-    return watchReports(
-      (data, unsynced) => {
-        setReports(data);
-        setDirty(unsynced);
-        setLoading(false);
-      },
-      (e) => {
-        setError(errorMessage(e));
-        setLoading(false);
-      },
-    );
-  }, []);
-  async function sync() {
-    const owner = uid();
-    setSyncing(true);
-    setError("");
-    try {
-      for (const r of reports.filter((r) => dirty.includes(r.id))) {
-        if (uid() !== owner)
-          throw new Error(
-            "Das Google-Konto wurde gewechselt. Bitte erneut anmelden.",
-          );
-        const warning = await saveReport(r);
-        if (warning) throw new Error(warning);
-      }
-      setDirty([]);
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setSyncing(false);
-    }
-  }
-  // Past meetings are only useful if you can find what was said in them, so
-  // the transcript and extracted items are searchable too.
-  const needle = search.trim().toLowerCase();
-  const haystack = (r: ReportData) =>
-    [r.title, r.summary, r.transcription, ...(r.todos || []), ...(r.takeaways || [])]
-      .join(" ")
-      .toLowerCase();
-  const visible = reports.filter(
-    (r) =>
-      (filter === "all" ||
-        (filter === "completed"
-          ? r.status === "completed"
-          : r.status !== "completed")) &&
-      (!needle || haystack(r).includes(needle)),
+    if (reports.length) void rememberPeople(uid(), knownSpeakers(reports)).catch(() => {});
+  }, [reports]);
+
+  // Reports carry their full transcript, so the match is computed once per
+  // query change rather than on every keystroke-driven re-render.
+  const found = useMemo(
+    () => reports.filter((report) => matchesQuery(report, query)),
+    [reports, query],
   );
-  /** The snippet around the match, so a transcript hit is legible in the list. */
-  const excerpt = (r: ReportData) => {
-    if (!needle) return r.summary || "Aufnahme prüfen und einen Bericht erstellen.";
-    const text = r.transcription || r.summary || "";
-    const at = text.toLowerCase().indexOf(needle);
-    if (at < 0) return r.summary || "Treffer in Titel oder Aufgaben.";
-    const from = Math.max(0, at - 60);
-    return `${from > 0 ? "… " : ""}${text.slice(from, at + needle.length + 90).trim()} …`;
-  };
+  const counts = useMemo(
+    () => ({
+      all: found.length,
+      open: found.filter((r) => r.status !== "completed").length,
+    }),
+    [found],
+  );
+  const groups = useMemo(
+    () =>
+      groupByMonth(
+        found.filter((report) => inFilter(report.status, filter)),
+        new Date(),
+      ),
+    [found, filter],
+  );
+  const shown = groups.reduce((sum, group) => sum + group.reports.length, 0);
+
   return (
-    <Shell
-      actions={
-        <button
-          className="btn btn-ghost"
-          onClick={() => setSettings(!settings)}
-          aria-expanded={settings}
-        >
-          <Settings2 size={18} />
-          <span className="hide-mobile">Speicherort</span>
-        </button>
-      }
-    >
-      {settings && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <DriveSettings />
-          <Preferences />
-        </div>
-      )}
-      <div className="home-hero">
+    <>
+      <div className="page-head">
         <div>
-          <span className="eyebrow">CHEATMEET</span>
-          <h1>Bereit, wenn das Meeting startet.</h1>
-          <p className="muted">
-            Live mitlesen, jederzeit nachfragen, danach den fertigen Bericht in
-            Google Drive.
-          </p>
-        </div>
-        <Link to="/record?new=1" className="home-start">
-          <span className="home-start-icon">
-            <Mic size={26} />
-          </span>
-          <span>
-            <strong>Meeting aufnehmen</strong>
-            <small>Startet sofort · ein Tipp</small>
-          </span>
-          <ArrowRight size={20} />
-        </Link>
-      </div>
-      {error && <Notice>{error}</Notice>}
-      {dirty.length > 0 && (
-        <Notice kind="info">
-          <div className="split">
-            <span>
-              {dirty.length} Bericht(e) warten auf Firebase. Lokale Kopien sind
-              verfügbar.
-            </span>
-            <button className="btn" onClick={sync} disabled={syncing}>
-              <RefreshCw size={16} />
-              {syncing ? "Speichern …" : "Cloud erneut speichern"}
-            </button>
-          </div>
-        </Notice>
-      )}
-      {drafts.map((draft) => (
-        <Link
-          key={draft.report.id}
-          to={`/record?draft=${draft.report.id}`}
-          className="draft-banner"
-          style={{ marginBottom: 10 }}
-        >
-          <span className="draft-icon">
-            <Mic />
-          </span>
-          <div>
-            <strong>{draft.report.title || "Deine Aufnahme wartet"}</strong>
-            <p>Nicht abgeschlossen · fortsetzen, sichern &amp; analysieren</p>
-          </div>
-          <ArrowRight />
-        </Link>
-      ))}
-      <div className="stats">
-        <div>
-          <span>MEETINGS</span>
-          <strong>{reports.length.toString().padStart(2, "0")}</strong>
-        </div>
-        <div>
-          <span>BERICHTE ERSTELLT</span>
-          <strong>
-            {reports
-              .filter((r) => r.status === "completed")
-              .length.toString()
-              .padStart(2, "0")}
-          </strong>
-        </div>
-        <div>
-          <span>IN BEARBEITUNG</span>
-          <strong>
-            {reports
-              .filter((r) => r.status !== "completed")
-              .length.toString()
-              .padStart(2, "0")}
-          </strong>
+          <h1>Übersicht</h1>
+          {reports.length > 0 && (
+            <p className="muted">
+              {plural(reports.length, "Meeting", "Meetings")}
+              {isValidDate(reports[0].date)
+                ? ` · zuletzt am ${dateLabel(reports[0].date)}`
+                : ""}
+            </p>
+          )}
         </div>
       </div>
-      <div className="list-toolbar">
-        <div className="tabs" aria-label="Berichte filtern">
-          {[
-            ["all", "Alle"],
-            ["completed", "Erstellt"],
-            ["draft", "In Bearbeitung"],
-          ].map(([id, label]) => (
+
+      <AttentionQueue workspace={workspace} />
+
+      {removalWarning && (
+        <Notice>{removalWarning}</Notice>
+      )}
+
+      {query && (
+        <p className="search-summary">
+          <strong>{found.length}</strong> Treffer für „{params.get("q")}“
+          <button className="text-button" onClick={() => setParams({})}>
+            <X size={14} /> Suche aufheben
+          </button>
+        </p>
+      )}
+
+      {/* Only worth offering once there is something to narrow. */}
+      {counts.open > 0 && counts.open < counts.all && (
+        <div className="filters" role="group" aria-label="Meetings filtern">
+          {FILTERS.map(({ id, label }) => (
             <button
               key={id}
+              aria-pressed={filter === id}
               className={filter === id ? "active" : ""}
               onClick={() => setFilter(id)}
-              aria-pressed={filter === id}
             >
-              {label}
+              {label} <span>{counts[id]}</span>
             </button>
           ))}
         </div>
-        <label className="search">
-          <Search size={17} />
-          <input
-            aria-label="Meetings und Transkripte durchsuchen"
-            placeholder="In allen Transkripten suchen …"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </label>
-      </div>
+      )}
+
       {loading ? (
         <Busy text="Meetings laden …" />
-      ) : visible.length ? (
-        <div className="report-list">
-          {visible.map((r, i) => (
-            <Link key={r.id} to={`/report/${r.id}`} className="report-card">
-              <div className="report-number">
-                {String(i + 1).padStart(2, "0")}
-              </div>
-              <div className="report-card-body">
-                <div className="report-card-meta">
-                  <span>{dateLabel(r.date)}</span>
-                  <Status report={r} local={dirty.includes(r.id)} />
-                </div>
-                <h2>{r.title || "Unbenanntes Meeting"}</h2>
-                <p>{excerpt(r)}</p>
-                <span className="small muted">
-                  {r.todos?.length || 0} To-Dos · {r.takeaways?.length || 0}{" "}
-                  Erkenntnisse
-                </span>
-              </div>
-              <ArrowRight className="report-arrow" />
-            </Link>
+      ) : error ? null : shown ? (
+        <div className="meeting-list">
+          {groups.map((group) => (
+            <section key={group.key || "undated"}>
+              <h2 className="group-heading">{group.label}</h2>
+              {group.reports.map((report) => (
+                <MeetingRow
+                  key={report.id}
+                  report={report}
+                  dirty={dirty.includes(report.id)}
+                  running={running.has(report.id)}
+                  query={query}
+                  onWarning={setRemovalWarning}
+                />
+              ))}
+            </section>
           ))}
         </div>
       ) : (
+        /* Three different reasons for an empty list, three different answers.
+           None of them is shown while loading failed: the attention queue is
+           already explaining that. */
         <div className="empty panel">
           <div className="empty-icon">
-            <FileText size={32} />
+            {reports.length ? <SearchX size={30} /> : <FileText size={30} />}
           </div>
-          <span className="eyebrow">DEIN MEETING-GEDÄCHTNIS</span>
-          <h2>
-            {search || filter !== "all"
-              ? "Keine passenden Meetings"
-              : "Das nächste Meeting? Gut vorbereitet."}
-          </h2>
-          <p className="muted">
-            {search || filter !== "all"
-              ? "Kein Meeting enthält diesen Begriff. Durchsucht werden Titel, Zusammenfassung, Transkript und Aufgaben."
-              : "Starte eine Aufnahme. CheatMeet transkribiert live und erstellt im Anschluss eine smarte Zusammenfassung."}
-          </p>
-          {!search && filter === "all" && (
-            <Link className="btn btn-primary" to="/record?new=1">
-              <Mic size={18} />
-              Erstes Meeting aufzeichnen
-            </Link>
+          {found.length ? (
+            <>
+              <h2>Nichts in dieser Ansicht</h2>
+              <p className="muted">
+                {plural(found.length, "Meeting passt", "Meetings passen")} zur
+                Suche, aber keines zu diesem Filter.
+              </p>
+              <button className="btn" onClick={() => setFilter("all")}>
+                Alle anzeigen
+              </button>
+            </>
+          ) : reports.length ? (
+            <>
+              <h2>Keine passenden Meetings</h2>
+              <p className="muted">
+                Durchsucht werden Titel, Zusammenfassung, Transkript und
+                Aufgaben.
+              </p>
+            </>
+          ) : (
+            <>
+              <h2>Noch keine Meetings</h2>
+              <p className="muted">
+                Starte eine Aufnahme. CheatMeet transkribiert live und erstellt
+                danach die Zusammenfassung.
+              </p>
+              <Link className="btn btn-primary" to="/record?new=1">
+                <Mic size={17} /> Erstes Meeting aufzeichnen
+              </Link>
+            </>
           )}
         </div>
       )}
-    </Shell>
+    </>
   );
 }

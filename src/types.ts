@@ -1,3 +1,4 @@
+import type { Todo } from "../shared/analysis";
 import type { MeetingTranscript } from "../shared/transcription";
 export interface ReportData {
   id: string;
@@ -10,7 +11,8 @@ export interface ReportData {
   summary: string;
   transcription: string;
   speech?: MeetingTranscript;
-  todos: string[];
+  /** Legacy documents hold plain strings; `asTodos` normalises on read. */
+  todos: Todo[];
   takeaways: string[];
   status?: "pending" | "analyzing" | "completed" | "error";
   error?: string;
@@ -26,6 +28,13 @@ export interface ReportData {
   driveMarkdownId?: string;
   driveTranscriptId?: string;
   driveSyncedAt?: string;
+  /** The calendar event this meeting belongs to, once matched or created. */
+  calendarEventId?: string;
+  calendarId?: string;
+  calendarLink?: string;
+  calendarSyncedAt?: string;
+  /** Why the last calendar attempt did not do what was asked. */
+  calendarError?: string;
 }
 
 export interface Draft {

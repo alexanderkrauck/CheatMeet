@@ -1,6 +1,6 @@
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { findOrCreateRootFolder, getDriveFolder } from "./drive";
+import { DEFAULT_FOLDER_NAME, findOrCreateRootFolder, getDriveFolder } from "./drive";
 import config from "../../firebase-applet-config.json";
 export interface DriveFolder {
   id: string;
@@ -53,6 +53,9 @@ export async function loadDriveFolder(): Promise<DriveFolder | null> {
     typeof folder.name === "string"
   ) {
     localStorage.setItem(storageKey, JSON.stringify(folder));
+    // The record screen listens for this; without it a folder restored from
+    // Firestore leaves the pill naming the default one.
+    window.dispatchEvent(new Event("cheatmeet:drive-settings"));
     return folder;
   }
   return null;
@@ -97,7 +100,7 @@ export async function getRootFolder(token: string): Promise<string> {
   }
   const id = await findOrCreateRootFolder(token);
   assertOwner(owner);
-  await saveDriveFolder({ id, name: "CheatMeet Recordings (App)" });
+  await saveDriveFolder({ id, name: DEFAULT_FOLDER_NAME });
   assertOwner(owner);
   return id;
 }

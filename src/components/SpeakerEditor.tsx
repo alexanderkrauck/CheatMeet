@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PEOPLE_LIST_ID } from "./PeopleDatalist";
 import {
   mergeSpeaker,
   renameSpeaker,
@@ -33,6 +34,7 @@ export default function SpeakerEditor({
             Name für {label(speaker)}
             <input
               className="field"
+              list={PEOPLE_LIST_ID}
               maxLength={80}
               value={speech.speakerNames[speaker] || ""}
               placeholder={label(speaker)}
@@ -44,7 +46,7 @@ export default function SpeakerEditor({
           <p className="speaker-example">{speech.turns.find(t => t.speaker === speaker)?.text.slice(0, 180)}</p>
           {onListen && <button className="btn" onClick={() => onListen(speech.turns.find(t => t.speaker === speaker)!.startMs)}>Stimme anhören</button>}
           {speech.speakerNameSuggestions?.[speaker] && !speech.speakerAliases?.[speaker] && (
-            <button className="btn ghost" onClick={() => onChange(renameSpeaker(speech, speaker, speech.speakerNameSuggestions![speaker]))}>
+            <button className="btn btn-ghost" onClick={() => onChange(renameSpeaker(speech, speaker, speech.speakerNameSuggestions![speaker]))}>
               Vorschlag aus passenden Live-Beiträgen: {speech.speakerNameSuggestions[speaker]}
             </button>
           )}

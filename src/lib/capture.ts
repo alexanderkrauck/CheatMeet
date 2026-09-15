@@ -12,7 +12,8 @@ import { errorMessage } from "./session";
 import { auth } from "./firebase";
 import type { AudioSourcePreference } from "./audioSources";
 import { startAssemblyLive } from "./assemblyLive";
-import { DEFAULT_LANGUAGES, renderTranscript, validLanguages, renameSpeaker } from "../../shared/transcription";
+import { renderTranscript, validLanguages, renameSpeaker } from "../../shared/transcription";
+import { defaultLanguages } from "./meetingDefaults";
 
 export type CaptureState = "ready" | "recording" | "paused" | "review";
 
@@ -41,7 +42,7 @@ const freshDraft = (): Draft => ({
     title: "",
     summary: "",
     transcription: "",
-    speech: { provider: "assemblyai", phase: "pending", languages: [...DEFAULT_LANGUAGES], turns: [], speakerNames: {} },
+    speech: { provider: "assemblyai", phase: "pending", languages: defaultLanguages(), turns: [], speakerNames: {} },
     todos: [],
     takeaways: [],
     status: "pending",
@@ -97,6 +98,7 @@ let recorder: MediaRecorder | null = null;
 let sources: { mic?: MediaStream; system?: MediaStream; merged?: MergedAudio } =
   {};
 let captureTracks: MediaStreamTrack[] = [];
+let stopSystemWatch: (() => void) | null = null;
 let live: LiveTranscription | null = null;
 let stopLifecycle: (() => void) | null = null;
 let wakeLock: WakeLockSentinel | null = null;
@@ -118,8 +120,44 @@ let busyOperation = false;
 const elapsed = () => clock.read();
 const ownerChanged = () => auth.currentUser?.uid !== snapshot.owner;
 
+/**
+ * The user can stop sharing their screen at any time — after a demo, or by
+ * closing the shared tab. The microphone is still live and the meeting is
+ * still worth recording, so this degrades to mic-only instead of ending it.
+ */
+function watchSystemAudio(system?: MediaStream) {
+  const tracks = system?.getAudioTracks() || [];
+  if (!tracks.length) return null;
+  let done = false;
+  // "ended" only fires forward. The picker resolves before the Drive check and
+  // the microphone prompt, so a share stopped in that window is already dead
+  // by the time this runs and would never announce itself.
+  const alreadyEnded = tracks.every((track) => track.readyState === "ended");
+  const onEnded = () => {
+    if (done) return;
+    done = true;
+    system?.getTracks().forEach((track) => track.stop());
+    sources.system = undefined;
+    // The live transcription holds its own reference; without this, resuming
+    // reopens a paid streaming connection for a track that is gone.
+    live?.dropSource?.("system");
+    emit({
+      warning:
+        "Die Bildschirmfreigabe wurde beendet. Es wird weiter nur das Mikrofon aufgenommen.",
+    });
+  };
+  if (alreadyEnded) onEnded();
+  else for (const track of tracks) track.addEventListener("ended", onEnded);
+  return () => {
+    done = true;
+    for (const track of tracks) track.removeEventListener("ended", onEnded);
+  };
+}
+
 /** Releases every device this session opened, including the mixing graph. */
 function releaseCapture() {
+  stopSystemWatch?.();
+  stopSystemWatch = null;
   sources.merged?.dispose();
   for (const stream of [sources.mic, sources.system])
     stream?.getTracks().forEach((track) => track.stop());
@@ -247,6 +285,29 @@ export const setCaptureTitle = (title: string) =>
     report: { ...snapshot.draft.report, title, projectName: title },
   }).catch(() => {});
 
+/**
+ * Ties this recording to a planned meeting. The title follows unless the user
+ * already typed one — their words win over the calendar's, as they do over the
+ * model's.
+ */
+export const setCaptureEvent = (
+  event: { id: string; calendarId: string; title: string } | null,
+) => {
+  // A deep link opened mid-meeting must not retag the running recording.
+  if (ownerChanged() || isCapturing()) return;
+  void persist({
+    ...snapshot.draft,
+    report: {
+      ...snapshot.draft.report,
+      calendarEventId: event?.id,
+      calendarId: event?.calendarId,
+      ...(event && !snapshot.draft.report.projectName
+        ? { title: event.title }
+        : {}),
+    },
+  }).catch(() => {});
+};
+
 export const setCaptureError = (error: string) => emit({ error });
 export const setCaptureBusy = (busy: string) => emit({ busy });
 export const setCaptureHint = (hint: string) => emit({ hint });
@@ -334,10 +395,11 @@ export async function startCapture(
     // source separately so speech is never lost under what is playing.
     const merged = mergeAudioStreams(mic, system);
     sources.merged = merged;
-    captureTracks = [
-      ...mic.getAudioTracks(),
-      ...(system?.getAudioTracks() || []),
-    ];
+    // Microphone only: this list answers "is the capture device still alive",
+    // and the display source is independently disposable. Including it meant
+    // that clicking Chrome's "Freigabe beenden" ended the whole meeting.
+    captureTracks = [...mic.getAudioTracks()];
+    stopSystemWatch = watchSystemAudio(system);
 
     const mimeType = preferredRecordingMimeType();
     const rec = new MediaRecorder(merged.stream, {
@@ -384,7 +446,7 @@ export async function startCapture(
 
       },
       snapshot.draft.report.id,
-      snapshot.draft.report.speech?.languages || [...DEFAULT_LANGUAGES],
+      snapshot.draft.report.speech?.languages || defaultLanguages(),
       { ...snapshot.draft.report.singleSpeakerSources },
     );
 
@@ -590,6 +652,10 @@ export async function importAudio(file: File) {
     return;
   }
   await queue.catch(() => {});
+  // The import moves to a fresh report id, so the record it leaves behind is
+  // orphaned — it would show up forever as an unfinished recording with no
+  // audio, and its chunk journal would keep the megabytes.
+  const previousId = snapshot.draft.report.id;
   chunks = [];
   pendingChunks.clear();
   pendingSnapshot = null;
@@ -604,12 +670,18 @@ export async function importAudio(file: File) {
     speakerReference: undefined,
     // Replacing audio starts a NEW submission identity; never reuse a provider
     // job from the previous file under the same report ID.
-    report: { ...snapshot.draft.report, id: crypto.randomUUID(), rawAudioUrl: undefined,
+    // An import is a new meeting: without this it inherits whenever this draft
+      // slot was first opened, which the calendar and the list both show.
+      report: { ...snapshot.draft.report, id: crypto.randomUUID(), date: new Date().toISOString(), rawAudioUrl: undefined,
       transcriptionOrigin: "import", captureState: undefined, captureSources: undefined, singleSpeakerSources: undefined,
       driveFolderId: undefined, driveReportId: undefined, driveMarkdownId: undefined,
-      driveTranscriptId: undefined, driveSyncedAt: undefined, transcription: "", summary: "", todos: [], takeaways: [], status: "pending", durationMs: 0,
-      speech: { provider: "assemblyai", phase: "pending", languages: snapshot.draft.report.speech?.languages || [...DEFAULT_LANGUAGES], turns: [], speakerNames: {} } },
+      driveTranscriptId: undefined, driveSyncedAt: undefined,
+      calendarEventId: undefined, calendarId: undefined, calendarLink: undefined,
+      calendarSyncedAt: undefined, calendarError: undefined, transcription: "", summary: "", todos: [], takeaways: [], status: "pending", durationMs: 0,
+      speech: { provider: "assemblyai", phase: "pending", languages: snapshot.draft.report.speech?.languages || defaultLanguages(), turns: [], speakerNames: {} } },
   });
+  if (previousId && previousId !== snapshot.draft.report.id)
+    await deleteDraft(snapshot.owner, previousId).catch(() => {});
   return snapshot.draft.report.id;
 }
 

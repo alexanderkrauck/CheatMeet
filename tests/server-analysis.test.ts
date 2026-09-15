@@ -10,7 +10,7 @@ const report = {
   title: "Weekly Sync",
   summary: "Roadmap besprochen.",
   transcription: "Wir starten mit dem Roadmap-Update.",
-  todos: ["Angebot senden"],
+  todos: [{ text: "Angebot senden", owner: "Anna", due: "2026-09-30" }],
   takeaways: ["Launch verschiebt sich"],
 };
 

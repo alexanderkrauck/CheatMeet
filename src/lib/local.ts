@@ -3,13 +3,13 @@ import {
   get,
   set,
   del,
-  entries,
   update,
   setMany,
   delMany,
   keys,
   getMany,
 } from "idb-keyval";
+import { asTodos } from "../../shared/analysis";
 import type { Draft, ReportData } from "../types";
 const store = createStore("cheatmeet", "workspace");
 const key = (uid: string, id: string) => `${uid}:report:${id}`;
@@ -65,12 +65,34 @@ export async function acceptRemoteReport(uid: string, report: ReportData) {
   );
   if (changed) emit(uid);
 }
-export const getLocal = (uid: string, id: string) =>
-  get<LocalReport>(key(uid, id), store);
+/** Documents written before to-dos had structure still hold plain strings. */
+const normalise = (value: LocalReport): LocalReport => ({
+  ...value,
+  report: { ...value.report, todos: asTodos(value.report.todos) },
+});
+
+/** Removes this device's copy of one report. */
+export async function dropLocal(uid: string, id: string) {
+  await del(key(uid, id), store);
+  emit(uid);
+}
+
+export const getLocal = async (uid: string, id: string) => {
+  const found = await get<LocalReport>(key(uid, id), store);
+  return found && normalise(found);
+};
+/**
+ * Reports only. `entries()` would read the whole object store — every other
+ * account's records and every audio blob held for an unfinished draft — and
+ * deserialise them just to throw them away. This runs on every local write.
+ */
 export async function listLocal(uid: string) {
-  return (await entries<string, LocalReport>(store))
-    .filter(([k]) => k.startsWith(`${uid}:report:`))
-    .map(([, v]) => v);
+  const prefix = `${uid}:report:`;
+  const selected = (await keys<string>(store)).filter((k) =>
+    k.startsWith(prefix),
+  );
+  const values = await getMany<LocalReport>(selected, store);
+  return values.filter(Boolean).map(normalise);
 }
 const draftKey = (uid: string, id: string) => `${uid}:draft:${id}`;
 const activeDraftKey = (uid: string) => `${uid}:active-draft`;
@@ -90,6 +112,14 @@ async function migrateDraft(uid: string) {
 
 export async function putDraft(uid: string, draft: Draft) {
   await migrateDraft(uid);
+  // A recorded draft's audio already lives in the chunk journal and is rebuilt
+  // by recoverAudio on every read, so storing the inline copy too doubled the
+  // space for the recording. An import has no journal — there the inline blob
+  // is the only copy and must be kept.
+  const journaled = (await keys<string>(store)).some((key) =>
+    key.startsWith(chunkPrefix(uid, draft.report.id)),
+  );
+  if (journaled && draft.audio) draft = { ...draft, audio: undefined };
   // IndexedDB commits both keys atomically. A quota failure leaves the previous
   // complete audio/photo snapshot intact and is surfaced to the recording UI.
   await setMany(
@@ -252,4 +282,73 @@ export async function deleteDraft(uid: string, id?: string) {
     store,
   );
   emit(uid);
+}
+
+export interface StorageReport {
+  /** What the browser says this origin holds; absent where unsupported. */
+  usageBytes?: number;
+  quotaBytes?: number;
+  reports: number;
+  /** Recordings still held here. Audio is what actually occupies the space. */
+  drafts: number;
+  /** Of those, the ones whose audio is already safe in Drive. */
+  releasable: number;
+}
+
+/**
+ * A recording whose audio reached Drive. `rawAudioUrl` holds the Drive file id
+ * of the uploaded audio and `driveSyncedAt` marks the report as exported, so
+ * the local blob is a duplicate rather than the only copy.
+ */
+const audioIsSafe = (report?: ReportData) =>
+  !!report?.driveSyncedAt && !!report.rawAudioUrl;
+
+/** Every key this account holds for one recording's audio. */
+const audioKeys = (uid: string, all: string[], id: string) =>
+  all.filter(
+    (k) =>
+      k === draftKey(uid, id) ||
+      k === progressKey(uid, id) ||
+      k.startsWith(chunkPrefix(uid, id)),
+  );
+
+export async function inspectStorage(uid: string): Promise<StorageReport> {
+  const all = await keys<string>(store);
+  const reports = await listLocal(uid);
+  const byId = new Map(reports.map((v) => [v.report.id, v.report]));
+  const draftIds = all
+    .filter((k) => k.startsWith(`${uid}:draft:`))
+    .map((k) => k.slice(`${uid}:draft:`.length));
+  const estimate = await navigator.storage?.estimate?.().catch(() => null);
+  return {
+    usageBytes: estimate?.usage,
+    quotaBytes: estimate?.quota,
+    reports: reports.length,
+    drafts: draftIds.length,
+    releasable: draftIds.filter((id) => audioIsSafe(byId.get(id))).length,
+  };
+}
+
+/**
+ * Frees the recordings whose audio is already in Drive.
+ *
+ * Deliberately NOT the report documents: Firestore's listener re-inserts those
+ * the moment it next fires, so releasing them would free nothing and only look
+ * like it had. The audio blobs are the bytes, and a blob whose file is in
+ * Drive is a duplicate.
+ */
+export async function releaseSyncedAudio(uid: string): Promise<number> {
+  const all = await keys<string>(store);
+  const byId = new Map((await listLocal(uid)).map((v) => [v.report.id, v.report]));
+  const ids = all
+    .filter((k) => k.startsWith(`${uid}:draft:`))
+    .map((k) => k.slice(`${uid}:draft:`.length))
+    .filter((id) => audioIsSafe(byId.get(id)));
+  if (!ids.length) return 0;
+  await delMany(
+    ids.flatMap((id) => audioKeys(uid, all, id)),
+    store,
+  );
+  emit(uid);
+  return ids.length;
 }

@@ -1,4 +1,5 @@
-import { rememberToken } from "./session";
+import { asTodos } from "../../shared/analysis";
+import { ensureDriveToken, rememberToken } from "./session";
 // A cached token alone does not prove the Drive scope was granted. Check it
 // before capture without creating folders or reading filenames/media.
 export async function verifyDriveAccess(token: string): Promise<void> {
@@ -21,15 +22,52 @@ export async function verifyDriveAccess(token: string): Promise<void> {
   );
 }
 
-async function request(url: string, token: string, init: RequestInit = {}) {
-  const response = await fetch(url, {
-    ...init,
-    headers: { ...init.headers, Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(120000),
-  });
+/** Metadata calls are small and should fail fast; a media upload must not. */
+const METADATA_TIMEOUT_MS = 120_000;
+/**
+ * The slowest link a recording is still expected to survive. A two-minute
+ * deadline sized for a JSON call was aborting hour-long audio on any ordinary
+ * connection, and the abort surfaced as an English DOMException.
+ */
+const MIN_UPLOAD_BYTES_PER_SEC = 40_000;
+export const uploadTimeoutMs = (bytes: number) =>
+  Math.max(METADATA_TIMEOUT_MS, Math.ceil(bytes / MIN_UPLOAD_BYTES_PER_SEC) * 1000);
+
+async function request(
+  url: string,
+  token: string,
+  init: RequestInit = {},
+  timeoutMs = METADATA_TIMEOUT_MS,
+  retry = true,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: { ...init.headers, Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    const name = (error as Error)?.name;
+    if (name === "TimeoutError" || name === "AbortError")
+      throw new Error(
+        "Google Drive hat zu lange gebraucht. Bitte die Verbindung prüfen und erneut versuchen.",
+      );
+    throw new Error(
+      "Google Drive ist nicht erreichbar. Bitte die Verbindung prüfen und erneut versuchen.",
+    );
+  }
   if (!response.ok) {
     if (response.status === 401) {
       rememberToken(undefined);
+      // A background job can run for half an hour on a token minted at its
+      // start. A 401 proves nothing was created, and every body here is
+      // re-sendable, so one silent re-mint and retry is safe.
+      if (retry) {
+        const fresh = await ensureDriveToken(0);
+        if (fresh && fresh !== token)
+          return request(url, fresh, init, timeoutMs, false);
+      }
       throw new Error(
         "Die Drive-Verbindung ist abgelaufen. Bitte Google Drive erneut verbinden.",
       );
@@ -40,9 +78,13 @@ async function request(url: string, token: string, init: RequestInit = {}) {
   }
   return response;
 }
+/** The name the default folder actually carries in Drive. Every label that
+ *  names it reads this, so the app cannot promise a folder that is not there. */
+export const DEFAULT_FOLDER_NAME = "CheatMeet Recordings (App)";
+
 export async function findOrCreateRootFolder(token: string): Promise<string> {
   const q = encodeURIComponent(
-    "name = 'CheatMeet Recordings (App)' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+    `name = '${DEFAULT_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
   );
   const data = await (
     await request(
@@ -52,7 +94,7 @@ export async function findOrCreateRootFolder(token: string): Promise<string> {
   ).json();
   return (
     data.files?.[0]?.id ||
-    createSubFolder("CheatMeet Recordings (App)", undefined, token)
+    createSubFolder(DEFAULT_FOLDER_NAME, undefined, token)
   );
 }
 export async function createSubFolder(
@@ -105,6 +147,9 @@ export async function uploadFileToFolder(
       `https://www.googleapis.com/upload/drive/v3/files${existingId ? `/${encodeURIComponent(existingId)}` : ""}?uploadType=multipart&supportsAllDrives=true`,
       token,
       { method: existingId ? "PATCH" : "POST", body: form },
+      // Scaled to the payload: an hour of audio cannot cross the wire in the
+      // time a metadata call is given.
+      uploadTimeoutMs(file.size),
     )
   ).json();
   return data.id;
@@ -134,7 +179,7 @@ export async function getDriveFolder(
     );
   if (data.capabilities?.canAddChildren === false)
     throw new Error(
-      "In diesem Drive-Ordner dürfen Sie keine Dateien speichern. Bitte einen anderen Ordner wählen.",
+      "In diesem Drive-Ordner darfst du keine Dateien speichern. Bitte einen anderen Ordner wählen.",
     );
   return { id: data.id, name: data.name };
 }
@@ -196,18 +241,32 @@ export async function listDriveReports(
         )
           throw new Error("Ungültige Berichtsdaten");
         // Validate fields rendered by report views before admitting external JSON.
-        for (const field of ["todos", "takeaways"])
-          if (
-            report[field] !== undefined &&
-            (!Array.isArray(report[field]) ||
-              !report[field].every((item: unknown) => typeof item === "string"))
-          )
-            throw new Error("Ungültige Berichtsinhalte");
+        if (
+          report.takeaways !== undefined &&
+          (!Array.isArray(report.takeaways) ||
+            !report.takeaways.every((item: unknown) => typeof item === "string"))
+        )
+          throw new Error("Ungültige Berichtsinhalte");
+        if (report.todos !== undefined && !Array.isArray(report.todos))
+          throw new Error("Ungültige Berichtsinhalte");
+        // Accepts both the legacy string form and the structured one, and drops
+        // anything that is neither.
+        report.todos = asTodos(report.todos);
         if (
           report.rawAudioUrl !== undefined &&
           typeof report.rawAudioUrl !== "string"
         )
           throw new Error("Ungültige Audioreferenz");
+        // Calendar references go straight into a Google API path; a non-string
+        // here would reach it as "[object Object]".
+        for (const field of [
+          "calendarEventId",
+          "calendarId",
+          "calendarLink",
+          "calendarSyncedAt",
+        ])
+          if (report[field] !== undefined && typeof report[field] !== "string")
+            delete report[field];
         if (
           report.updatedAt !== undefined &&
           (typeof report.updatedAt !== "string" ||
@@ -225,7 +284,6 @@ export async function listDriveReports(
           typeof report.summary === "string" ? report.summary : "";
         report.transcription =
           typeof report.transcription === "string" ? report.transcription : "";
-        report.todos = report.todos || [];
         report.takeaways = report.takeaways || [];
         reports.push({
           ...report,
@@ -244,4 +302,36 @@ export async function listDriveReports(
 }
 function driveConnectionValid(error: unknown) {
   return !(error instanceof Error && error.message.includes("abgelaufen"));
+}
+
+/**
+ * Moves a meeting's folder to the Drive trash. Trash, not a permanent delete:
+ * the folder holds the only copy of the audio, and Drive's own bin is the
+ * safety net a user already understands.
+ *
+ * A folder that is already gone is not an error — deleting twice must succeed.
+ */
+export async function trashDriveFolder(id: string, token: string) {
+  const response = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?supportsAllDrives=true`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ trashed: true }),
+      signal: AbortSignal.timeout(60000),
+    },
+  );
+  if (response.ok || response.status === 404) return;
+  if (response.status === 401) {
+    rememberToken(undefined);
+    throw new Error(
+      "Die Drive-Verbindung ist abgelaufen. Bitte Google Drive erneut verbinden.",
+    );
+  }
+  throw new Error(
+    `Der Drive-Ordner konnte nicht gelöscht werden (${response.status}).`,
+  );
 }

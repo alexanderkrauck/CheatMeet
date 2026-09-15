@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-vi.mock("./session", () => ({ rememberToken: vi.fn() }));
-import { getDriveFolder, listDriveReports, verifyDriveAccess } from "./drive";
+const session = vi.hoisted(() => ({
+  rememberToken: vi.fn(),
+  ensureDriveToken: vi.fn().mockResolvedValue(null),
+}));
+vi.mock("./session", () => session);
+import { getDriveFolder, listDriveReports, verifyDriveAccess, uploadTimeoutMs } from "./drive";
 import { rememberToken } from "./session";
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -26,6 +30,30 @@ describe("Drive storage", () => {
       "keine Dateien speichern",
     );
   });
+  it("retries once with a freshly minted token before giving up", async () => {
+    // A background job can outlive the token it started with.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response({}, 401))
+      .mockResolvedValueOnce(
+        response({
+          id: "folder",
+          name: "Ordner",
+          mimeType: "application/vnd.google-apps.folder",
+          trashed: false,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    session.ensureDriveToken.mockResolvedValueOnce("fresh-token");
+    await expect(getDriveFolder("folder", "stale")).resolves.toMatchObject({
+      id: "folder",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      (fetchMock.mock.calls[1][1] as RequestInit).headers,
+    ).toMatchObject({ Authorization: "Bearer fresh-token" });
+  });
+
   it("clears an expired access token", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({}, 401)));
     await expect(getDriveFolder("folder", "token")).rejects.toThrow(
@@ -87,9 +115,10 @@ describe("Drive storage", () => {
     );
     const result = await listDriveReports("token", "root");
     expect(result.warnings).toHaveLength(0);
+    // A report written before to-dos had structure still restores.
     expect(result.reports[0]).toMatchObject({
       id: "r1",
-      todos: ["Angebot senden"],
+      todos: [{ text: "Angebot senden" }],
       takeaways: [],
       transcription: "",
       summary: "",
@@ -184,5 +213,21 @@ describe("Drive permission preflight", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(unavailable));
     await expect(verifyDriveAccess("token")).rejects.toBe(unavailable);
     expect(rememberToken).not.toHaveBeenCalled();
+  });
+});
+
+describe("upload deadlines", () => {
+  it("keeps the short deadline for small payloads", () => {
+    expect(uploadTimeoutMs(0)).toBe(120_000);
+    expect(uploadTimeoutMs(1024)).toBe(120_000);
+  });
+  it("scales with the payload, so an hour of audio is not aborted", () => {
+    // ~28 MB is roughly an hour of the recorder's output.
+    expect(uploadTimeoutMs(28 * 1024 * 1024)).toBeGreaterThan(600_000);
+  });
+  it("grows monotonically", () => {
+    expect(uploadTimeoutMs(200 * 1024 * 1024)).toBeGreaterThan(
+      uploadTimeoutMs(28 * 1024 * 1024),
+    );
   });
 });

@@ -17,6 +17,9 @@ type DriveSession = {
   owner: string;
   expiresAt: number;
   lifetimeMs: number;
+  /** Whether this grant covers the calendar, carried with the token so a
+   *  cached session still knows it after a reload. */
+  calendar?: boolean;
 };
 let session: DriveSession | null = null;
 
@@ -33,6 +36,7 @@ export function rememberToken(
   token: string | undefined,
   lifetimeMs = TOKEN_LIFETIME_MS,
   expectedOwner?: string,
+  calendar = false,
 ) {
   const owner = auth.currentUser?.uid;
   // A token minted for one account must never be stored under another: the
@@ -40,7 +44,7 @@ export function rememberToken(
   if (token && expectedOwner && owner !== expectedOwner) return;
   session =
     token && owner
-      ? { token, owner, expiresAt: Date.now() + lifetimeMs, lifetimeMs }
+      ? { token, owner, expiresAt: Date.now() + lifetimeMs, lifetimeMs, calendar }
       : null;
   saveSession();
   if (typeof window !== "undefined")
@@ -90,6 +94,35 @@ export function driveToken(minValidityMs = 0): string | null {
   return remaining > Math.max(0, minValidityMs) ? session.token : null;
 }
 
+/**
+ * Whether the stored grant actually covers the calendar. A refresh token's
+ * scopes are fixed when it is issued, so enabling the feature server-side does
+ * nothing for a user who consented before — they have to authorize again.
+ *
+ * Read from the session rather than from a module flag: `ensureDriveToken`
+ * returns a cached token without contacting the server, so on most page loads
+ * nothing would ever set a flag.
+ */
+export function hasCalendarGrant(): boolean {
+  // Whether the grant covers the calendar does not expire with the access
+  // token it was learned from. Gating on a live token made the calendar
+  // vanish every time the cached token lapsed or a 401 cleared it.
+  if (session?.calendar === true) return true;
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw)?.calendar === true : false;
+  } catch {
+    return false;
+  }
+}
+
+/** Re-renders anything gated on the grant when a token is minted or dropped. */
+export function subscribeDriveSession(onChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("cheatmeet:drive-session", onChange);
+  return () => window.removeEventListener("cheatmeet:drive-session", onChange);
+}
+
 // --- server-held authorization ---------------------------------------------
 
 let serverAuth: Promise<boolean> | null = null;
@@ -102,10 +135,19 @@ let refresher: number | undefined;
  * degrades instead of locking everyone out.
  */
 export function serverAuthAvailable(): Promise<boolean> {
+  // A network failure is not an answer. Caching it downgraded the whole tab to
+  // the popup flow for its lifetime on one flaky request, so only a real
+  // response is remembered; a failure answers false and is retried next time.
   return (serverAuth ||= fetch("/api/auth/config")
-    .then((r) => r.json())
-    .then((d) => d?.serverAuth === true)
-    .catch(() => false));
+    .then((response) => {
+      if (!response.ok) throw new Error(String(response.status));
+      return response.json();
+    })
+    .then((data) => data?.serverAuth === true)
+    .catch(() => {
+      serverAuth = null;
+      return false;
+    }));
 }
 
 /** Signals the grant is unusable; the app signs the user out to re-consent. */
@@ -151,10 +193,12 @@ export async function ensureDriveToken(
       }
       if (!response.ok)
         throw new Error(data.error || "Google Drive ist nicht erreichbar.");
+      // The grant's real scope set, which can lag the server's configuration.
       rememberToken(
         data.accessToken,
         Math.max(60_000, Number(data.expiresInSeconds || 3600) * 1000 - 60_000),
         owner,
+        data.calendar === true,
       );
       return data.accessToken as string;
     } finally {
@@ -180,16 +224,30 @@ export function stopDriveTokenRefresh() {
   serverAuth = null;
 }
 
-/** Drops the server-held grant so signing out leaves no offline access behind. */
+/**
+ * Drops the server-held grant. Google revokes for the whole OAuth client, so
+ * this ends Drive access on every device — which is why it is an explicit
+ * action in settings and never a side effect of signing out.
+ */
 export async function revokeDriveGrant(): Promise<void> {
-  if (!auth.currentUser || !(await serverAuthAvailable())) return;
+  if (!auth.currentUser) throw new Error("Bitte zuerst anmelden.");
+  if (!(await serverAuthAvailable()))
+    throw new Error(
+      "Diese Installation verwaltet den Drive-Zugriff nicht serverseitig. Bitte den Zugriff direkt im Google-Konto entziehen.",
+    );
   const idToken = await auth.currentUser.getIdToken().catch(() => null);
-  if (!idToken) return;
-  await fetch("/api/auth/revoke", {
+  if (!idToken) throw new Error("Bitte erneut anmelden.");
+  // Swallowing this told the user their access was revoked everywhere when it
+  // may not have been revoked anywhere.
+  const response = await fetch("/api/auth/revoke", {
     method: "POST",
     headers: { Authorization: `Bearer ${idToken}` },
     signal: AbortSignal.timeout(10_000),
-  }).catch(() => undefined);
+  }).catch(() => null);
+  if (!response || !response.ok)
+    throw new Error(
+      "Der Zugriff konnte bei Google nicht widerrufen werden. Bitte im Google-Konto unter „Drittanbieter-Apps“ prüfen.",
+    );
 }
 
 /** The Google account id inside an unverified id_token, for comparison only. */
@@ -238,7 +296,7 @@ function consentPopup(): Promise<string> {
         done(() =>
           reject(
             new Error(
-              "Das Anmeldefenster wurde geschlossen. Sie können die Anmeldung erneut starten.",
+              "Das Anmeldefenster wurde geschlossen. Du kannst die Anmeldung erneut starten.",
             ),
           ),
         );
@@ -283,13 +341,13 @@ export async function connectGoogle(): Promise<string> {
 export function errorMessage(error: unknown): string {
   const code = (error as { code?: string })?.code;
   if (code === "permission-denied")
-    return "Firebase verweigert das Speichern oder Lesen. Bitte die Firestore-Regeln und Datenbank prüfen. Ihre lokale Kopie bleibt erhalten.";
+    return "Firebase verweigert das Speichern oder Lesen. Bitte die Firestore-Regeln und Datenbank prüfen. Deine lokale Kopie bleibt erhalten.";
   if (code === "unavailable")
     return "Firebase ist gerade nicht erreichbar. Bitte die Verbindung prüfen und erneut synchronisieren.";
   if (code === "auth/popup-blocked")
     return "Das Anmeldefenster wurde blockiert. Bitte Pop-ups für diese Seite erlauben.";
   if (code === "auth/popup-closed-by-user")
-    return "Das Anmeldefenster wurde geschlossen. Sie können die Anmeldung erneut starten.";
+    return "Das Anmeldefenster wurde geschlossen. Du kannst die Anmeldung erneut starten.";
   if (code === "auth/user-mismatch")
     return "Bitte dasselbe Google-Konto wie bei der Anmeldung verwenden.";
   return error instanceof Error

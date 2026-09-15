@@ -8,6 +8,8 @@ import {
   watchLocalReports,
 } from "./local";
 import type { ReportData } from "../types";
+import { summarise, type ReportSummary } from "./meetingMeta";
+import { rememberPeople } from "./people";
 import { errorMessage } from "./session";
 export function uid() {
   if (!auth.currentUser) throw new Error("Bitte zuerst anmelden.");
@@ -28,6 +30,12 @@ export async function saveReport(report: ReportData): Promise<string | null> {
     }),
   );
   await putLocal(user, next);
+  // Names the user typed, kept for the next meeting's suggestions. Never allowed
+  // to fail a save.
+  void rememberPeople(
+    user,
+    Object.values(next.speech?.speakerAliases || {}),
+  ).catch(() => {});
   try {
     let timer: ReturnType<typeof setTimeout>;
     const write = setDoc(
@@ -55,8 +63,12 @@ export async function saveReport(report: ReportData): Promise<string | null> {
     return errorMessage(error);
   }
 }
+/**
+ * The list of meetings, as summaries. The full report — transcript turns and
+ * all — is loaded per meeting by `getLocal` when a screen actually needs it.
+ */
 export function watchReports(
-  onData: (r: ReportData[], dirty: string[]) => void,
+  onData: (r: ReportSummary[], dirty: string[]) => void,
   onError: (e: unknown) => void,
 ) {
   const user = uid();
@@ -67,7 +79,9 @@ export function watchReports(
     const local = await listLocal(user);
     if (active && request === requested)
       onData(
-        local.map((v) => v.report).sort((a, b) => b.date.localeCompare(a.date)),
+        local
+          .map((v) => summarise(v.report))
+          .sort((a, b) => b.date.localeCompare(a.date)),
         local.filter((v) => v.dirty).map((v) => v.report.id),
       );
   };

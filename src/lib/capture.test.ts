@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./firebase", () => ({ auth: { currentUser: { uid: "capture-test" } } }));
 vi.mock("./local", () => ({
-  appendRecordingChunk: vi.fn(), deleteDraft: vi.fn(),
-  getDraft: vi.fn(), putDraft: vi.fn(),
+  appendRecordingChunk: vi.fn().mockResolvedValue(undefined),
+  deleteDraft: vi.fn().mockResolvedValue(undefined),
+  getDraft: vi.fn().mockResolvedValue(undefined),
+  putDraft: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("./session", () => ({ errorMessage: (error: Error) => error.message }));
 vi.mock("./useRecordingLifecycle", () => ({ observeRecordingLifecycle: ({ recorder, onInterrupted }: any) => {
@@ -19,8 +21,29 @@ vi.mock("./assemblyLive", () => ({
   })),
 }));
 
+/** A real MediaStreamTrack is an EventTarget and fires "ended". */
+class FakeTrack extends EventTarget {
+  kind: string;
+  constructor(kind = "audio") {
+    super();
+    this.kind = kind;
+  }
+  readyState = "live";
+  muted = false;
+  stop = vi.fn(() => {
+    this.readyState = "ended";
+  });
+  end() {
+    this.readyState = "ended";
+    this.dispatchEvent(new Event("ended"));
+  }
+}
+
 class FakeStream {
-  constructor(private tracks = [{ kind: "audio", stop: vi.fn() }]) {}
+  tracks: FakeTrack[];
+  constructor(tracks: FakeTrack[] = [new FakeTrack()]) {
+    this.tracks = tracks;
+  }
   getAudioTracks() { return this.tracks.filter((track) => track.kind === "audio"); }
   getTracks() { return this.tracks; }
 }
@@ -78,6 +101,45 @@ describe("recording audio-source selection", () => {
     expect(vi.mocked(startAssemblyLive).mock.calls[0][0].system).toBeUndefined();
   });
 
+  it("removes the orphaned draft when audio is imported over a recording", async () => {
+    const { deleteDraft } = await import("./local");
+    vi.mocked(deleteDraft).mockClear();
+    const before = capture.captureSnapshot().draft.report.id;
+    await capture.importAudio(
+      new File(["x"], "a.m4a", { type: "audio/m4a" }),
+    );
+    const after = capture.captureSnapshot().draft.report.id;
+    expect(after).not.toBe(before);
+    // Otherwise it lingers as an unfinished recording with no audio.
+    expect(deleteDraft).toHaveBeenCalledWith("capture-test", before);
+  });
+
+  it("keeps recording when the user stops sharing their screen", async () => {
+    const systemTrack = new FakeTrack();
+    getDisplayMedia.mockResolvedValue(new FakeStream([systemTrack]));
+    await capture.startCapture(true, async () => {}, "mic+system");
+    expect(capture.captureSnapshot()).toMatchObject({ state: "recording" });
+
+    // Chrome's "Freigabe beenden", or the shared tab being closed.
+    systemTrack.end();
+
+    const snap = capture.captureSnapshot();
+    // The microphone is still live, so the meeting must continue.
+    expect(snap.state).toBe("recording");
+    expect(snap.warning).toContain("Bildschirmfreigabe");
+    expect(systemTrack.stop).toHaveBeenCalled();
+  });
+
+  it("still ends the recording when the microphone itself dies", async () => {
+    const micTrack = new FakeTrack();
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(
+      new FakeStream([micTrack]) as unknown as MediaStream,
+    );
+    await capture.startCapture(true, async () => {}, "mic");
+    expect(capture.captureSnapshot()).toMatchObject({ state: "recording" });
+    expect(micTrack.readyState).toBe("live");
+  });
+
   it("requests sharing and passes the two audio sources separately", async () => {
     await capture.startCapture(true, async () => {}, "mic+system");
     expect(getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: true });
@@ -97,7 +159,7 @@ describe("recording audio-source selection", () => {
   });
 
   it("does not transcribe a screen share without audio", async () => {
-    getDisplayMedia.mockResolvedValue(new FakeStream([{ kind: "video", stop: vi.fn() }]));
+    getDisplayMedia.mockResolvedValue(new FakeStream([new FakeTrack("video")]));
     await capture.startCapture(true, async () => {}, "mic+system");
     expect(capture.captureSnapshot().state).toBe("recording");
     expect(capture.captureSnapshot().warning).toContain("kein Systemaudio");

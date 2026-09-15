@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { activeJobs, subscribeJobs } from "../lib/pipeline";
 
@@ -11,6 +11,7 @@ const snapshot = () => activeJobs();
  */
 export default function JobProgress() {
   const jobs = useSyncExternalStore(subscribeJobs, snapshot);
+  const location = useLocation();
 
   useEffect(() => {
     if (!jobs.length) return;
@@ -23,7 +24,9 @@ export default function JobProgress() {
     return () => window.removeEventListener("beforeunload", guard);
   }, [jobs.length]);
 
-  if (!jobs.length) return null;
+  // The capture screen owns its bottom edge: the pill sat on top of pause
+  // and stop. RecordingBar already stands aside here for the same reason.
+  if (!jobs.length || location.pathname.startsWith("/record")) return null;
   return (
     <div className="job-progress no-print" role="status" aria-live="polite">
       {jobs.map((job) => (
