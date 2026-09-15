@@ -2389,10 +2389,10 @@ body {
   gap: 6px;
 }
 .calendar-match-label {
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 1.3px;
-  color: var(--brand-ink);
+  letter-spacing: 1.4px;
+  color: var(--brand);
 }
 .calendar-match .choice {
   padding: 10px 12px;

@@ -4,13 +4,15 @@
   inset: 0;
   z-index: 30;
   height: 100dvh;
-  /* A control room, not a landing page. Four overlapping pastel radials meant
-     no text on this screen had a background you could name a contrast ratio
-     for; one near-flat dark ground means every ratio below is computable. */
-  background: linear-gradient(180deg, #0b1220 0%, #131c2e 62%, #0b1220 100%);
+  background:
+    radial-gradient(52vw 44vw at 10% 2%, #7ea6ff 0%, transparent 58%),
+    radial-gradient(46vw 40vw at 95% 14%, #b49cff 0%, transparent 56%),
+    radial-gradient(56vw 48vw at 70% 98%, #64d2ff 0%, transparent 60%),
+    radial-gradient(40vw 36vw at 40% 60%, #ffb9e6 0%, transparent 62%),
+    linear-gradient(168deg, #e6edff 0%, #eef1ff 50%, #e4ecfd 100%);
   overflow: hidden;
   overscroll-behavior: none;
-  color: #f2f6fc;
+  color: #1e3a8a;
   padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
 }
 .walk-frame {
@@ -29,20 +31,20 @@
   gap: 12px;
   padding: 12px 20px;
   flex-shrink: 0;
-  border-bottom: 1px solid #232f45;
+  border-bottom: 1px solid #d5dae2;
 }
 .walk-header > div {
   text-align: center;
 }
 .walk-header strong {
   display: block;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
 }
 .walk-step {
-  font-size: 11px;
-  letter-spacing: 1.4px;
-  color: #9fb0c6;
+  font-size: 9px;
+  letter-spacing: 1.7px;
+  color: #7d8592;
   font-weight: 650;
   display: block;
   margin-bottom: 3px;
@@ -60,14 +62,8 @@
 .walk-icon:hover {
   background: #eff6ff;
 }
-/* The sheets' close button is a .walk-icon on a light surface. */
-.walk-frame .walk-icon:hover {
-  background: #1b2436;
-}
-/* 0.2 was tuned for a dark glyph on a pale page; white at 20% on this ground
-   disappears entirely. */
 .walk-icon:disabled {
-  opacity: 0.45;
+  opacity: 0.2;
 }
 .walk-content {
   display: flex;
@@ -96,24 +92,19 @@
 }
 .walk-project > span {
   display: block;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1.3px;
-  color: #9fb0c6;
+  font-size: 9px;
+  letter-spacing: 1.4px;
+  color: #3b82f6;
   margin-bottom: 8px;
 }
 .walk-project input {
   width: 100%;
   padding: 13px 14px;
-  border: 1px solid #64748b;
+  border: 1px solid #bfdbfe;
   border-radius: 9px;
-  background: #1b2436;
-  /* 16px is the iOS zoom guard; it stays whatever else changes. */
+  background: white;
   font-size: 16px;
-  color: #f2f6fc;
-}
-.walk-project input::placeholder {
-  color: #8c9bb2;
+  color: #2563eb;
 }
 .walk-ready-intro {
   min-height: 0;
@@ -127,31 +118,29 @@
 }
 .walk-ready-intro h1,
 .walk-review-intro h1 {
-  font-size: 28px;
+  font-size: 34px;
   line-height: 1.17;
-  /* -1.3px existed to tame 34/40px display type; at 28px it just crowds. */
-  letter-spacing: -0.6px;
+  letter-spacing: -1.3px;
   font-weight: 600;
 }
 .walk-ready-intro p,
 .walk-review-intro p {
-  font-size: 14px;
-  color: #aebbce;
-  max-width: 380px;
-  line-height: 1.55;
+  font-size: 13px;
+  color: #737b88;
+  max-width: 340px;
+  line-height: 1.6;
 }
 .walk-folder {
   display: flex;
   align-items: center;
   gap: 12px;
-  border: 1px solid #64748b;
+  border: 1px solid #bfdbfe;
   border-radius: 10px;
-  background: #1b2436;
+  background: #e0f2fe;
   padding: 13px 15px;
   text-align: left;
   flex-shrink: 0;
-  /* The lucide icons inherit this through currentColor. */
-  color: #f2f6fc;
+  color: #1e40af;
   width: 100%;
 }
 .walk-folder > span {
@@ -160,15 +149,14 @@
 }
 .walk-folder small {
   display: block;
-  font-size: 11px;
-  font-weight: 650;
+  font-size: 8px;
   letter-spacing: 1.2px;
   margin-bottom: 2px;
-  color: #9fb0c6;
+  color: #77818f;
 }
 .walk-folder strong {
   display: block;
-  font-size: 13px;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -296,8 +284,8 @@
   display: flex;
   flex-direction: column;
   gap: 9px;
-  background: #0a0f1a;
-  border-top: 1px solid #232f45;
+  background: #f0f9ff;
+  border-top: 1px solid #d5dae2;
 }
 .walk-primary {
   min-height: 56px;
@@ -308,24 +296,14 @@
   gap: 10px;
   border-radius: 10px;
   background: #2563eb;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 650;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
   width: 100%;
   text-align: center;
 }
 .walk-primary:hover:not(:disabled) {
-  background: #1d4ed8;
-}
-/* Only inside the dark frame. The sheets reuse .walk-primary on their own light
-   surface, where a near-white slab has no visible edge at all. */
-.walk-frame .walk-primary {
-  /* The one thing you came here to press is the brightest object in the room. */
-  background: #f2f6fc;
-  color: #0b1220;
-}
-.walk-frame .walk-primary:hover:not(:disabled) {
-  background: #ffffff;
+  background: #2563eb;
 }
 .walk-primary:focus-visible {
   outline: 3px solid #6380ab;
@@ -335,31 +313,28 @@
   min-height: 40px;
   padding: 8px;
   background: none;
-  color: #1d4ed8;
-  font-size: 13px;
+  color: #3b82f6;
+  font-size: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   width: 100%;
 }
-.walk-frame .walk-secondary {
-  color: #cbd7e8;
-}
 .walk-local-status {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  font-size: 12px;
-  color: #aebbce;
+  font-size: 9px;
+  color: #8691a0;
   line-height: 1.3;
   text-align: center;
 }
 .walk-save-hint {
   text-align: center;
-  font-size: 12px;
-  color: #aebbce;
+  font-size: 10px;
+  color: #717c8c;
   margin: 2px 0 5px;
 }
 .walk-capture-controls {
@@ -378,13 +353,13 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  background: #22314a;
-  border: 1px solid #64748b;
-  color: #f2f6fc;
+  background: #dee3ec;
+  border: 1px solid #cbd4e1;
+  color: #475367;
   border-radius: 12px;
 }
 .walk-pause span {
-  font-size: 12px;
+  font-size: 10px;
 }
 .walk-finish {
   min-height: 57px;
@@ -406,7 +381,7 @@
   display: block;
   /* 5.23:1 on #1d4ed8; the old #a4b2c8 measured 2.41:1. */
   color: #dbe4f2;
-  font-size: 12px;
+  font-size: 10px;
   margin-top: 1px;
 }
 .walk-review-intro {
@@ -420,18 +395,18 @@
   gap: 14px;
 }
 .walk-pending {
-  border: 1px solid #3b5a86;
-  background: #1b2436;
+  border: 1px solid #b5c9e6;
+  background: #d6e2f4;
   border-radius: 5px;
   padding: 5px 9px;
-  font-size: 11px;
-  color: #aebbce;
+  font-size: 10px;
+  color: #3f5e8d;
 }
 .walk-review-media {
   flex-shrink: 0;
   border-radius: 12px;
-  border: 1px solid #64748b;
-  background: #1b2436;
+  border: 1px solid #d6dce4;
+  background: white;
   padding: 14px;
 }
 .walk-review-stats {
@@ -440,7 +415,7 @@
   justify-content: space-between;
   gap: 10px;
   font-size: 12px;
-  color: #aebbce;
+  color: #6a7483;
   margin-bottom: 12px;
 }
 .walk-review-stats span,
@@ -451,8 +426,7 @@
 }
 .walk-review-stats button {
   border: 0;
-  background: #22314a;
-  color: #f2f6fc;
+  background: #e5e9f1;
   border-radius: 5px;
   padding: 8px;
   font-size: 12px;
@@ -465,21 +439,21 @@
 }
 .walk-message {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.5;
   padding: 10px 15px;
   margin: 10px 20px 0;
-  background: #17243c;
-  color: #c3d4ee;
-  border: 1px solid #3b5a86;
+  background: #d4dff0;
+  color: #425d85;
+  border: 1px solid #b4c8e5;
   border-radius: 8px;
   max-height: 90px;
   overflow: auto;
 }
 .walk-message.is-error {
-  background: #2a1620;
-  color: #ffc2b4;
-  border-color: #8c4a3f;
+  background: #ffffff;
+  color: #97513d;
+  border-color: #edcebf;
 }
 .walk-progress {
   flex: 1;
@@ -499,13 +473,12 @@
 }
 .walk-progress p {
   font-size: 12px;
-  color: #aebbce;
+  color: #798394;
 }
 .walk-overlay {
   position: fixed;
   inset: 0;
-  /* A royal-blue scrim over a near-black page tints the whole room blue. */
-  background: #060a12d9;
+  background: #1e3a8acc;
   z-index: 40;
   display: flex;
   align-items: center;
@@ -597,7 +570,7 @@
   }
   .walk-ready-intro h1,
   .walk-review-intro h1 {
-    font-size: 32px;
+    font-size: 40px;
   }}
 @media (max-height: 740px) {
   .walk-header {
@@ -617,11 +590,11 @@
   }
   .walk-ready-intro h1,
   .walk-review-intro h1 {
-    font-size: 24px;
+    font-size: 28px;
   }
   .walk-ready-intro p,
   .walk-review-intro p {
-    font-size: 13px;
+    font-size: 12px;
   }
   .walk-pause {
     min-height: 62px;
@@ -645,11 +618,11 @@
   }
   .walk-ready-intro h1,
   .walk-review-intro h1 {
-    font-size: 20px;
+    font-size: 24px;
   }
   .walk-ready-intro p,
   .walk-review-intro p {
-    font-size: 12.5px;
+    font-size: 11px;
     line-height: 1.4;
   }
   .walk-review-intro {
@@ -673,6 +646,7 @@
     font-size: 12px;
   }
   .walk-pending {
+    font-size: 9px;
     padding: 3px 7px;
   }
   .walk-review-stats {
@@ -683,6 +657,7 @@
   }
   .walk-save-hint {
     margin: 0;
+    font-size: 9px;
   }}
 @media (max-height: 470px) and (orientation: landscape) {
   .walk-frame {
@@ -705,7 +680,7 @@
     justify-content: center;
     padding: 15px;
     border-top: 0;
-    border-left: 1px solid #232f45;
+    border-left: 1px solid #d5dae2;
   }
   .walk-ready-intro p {
     display: none;
@@ -737,7 +712,20 @@
   .walk-progress {
     grid-column: 1/-1;
   }
+  .walk-pending {
+    font-size: 8px;
+  }}
+.walk-lock-status {
+  text-align: center;
+  font-size: 9px;
+  color: #707b8d;
+  line-height: 1.3;
+  margin: 0;
 }
+@media (max-height: 620px) {
+  .walk-lock-status {
+    font-size: 8px;
+  }}
 
 .walk-busy {
   display: flex;
@@ -745,9 +733,9 @@
   justify-content: center;
   gap: 8px;
   font-size: 12px;
-  color: #dbe6fa;
-  background: #17243c;
-  border: 1px solid #3b5a86;
+  color: #1e40af;
+  background: #eaf1fd;
+  border: 1px solid #cfdcf7;
   border-radius: 10px;
   padding: 9px 12px;
 }
@@ -849,7 +837,7 @@
 .live-transcript p {
   font-size: 14.5px;
   line-height: 1.72;
-  color: #e6edf7;
+  color: #1e3a5f;
   white-space: pre-wrap;
 }
 .live-assist {
@@ -868,7 +856,7 @@
 }
 .live-empty {
   font-size: 12.5px;
-  color: #aebbce;
+  color: #7b899e;
   line-height: 1.6;
 }
 .live-thinking {
@@ -876,16 +864,16 @@
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  color: #9fb0c6;
+  color: #5b7cb5;
 }
 .insight-group h3 {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 10.5px;
   letter-spacing: 1.1px;
   text-transform: uppercase;
-  color: #9fb0c6;
+  color: #5b7cb5;
   margin-bottom: 7px;
   font-weight: 650;
 }
@@ -900,7 +888,7 @@
 .insight-group dd {
   font-size: 13.5px;
   line-height: 1.55;
-  color: #dbe6f5;
+  color: #1e3a5f;
 }
 .insight-group dl {
   margin: 0;
@@ -911,7 +899,7 @@
 .insight-group dt {
   font-size: 13px;
   font-weight: 650;
-  color: #7dd3fc;
+  color: #1e40af;
 }
 .insight-group dd {
   margin: 2px 0 0;
@@ -923,19 +911,19 @@
 .live-question {
   font-size: 13px;
   font-weight: 600;
-  color: #7dd3fc;
+  color: #1e40af;
   margin-bottom: 5px;
 }
 .live-answer {
   font-size: 13.5px;
   line-height: 1.6;
-  color: #dbe6f5;
+  color: #1e3a5f;
   display: flex;
   align-items: baseline;
   gap: 6px;
 }
 .live-answer.is-error {
-  color: #ff9d8a;
+  color: #b4472f;
 }
 .live-ask {
   flex-shrink: 0;
@@ -949,10 +937,10 @@
   min-width: 0;
   padding: 11px 13px;
   border-radius: 9px;
-  border: 1px solid #64748b;
-  background: #131c2e;
+  border: 1px solid #c3d5f2;
+  background: #fff;
   font-size: 16px;
-  color: #f2f6fc;
+  color: #1e3a5f;
 }
 .live-ask button {
   width: 46px;
@@ -965,7 +953,7 @@
 .live-error {
   padding: 0 12px 10px;
   font-size: 11.5px;
-  color: #ff9d8a;
+  color: #b4472f;
 }
 
 /* One pane at a time until there is room for both. */
@@ -980,11 +968,8 @@
   .live-panes > .live-assist { display: flex; }}
 
 /* --- Glass ---------------------------------------------------------------
-   Translucent surfaces over the page's ground, with a hairline top highlight
-   so each pane reads as a physical sheet rather than a flat box. The alphas
-   are dark: white alpha over a near-black ground composites to a mid-grey that
-   is neither a light surface nor a dark one, and every ink rule inside it
-   then fails against both. */
+   Translucent surfaces over the page's colour field, with a hairline top
+   highlight so each pane reads as a physical sheet rather than a flat box. */
 .live-bar {
   background: linear-gradient(140deg, #1e40afe0, #3b2f9ae0);
   backdrop-filter: blur(22px) saturate(170%);
@@ -995,12 +980,12 @@
     0 10px 26px -14px #1e293b6e;
 }
 .live-tabs button {
-  background: #1b2436b8;
+  background: #ffffff70;
   backdrop-filter: blur(16px) saturate(160%);
   -webkit-backdrop-filter: blur(16px) saturate(160%);
-  border: 1px solid #ffffff1f;
-  box-shadow: inset 0 1px 0 #ffffff17;
-  color: #cbd7e8;
+  border: 1px solid #ffffff6b;
+  box-shadow: inset 0 1px 0 #ffffffb0;
+  color: #35507f;
   transition: background 0.16s ease, color 0.16s ease;
 }
 .live-tabs button.active {
@@ -1012,53 +997,51 @@
     0 8px 20px -12px #2563ebcc;
 }
 .live-pane {
-  background: linear-gradient(150deg, #1d2739e8, #161f2ee0);
-  backdrop-filter: blur(30px) saturate(140%);
-  -webkit-backdrop-filter: blur(30px) saturate(140%);
-  border: 1px solid #ffffff1a;
+  background: linear-gradient(150deg, #ffffff85, #ffffff5c);
+  backdrop-filter: blur(30px) saturate(190%);
+  -webkit-backdrop-filter: blur(30px) saturate(190%);
+  border: 1px solid #ffffff7a;
   border-radius: 17px;
   box-shadow:
-    inset 0 1px 0 #ffffff1f,
-    0 18px 42px -26px #00000099;
+    inset 0 1px 0 #ffffffc4,
+    0 18px 42px -26px #1e293b73;
 }
 .live-assist {
-  background: linear-gradient(150deg, #19222fe8, #131b27e0);
+  background: linear-gradient(150deg, #ffffff70, #ffffff45);
 }
 .live-ask {
-  border-top: 1px solid #ffffff1a;
-  background: #ffffff0a;
+  border-top: 1px solid #ffffff8f;
+  background: #ffffff59;
   border-radius: 0 0 17px 17px;
 }
 .live-ask input {
-  background: #131c2e;
-  border: 1px solid #64748b;
-  box-shadow: none;
+  background: #ffffffab;
+  border: 1px solid #ffffff9e;
+  box-shadow: inset 0 1px 2px #1e293b12;
 }
 .live-ask input:focus {
   outline: none;
-  border-color: #7dd3fc;
-  box-shadow: 0 0 0 3px #7dd3fc33;
+  border-color: #2563eb80;
+  box-shadow: 0 0 0 3px #2563eb26;
 }
 .live-ask button {
   background: linear-gradient(140deg, #2563eb, #4f46e5);
   box-shadow: 0 8px 18px -10px #2563ebd9;
 }
 .live-exchange {
-  border-top: 1px solid #ffffff1a;
+  border-top: 1px solid #ffffff9e;
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  .live-pane, .live-tabs button { backdrop-filter: none; background: #1b2436; }
-  .live-assist { background: #19222f; }
-  .live-ask input { backdrop-filter: none; background: #131c2e; }}
+  .live-pane, .live-tabs button, .live-ask input { backdrop-filter: none; background: #fff; }}
 
 .walk-gap {
   margin-top: 10px;
   font-size: 11.5px;
   line-height: 1.5;
-  color: #ffd79a;
-  background: #2e2411;
-  border: 1px solid #6b5320;
+  color: #8a5a1f;
+  background: #fef3c7ad;
+  border: 1px solid #fcd9a0;
   border-radius: 9px;
   padding: 9px 11px;
 }
@@ -1074,23 +1057,17 @@
 }
 .audio-preview small {
   font-size: 11px;
-  color: #aebbce;
+  color: #5b6577;
 }
 
 /* Keep source controls outside the transcript's scrolling region. */
 .live-panes > .live-transcript { flex: 2.3; flex-direction: column; overflow: hidden; padding: 0; }
 .live-panes[data-tab="transcript"] > .live-transcript { display: flex; }
 .live-transcript-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; overflow-anchor: none; }
-.live-transcript .live-speakers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; margin: 0; padding: 10px 12px; border-bottom: 1px solid #232f45; background: #151e2e; border-radius: 16px 16px 0 0; }
+.live-transcript .live-speakers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; margin: 0; padding: 10px 12px; border-bottom: 1px solid #dbe3f2; background: #f5f7ff; border-radius: 16px 16px 0 0; }
 .live-speakers .speaker-filters { flex-wrap: nowrap; margin: 0; gap: 4px; }
 .live-speakers .speaker-picker { flex: 1; min-width: 110px; margin: 0; display: block; }
 .speaker-picker select { width: 100%; min-width: 0; padding: 7px 4px; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #334155; }
-.walk-frame .speaker-picker select { border-color: #64748b; background: #1b2436; color: #f2f6fc; }
-.walk-frame .speaker-filters button { background: #1b2436; border-color: #64748b; color: #cbd7e8; }
-.walk-frame .speaker-filters button[aria-pressed="true"] { background: #7dd3fc; border-color: #7dd3fc; color: #0b1220; }
-.walk-frame .live-speakers summary { color: #cbd7e8; }
-.walk-frame .inline-speaker-name:hover, .walk-frame .inline-speaker-name:focus-visible { background: #22314a; outline-color: #7dd3fc; }
-.walk-frame .inline-speaker-input { background: #131c2e; border-color: #7dd3fc; color: #f2f6fc; }
 .inline-speaker-name { display: inline-flex; align-items: center; gap: 5px; padding: 3px 2px; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-align: inherit; }
 .inline-speaker-name:hover, .inline-speaker-name:focus-visible { background: #dbeafe; outline: 1px solid #93c5fd; }
 .inline-speaker-input { max-width: 180px; width: 100%; border: 1px solid #6366f1; border-radius: 5px; padding: 4px 6px; background: white; color: #1e293b; font-size: 14px; }
@@ -1101,6 +1078,7 @@
 .walk-capture-controls { margin: 0; }
 .walk-capture-controls .walk-pause { flex: 0 0 86px; min-height: 48px; width: auto; flex-direction: row; }
 .walk-capture-controls .walk-finish { flex: 1; min-height: 48px; }
+.walk-recording .walk-lock-status, .walk-paused .walk-lock-status { display: none; }
 .walk-recording .live, .walk-paused .live { gap: 6px; }
 .live .live-suggestion { margin: 0; padding: 8px 12px; flex-shrink: 0; }
 .live .live-suggestion strong { font-size: 10px; }
@@ -1140,111 +1118,4 @@
 .walk-sheet .drive-settings {
   display: grid;
   gap: 12px;
-}
-
-/* ---------------------------------------------------------------------------
-   Shared components borrowed from index.css render inside this dark frame.
-   Scoped to .walk-frame: the sheets mount outside it and stay light.
-   --------------------------------------------------------------------------- */
-.walk-frame .calendar-match-label,
-.walk-frame .meeting-languages summary,
-.walk-frame .walk-speaker-assumptions legend {
-  color: #9fb0c6;
-}
-.walk-frame .meeting-languages summary {
-  color: #cbd7e8;
-}
-.walk-frame .walk-speaker-assumptions {
-  border-color: #64748b;
-  background: #151e2e;
-}
-.walk-frame .walk-speaker-assumptions legend,
-.walk-frame .walk-speaker-assumptions label {
-  color: #f2f6fc;
-}
-.walk-frame .walk-speaker-assumptions p {
-  color: #aebbce;
-  font-size: 12px;
-}
-.walk-frame .choice {
-  background: #1b2436;
-  border-color: #64748b;
-  color: #f2f6fc;
-}
-/* index.css's `.calendar-match .choice small` ties on specificity and wins on
-   source order, so this has to out-specify it rather than match it. */
-.walk-frame .calendar-match .choice small,
-.walk-frame .calendar-match > p {
-  color: #aebbce;
-}
-/* index.css's `.calendar-picked.is-unknown` ties with a single-class-scoped
-   override and wins on source order, so this has to out-specify it. */
-.walk-frame .calendar-match .calendar-picked.is-unknown {
-  color: #aebbce;
-}
-.walk-frame .calendar-match .calendar-picked.is-unknown strong {
-  color: #f2f6fc;
-}
-/* The picked event is the one lit panel: brighter fill, cool border. */
-.walk-frame .calendar-picked {
-  background: #22314a;
-  border-color: #7dd3fc;
-  box-shadow: 0 0 0 3px #7dd3fc33;
-  color: #f2f6fc;
-}
-.walk-frame .calendar-picked > svg {
-  background: #7dd3fc;
-  color: #0b1220;
-}
-.walk-frame .calendar-picked small {
-  color: #c2d1e4;
-}
-.walk-frame .calendar-picked.is-unknown {
-  background: #1b2436;
-  border-color: #64748b;
-  box-shadow: none;
-}
-.walk-frame .calendar-picked.is-unknown > svg {
-  background: #2c3950;
-  color: #aebbce;
-}
-.walk-frame .calendar-clear {
-  background: transparent;
-  border-color: #64748b;
-  color: #cbd7e8;
-}
-.walk-frame .calendar-clear:hover {
-  border-color: #ff8f7a;
-  color: #ff8f7a;
-}
-/* Focus has to survive on a dark ground; the blue outline did not. */
-.walk-frame :focus-visible {
-  outline: 3px solid #7dd3fc;
-  outline-offset: 2px;
-}
-
-/* index.css paints every h1 #1e40af, which on this ground is the worst
-   contrast on the screen. */
-.walk-frame h1 {
-  color: #f2f6fc;
-}
-/* The ready step's intro stops being a centred billboard between the form and
-   its settings and becomes what it actually is: the heading of the panel. It
-   leads the column, left-aligned, at a size that does not compete with the
-   button you came here to press. The review step keeps its centred hero. */
-.walk-content.is-ready .walk-ready-intro {
-  order: -1;
-  align-items: flex-start;
-  text-align: left;
-  gap: 6px;
-  padding: 0;
-}
-.walk-content.is-ready .walk-ready-intro h1 {
-  font-size: 22px;
-  letter-spacing: -0.4px;
-  line-height: 1.2;
-}
-.walk-content.is-ready .walk-ready-intro p {
-  font-size: 13.5px;
-  max-width: 52ch;
 }
