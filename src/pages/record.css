@@ -75,6 +75,17 @@
   justify-content: space-between;
   overflow: hidden;
 }
+/* The review step is the one that can outgrow the fixed viewport: it carries
+   the intro, the language picker, the calendar picker, the audio preview and
+   the storage-location button. Capture stays non-scrolling. */
+.walk-review .walk-content {
+  overflow-y: auto;
+  justify-content: flex-start;
+  overscroll-behavior: contain;
+}
+.walk-review .walk-review-intro {
+  flex: 0 0 auto;
+}
 .walk-project {
   display: block;
   flex-shrink: 0;
@@ -173,7 +184,7 @@
   align-items: flex-start;
 }
 /* Two pills side by side leaves too little width to truncate a value down
-   to, e.g. "CheatMeet Recordings" collapsing to "CheatM…". Wrapping to a
+   to, e.g. "CheatMeet Recordings (App)" collapsing to "CheatM…". Wrapping to a
    second line reads better than an ellipsis here. */
 .walk-settings-row > .walk-folder strong {
   white-space: normal;
@@ -336,154 +347,6 @@
   color: #717c8c;
   margin: 2px 0 5px;
 }
-.walk-project-name {
-  font-size: 12px;
-  color: #707c8e;
-  text-align: center;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-.walk-live {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  flex: 1;
-  min-height: 0;
-  gap: 10px;
-  border-radius: 16px;
-  background: #1e40af;
-  padding: 20px 15px;
-  color: #dee6f4;
-}
-.walk-live-status {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
-}
-.walk-live-status > i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f3aa83;
-  box-shadow: 0 0 0 4px #ffffff0a;
-}
-.walk-live.is-paused .walk-live-status > i {
-  background: #9fbbe4;
-}
-.walk-timer {
-  font-size: clamp(46px, 11vh, 90px);
-  line-height: 1.12;
-  letter-spacing: -3px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 350;
-}
-.walk-wave {
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
-.walk-wave i {
-  width: 3px;
-  background: #708ebc;
-  border-radius: 2px;
-  animation: walk-wave 1s ease-in-out infinite alternate;
-}
-.walk-live.is-paused .walk-wave i {
-  animation-play-state: paused;
-  opacity: 0.4;
-}
-.walk-live p {
-  font-size: 10px;
-  color: #a0acc0;
-  text-align: center;
-}
-.walk-live-transcript {
-  width: 100%;
-  max-height: 34vh;
-  overflow-y: auto;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: #ffffff14;
-  border: 1px solid #ffffff26;
-  text-align: left;
-  -webkit-overflow-scrolling: touch;
-}
-.walk-live-transcript p {
-  font-size: 13px;
-  line-height: 1.55;
-  color: #eaf1ff;
-  text-align: left;
-}
-.walk-transcript-status {
-  font-size: 10px;
-  color: #a0acc0;
-}
-.walk-photo-strip {
-  height: 65px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-shrink: 0;
-}
-.walk-thumbnails {
-  display: flex;
-  flex: 1;
-  gap: 8px;
-  min-width: 0;
-  align-items: center;
-  height: 100%;
-}
-.walk-thumb {
-  height: 65px;
-  width: 75px;
-  border-radius: 7px;
-  overflow: hidden;
-  position: relative;
-  padding: 0;
-  background: #d8e0ec;
-}
-.walk-thumb img {
-  height: 100%;
-  width: 100%;
-  object-fit: cover;
-}
-.walk-thumb span {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  font-size: 8px;
-  color: white;
-  background: #1e3a8aaa;
-  padding: 2px 4px;
-}
-.walk-photo-count {
-  background: #dce2ed;
-  color: #4e5e76;
-  border-radius: 8px;
-  height: 60px;
-  min-width: 55px;
-  font-size: 18px;
-  font-weight: 600;
-}
-.walk-photo-count small {
-  display: block;
-  font-size: 9px;
-  font-weight: 400;
-}
-.walk-no-photos {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 11px;
-  color: #838d9c;
-}
 .walk-capture-controls {
   display: flex;
   align-items: stretch;
@@ -508,31 +371,15 @@
 .walk-pause span {
   font-size: 10px;
 }
-.walk-camera {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  border-radius: 12px;
-  min-height: 70px;
-  background: #acc5eb;
-  color: #314159;
-  font-size: 16px;
-  font-weight: 650;
-  border: 1px solid #97b1d9;
-}
-.walk-camera:active {
-  background: #90b0e0;
-}
 .walk-finish {
   min-height: 57px;
   padding: 10px 17px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #2563eb;
-  color: #e9eef6;
+  /* #1d4ed8 rather than #2563eb: it carries both label tiers past 4.5:1. */
+  background: #1d4ed8;
+  color: #fff;
   border-radius: 10px;
   text-align: left;
 }
@@ -542,7 +389,8 @@
 }
 .walk-finish small {
   display: block;
-  color: #a4b2c8;
+  /* 5.23:1 on #1d4ed8; the old #a4b2c8 measured 2.41:1. */
+  color: #dbe4f2;
   font-size: 10px;
   margin-top: 1px;
 }
@@ -637,12 +485,6 @@
   font-size: 12px;
   color: #798394;
 }
-.walk-progress-icon {
-  background: #cdd9ec;
-  border-radius: 20px;
-  padding: 24px;
-  color: #516686;
-}
 .walk-overlay {
   position: fixed;
   inset: 0;
@@ -721,37 +563,6 @@
   border-radius: 7px;
   font-size: 12px;
 }
-.walk-gallery {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin-bottom: 16px;
-}
-.walk-gallery figure {
-  margin: 0;
-  min-width: 0;
-}
-.walk-gallery img {
-  aspect-ratio: 1;
-  object-fit: cover;
-  width: 100%;
-  border-radius: 8px;
-}
-.walk-gallery figcaption {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 10px;
-  color: #6d798a;
-}
-@keyframes walk-wave {
-  from {
-    transform: scaleY(0.4);
-  }
-  to {
-    transform: scaleY(1);
-  }
-}
 @media (min-width: 700px) and (min-height: 700px) {
   .walk-frame {
     border-left: 1px solid #d8dde5;
@@ -770,15 +581,7 @@
   .walk-ready-intro h1,
   .walk-review-intro h1 {
     font-size: 40px;
-  }
-  .walk-photo-strip,
-  .walk-thumb {
-    height: 76px;
-  }
-  .walk-thumb {
-    width: 90px;
-  }
-}
+  }}
 @media (max-height: 740px) {
   .walk-header {
     padding: 7px 16px;
@@ -808,11 +611,6 @@
   .walk-review-intro p {
     font-size: 12px;
   }
-  .walk-live {
-    padding: 14px 10px;
-    gap: 8px;
-  }
-  .walk-camera,
   .walk-pause {
     min-height: 62px;
   }
@@ -824,8 +622,7 @@
   }
   .walk-review-stats {
     margin-bottom: 8px;
-  }
-}
+  }}
 @media (max-height: 620px) {
   .walk-content {
     gap: 9px;
@@ -852,30 +649,6 @@
   .walk-project input {
     padding: 10px 12px;
   }
-  .walk-live {
-    gap: 6px;
-    padding: 12px;
-  }
-  .walk-live p {
-    display: none;
-  }
-  .walk-wave {
-    height: 22px;
-  }
-  .walk-wave i {
-    max-height: 22px;
-  }
-  .walk-photo-strip,
-  .walk-thumb {
-    height: 49px;
-  }
-  .walk-photo-count {
-    height: 49px;
-    font-size: 16px;
-  }
-  .walk-timer {
-    font-size: 54px;
-  }
   .walk-dock {
     padding: 8px 20px;
     gap: 6px;
@@ -883,7 +656,6 @@
   .walk-finish {
     min-height: 51px;
   }
-  .walk-camera,
   .walk-pause {
     min-height: 56px;
   }
@@ -904,8 +676,7 @@
   .walk-save-hint {
     margin: 0;
     font-size: 9px;
-  }
-}
+  }}
 @media (max-height: 470px) and (orientation: landscape) {
   .walk-frame {
     width: 100%;
@@ -929,19 +700,7 @@
     border-top: 0;
     border-left: 1px solid #d5dae2;
   }
-  .walk-photo-strip {
-    display: none;
-  }
   .walk-ready-intro p {
-    display: none;
-  }
-  .walk-live {
-    padding: 8px;
-  }
-  .walk-timer {
-    font-size: 46px;
-  }
-  .walk-project-name {
     display: none;
   }
   .walk-review-intro h1 {
@@ -973,13 +732,7 @@
   }
   .walk-pending {
     font-size: 8px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .walk-wave i {
-    animation: none;
-  }
-}
+  }}
 .walk-lock-status {
   text-align: center;
   font-size: 9px;
@@ -990,11 +743,7 @@
 @media (max-height: 620px) {
   .walk-lock-status {
     font-size: 8px;
-  }
-  .walk-live {
-    min-height: 75px;
-  }
-}
+  }}
 
 .walk-busy {
   display: flex;
@@ -1043,9 +792,6 @@
 .live-dot.is-paused {
   background: #9fbbe4;
   animation: none;
-}
-@keyframes live-pulse {
-  50% { opacity: 0.25; }
 }
 .live-time {
   font-variant-numeric: tabular-nums;
@@ -1237,8 +983,7 @@
 @media (min-width: 820px) {
   .live-tabs { display: none; }
   .live-panes > .live-pane { display: block; }
-  .live-panes > .live-assist { display: flex; }
-}
+  .live-panes > .live-assist { display: flex; }}
 
 /* --- Glass ---------------------------------------------------------------
    Translucent surfaces over the page's colour field, with a hairline top
@@ -1305,35 +1050,8 @@
   border-top: 1px solid #ffffff9e;
 }
 
-/* Timestamped transcript rows. */
-.live-row {
-  display: flex;
-  gap: 11px;
-  align-items: baseline;
-  padding: 7px 0;
-}
-.live-row + .live-row {
-  border-top: 1px solid #1e293b0f;
-}
-.live-at {
-  flex-shrink: 0;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: #4c68a8;
-  background: #ffffffab;
-  border: 1px solid #ffffffb8;
-  border-radius: 6px;
-  padding: 2px 7px;
-  letter-spacing: 0.3px;
-}
-.live-row > span:last-child {
-  flex: 1;
-  min-width: 0;
-}
-
 @media (prefers-reduced-transparency: reduce) {
-  .live-pane, .live-tabs button, .live-ask input { backdrop-filter: none; background: #fff; }
-}
+  .live-pane, .live-tabs button, .live-ask input { backdrop-filter: none; background: #fff; }}
 
 .walk-gap {
   margin-top: 10px;
@@ -1384,14 +1102,12 @@
 .live .live-suggestion strong { font-size: 10px; }
 @media (min-width: 820px) {
   .live-panes > .live-transcript { display: flex; }
-  .live-panes > .live-assist { flex: 1; max-width: 360px; }
-}
+  .live-panes > .live-assist { flex: 1; max-width: 360px; }}
 @media (max-width: 819px) {
   .live-panes[data-tab="assist"] > .live-transcript { display: none; }
   .live-transcript .live-speakers { gap: 6px; padding: 8px; }
   .live-speakers .speaker-filters button { padding: 6px 7px; font-size: 11px; }
-  .live-suggestion span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-}
+  .live-suggestion span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }}
 
 .walk-speaker-assumptions {
   margin: 12px 0 0;
@@ -1409,3 +1125,15 @@
 .walk-content.is-ready { overflow-y: auto; justify-content: flex-start; }
 .walk-content.is-ready > * { flex-shrink: 0; }
 .walk-content.is-ready .walk-ready-intro { flex: 0 0 auto; padding: 12px 0; }
+/* The sheet lost its rhythm when .drive-settings' own margins were retired in
+   favour of the settings page's grid gap; this restores it where that grid
+   does not reach. */
+.sheet-stack {
+  display: grid;
+  gap: 14px;
+  justify-items: stretch;
+}
+.walk-sheet .drive-settings {
+  display: grid;
+  gap: 12px;
+}

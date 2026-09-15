@@ -8,7 +8,10 @@ import {
   stopDriveTokenRefresh,
 } from "./lib/session";
 import Login from "./pages/Login";
+import AppLayout from "./components/AppLayout";
 import Dashboard from "./pages/Dashboard";
+import CalendarPage from "./pages/CalendarPage";
+import SettingsPage from "./pages/SettingsPage";
 import RecordPage from "./pages/RecordPage";
 import ReportPage from "./pages/ReportPage";
 import InstallApp from "./components/InstallApp";
@@ -54,8 +57,8 @@ export default function App() {
     );
   return (
     <>
-      <InstallApp />
       <BrowserRouter>
+        <InstallApp />
         <JobProgress />
         <RecordingBar />
         <Routes key={user?.uid || "signed-out"}>
@@ -65,17 +68,19 @@ export default function App() {
               user ? <Navigate to="/dashboard" replace /> : <Login notice={revoked} />
             }
           />
+          {/* One gate for every screen that wears the app frame. */}
           <Route
-            path="/dashboard"
-            element={user ? <Dashboard /> : <Navigate to="/" replace />}
-          />
+            element={user ? <AppLayout /> : <Navigate to="/" replace />}
+          >
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/calendar" element={<CalendarPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/report/:id" element={<ReportPage />} />
+          </Route>
+          {/* Capture owns the whole viewport, so it stays outside the frame. */}
           <Route
             path="/record"
             element={user ? <RecordPage /> : <Navigate to="/" replace />}
-          />
-          <Route
-            path="/report/:id"
-            element={user ? <ReportPage /> : <Navigate to="/" replace />}
           />
           <Route
             path="*"

@@ -433,7 +433,7 @@ export function createAnalysisRouter(options: Options = {}) {
         );
 
       let systemInstruction =
-        "Du erstellst professionelle Meeting-Zusammenfassungen. Extrahiere einen passenden Titel, ein ausführliches Transkript (falls nicht bereits vorhanden), eine umfassende Zusammenfassung, konkrete Aufgaben (todos) und die wichtigsten Erkenntnisse (takeaways).";
+        "Du erstellst professionelle Meeting-Zusammenfassungen. Extrahiere einen passenden Titel, ein ausführliches Transkript (falls nicht bereits vorhanden), eine umfassende Zusammenfassung, konkrete Aufgaben (todos) und die wichtigsten Erkenntnisse (takeaways). Gib bei jeder Aufgabe die verantwortliche Person (owner) an, wenn sie im Meeting genannt wurde — benutze dafür den Sprechernamen aus dem Transkript — und ein Fälligkeitsdatum (due) im Format YYYY-MM-DD, wenn eines genannt wurde. Erfinde weder Personen noch Termine: lass die Felder weg, wenn sie nicht im Gespräch vorkommen.";
       if (preferences)
         systemInstruction += `\nBeachte diese Nutzer-Präferenzen für die Zusammenfassung: ${preferences}`;
 

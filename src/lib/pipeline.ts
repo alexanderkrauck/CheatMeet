@@ -6,6 +6,9 @@ import type { Draft } from "../types";
 import { prepareTranscript } from "./prepareTranscript";
 import { auth } from "./firebase";
 import { needsSpeakerReview } from "../../shared/transcription";
+import { syncReportToCalendar } from "./calendarSync";
+import { calendarSyncEnabled } from "./meetingDefaults";
+import { hasCalendarGrant } from "./session";
 
 export type JobStage =
   | "saving"
@@ -102,7 +105,19 @@ export function startProcessing({
       assertOwner();
 
       update("analyzing", "Transkript wird für die Zusammenfassung vorbereitet …", { warning });
-      await prepareTranscript(current, token);
+      if (analyze) {
+        await prepareTranscript(current, token);
+      } else {
+        // Still runs the free local finalisation of a live capture. An import
+        // has no transcript and must not trigger the paid batch job the user
+        // just declined — that is a note, not a failure: the audio still
+        // belongs in Drive.
+        await prepareTranscript(current, token, { batch: false }).catch((error) => {
+          warning = warning
+            ? `${warning} ${errorMessage(error)}`
+            : errorMessage(error);
+        });
+      }
       assertOwner();
       if (needsSpeakerReview(current.report.speech)) {
         current.report = { ...current.report, status: "pending", error: "" };
@@ -137,12 +152,40 @@ export function startProcessing({
         }
       }
 
+      // Before the Drive export, so the exported report carries the calendar
+      // link. Never fatal: a calendar failure is a warning, and the meeting is
+      // saved either way. Only an already-matched event is touched — creating
+      // one is an explicit action on the report page.
+      if (
+        analyze &&
+        calendarSyncEnabled() &&
+        hasCalendarGrant() &&
+        current.report.calendarEventId
+      ) {
+        update("exporting", "Kalendereintrag wird aktualisiert …", { warning });
+        try {
+          const patch = await syncReportToCalendar(current.report, { create: false });
+          assertOwner();
+          current = { ...current, report: { ...current.report, ...patch } };
+          if (patch.calendarError)
+            warning = warning
+              ? `${warning} ${patch.calendarError}`
+              : patch.calendarError;
+          await putLocal(owner, current.report);
+        } catch (error) {
+          warning = warning
+            ? `${warning} ${errorMessage(error)}`
+            : errorMessage(error);
+        }
+      }
+
       update("exporting", "Bericht wird nach Google Drive exportiert …", {
         warning,
       });
       assertOwner();
       const result = await syncReport(current.report, token);
       assertOwner();
+
       await deleteDraft(owner, result.report.id);
       update("done", "Fertig.", {
         warning: result.warning || warning || undefined,

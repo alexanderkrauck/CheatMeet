@@ -87,7 +87,7 @@ export default function SpeakerReview({
                   </select>
                 )}
                 <button
-                  className="btn ghost"
+                  className="btn btn-ghost"
                   onClick={() =>
                     onChange(
                       resolveSpeakerIssue(

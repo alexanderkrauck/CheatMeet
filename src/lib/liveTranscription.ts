@@ -45,6 +45,11 @@ export interface LiveTranscription {
   readonly failedSegments: number;
   /** Closes finished segments and opens the next one; driven by the recorder. */
   tick(): void;
+  /**
+   * The device behind one source has gone away. Optional: the legacy segment
+   * implementation has no per-source connections to drop.
+   */
+  dropSource?(source: "mic" | "system"): void;
   /** Stops capturing while the recording is paused; queued segments still run. */
   pause(): Promise<void>;
   resume(): Promise<void>;

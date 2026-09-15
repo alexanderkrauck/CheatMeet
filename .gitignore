@@ -8,7 +8,9 @@ coverage/
 !.env.example
 output/
 .transcription-jobs/
+.google-grants/
 .playwright-cli/
+.playwright-mcp/
 
 __pycache__/
 *.pyc

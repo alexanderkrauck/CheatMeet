@@ -1,4 +1,5 @@
 import { auth } from "./firebase";
+import { ownSpeakerName } from "./meetingDefaults";
 import {
   renderTranscript,
   type MeetingTranscript,
@@ -17,7 +18,7 @@ export function startAssemblyLive(
   singleSpeakerSources: Partial<Record<"mic" | "system", boolean>> = {},
 ): LiveTranscription {
   const owner = auth.currentUser?.uid;
-  const microphoneName = auth.currentUser?.displayName?.trim().slice(0, 80) || "Ich";
+  const microphoneName = ownSpeakerName(auth.currentUser?.displayName);
   const events: AssemblyEvents[] = [];
   let warning = "",
     startDelayed = false,
@@ -52,6 +53,8 @@ export function startAssemblyLive(
     publish();
   };
   let transitions = Promise.resolve();
+  /** Sources whose device is gone; never reconnected, even on resume. */
+  const dropped = new Set<"mic" | "system">();
   const transition = (operation: () => Promise<void>) => {
     transitions = transitions.then(operation, operation);
     return transitions;
@@ -296,7 +299,7 @@ export function startAssemblyLive(
     const epoch = ++generation;
     await Promise.all(
       (["mic", "system"] as const)
-        .filter(source => sources[source])
+        .filter(source => sources[source] && !dropped.has(source))
         .map(source =>
           startSource(source, sources[source]!, epoch, session++),
         ),
@@ -325,6 +328,10 @@ export function startAssemblyLive(
     },
     tick() {
       if (!owned()) void closeAll();
+    },
+    /** The device behind a source ended; stop paying for its connection. */
+    dropSource(source: "mic" | "system") {
+      dropped.add(source);
     },
     pause: () => {
       paused = true;

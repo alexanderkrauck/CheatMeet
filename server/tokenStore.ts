@@ -1,3 +1,6 @@
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import path from "node:path";
 import firebaseConfig from "../firebase-applet-config.json";
 
 /**
@@ -25,6 +28,43 @@ export function memoryStore(): RefreshTokenStore {
     },
     async remove(sub) {
       tokens.delete(sub);
+    },
+  };
+}
+
+/**
+ * Local development. The Firestore store authenticates through the Cloud Run
+ * metadata server, which does not exist on a laptop, so without this the whole
+ * server-held authorization flow fails at the OAuth callback.
+ *
+ * Files rather than memory, matching `fileSubmissionStore`: a refresh token
+ * that vanished on every tsx reload would mean re-consenting constantly. Mode
+ * 0600 in a gitignored directory — this is a real credential.
+ */
+export function fileGrantStore(
+  root = path.resolve(".google-grants"),
+): RefreshTokenStore {
+  // The Google `sub` is an account identifier; hash it rather than name files
+  // after it.
+  const file = (sub: string) =>
+    path.join(root, `${createHash("sha256").update(sub).digest("hex")}.json`);
+  return {
+    async get(sub) {
+      try {
+        return JSON.parse(await readFile(file(sub), "utf8")).refreshToken ?? null;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+    },
+    async set(sub, refreshToken) {
+      await mkdir(root, { recursive: true, mode: 0o700 });
+      await writeFile(file(sub), JSON.stringify({ refreshToken }), {
+        mode: 0o600,
+      });
+    },
+    async remove(sub) {
+      await rm(file(sub), { force: true });
     },
   };
 }

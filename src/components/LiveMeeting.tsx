@@ -288,7 +288,11 @@ export default function LiveMeeting({
               aria-label="Frage zum bisherigen Meeting"
               disabled={empty}
             />
-            <button type="submit" disabled={empty || asking || !question.trim()}>
+            <button
+              type="submit"
+              aria-label={asking ? "Frage wird gestellt …" : "Frage stellen"}
+              disabled={empty || asking || !question.trim()}
+            >
               {asking ? (
                 <Loader2 className="spin" size={17} />
               ) : (

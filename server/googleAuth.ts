@@ -3,6 +3,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createRemoteJWKSet, jwtVerify, decodeJwt } from "jose";
 import firebaseConfig from "../firebase-applet-config.json";
 import {
+  fileGrantStore,
   firestoreStore,
   type RefreshTokenStore,
 } from "./tokenStore";
@@ -11,12 +12,37 @@ const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 /** Only files this app created. Never widen: it bounds a server compromise. */
 export const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
-const SCOPES = `openid email profile ${DRIVE_SCOPE}`;
+/**
+ * Read and write events, on the user's calendars.
+ *
+ * Opt-in because it is a sensitive scope and its prerequisites live outside
+ * this repo: the Calendar API has to be enabled on the project and the scope
+ * has to be registered on the OAuth consent screen. Leaving it off keeps the
+ * authorization request identical to the Drive-only one, so a deployment that
+ * has not done that setup is unaffected.
+ */
+export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+/**
+ * The full-calendar scope is a superset — it can delete whole calendars, which
+ * this app never does, so it is never requested. But a grant that already has
+ * it can do everything the feature needs, and refusing that would be a false
+ * negative the user could not diagnose.
+ */
+const CALENDAR_SUPERSET = "https://www.googleapis.com/auth/calendar";
+export const grantsCalendar = (scope = "") => {
+  const granted = scope.split(/\s+/);
+  return granted.includes(CALENDAR_SCOPE) || granted.includes(CALENDAR_SUPERSET);
+};
+export const calendarEnabled = () =>
+  String(process.env.GOOGLE_CALENDAR || "").toLowerCase() === "true";
+const scopes = () =>
+  `openid email profile ${DRIVE_SCOPE}${calendarEnabled() ? ` ${CALENDAR_SCOPE}` : ""}`;
 const STATE_COOKIE = "cheatmeet_oauth_state";
 
 export interface GoogleTokens {
   accessToken: string;
   expiresInSeconds: number;
+  scope?: string;
   refreshToken?: string;
   idToken?: string;
 }
@@ -41,7 +67,7 @@ export function buildAuthUrl({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: SCOPES,
+    scope: scopes(),
     // Required to be issued a refresh token at all, and to be issued a new one
     // rather than silently reusing a grant we may not have stored.
     access_type: "offline",
@@ -80,6 +106,10 @@ async function tokenRequest(
   return {
     accessToken: String(data.access_token || ""),
     expiresInSeconds: Number(data.expires_in || 3600),
+    // What the grant actually covers. A refresh token's scope set is fixed at
+    // grant time, so a user who consented before calendar was enabled keeps a
+    // Drive-only token however the server is configured now.
+    scope: typeof data.scope === "string" ? data.scope : undefined,
     refreshToken:
       typeof data.refresh_token === "string" ? data.refresh_token : undefined,
     idToken: typeof data.id_token === "string" ? data.id_token : undefined,
@@ -225,7 +255,14 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
     options.identify || ((token: string) => googleAccountFor(token, projectId));
 
   let store = options.store;
-  const grantStore = () => (store ||= firestoreStore({ fetchImpl }));
+  // Same split as the transcription store: Firestore in production, private
+  // files locally, because the Firestore path needs the Cloud Run metadata
+  // server to authenticate.
+  const grantStore = () =>
+    (store ||=
+      process.env.NODE_ENV === "production"
+        ? firestoreStore({ fetchImpl })
+        : fileGrantStore());
   const configured = () => Boolean(clientId && clientSecret);
   const redirectUri = (req: express.Request) =>
     `${req.protocol}://${req.get("host")}/api/auth/google/callback`;
@@ -238,6 +275,7 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
   router.get("/auth/config", (_req, res) =>
     res.json({
       serverAuth: configured(),
+      calendar: calendarEnabled(),
       clientId: Boolean(clientId),
       clientSecret: Boolean(clientSecret),
     }),
@@ -350,6 +388,9 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
       res.json({
         accessToken: tokens.accessToken,
         expiresInSeconds: tokens.expiresInSeconds,
+        // The client needs the real scope set, not the server's intent: these
+        // differ for every user who granted before calendar was turned on.
+        calendar: grantsCalendar(tokens.scope),
       });
     } catch (error) {
       const code = (error as { code?: string }).code;

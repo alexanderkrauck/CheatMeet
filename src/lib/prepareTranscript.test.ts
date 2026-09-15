@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft } from "../types";
 
 const mocks = vi.hoisted(() => ({
@@ -367,4 +367,35 @@ it("shares a locally finalized live transcript with concurrent callers without a
   expect(second.report.speech?.phase).toBe("final");
   expect(second.report.transcriptionOrigin).toBe("live");
   expect(mocks.fetch).not.toHaveBeenCalled();
+});
+
+describe("declining the analysis", () => {
+  it("does not submit a paid transcription for an import", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const draft = {
+      report: {
+        id: "r1",
+        date: "2026-09-16T08:00:00.000Z",
+        title: "",
+        summary: "",
+        transcription: "",
+        todos: [],
+        takeaways: [],
+        transcriptionOrigin: "import" as const,
+        // importAudio always leaves a pending speech document behind.
+        speech: {
+          provider: "assemblyai",
+          phase: "pending",
+          languages: ["de"],
+          turns: [],
+          speakerNames: {},
+        },
+      },
+    } as never;
+    await expect(
+      prepareTranscript(draft, "token", { batch: false }),
+    ).rejects.toThrow("Sichern & Zusammenfassen");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

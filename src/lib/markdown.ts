@@ -1,3 +1,4 @@
+import { formatTodoLine } from "../../shared/analysis";
 import type { ReportData } from "../types";
 
 function escapeText(text: string): string {
@@ -65,7 +66,9 @@ export function reportToMarkdown(report: ReportData): string {
   if (report.todos && report.todos.length > 0) {
     lines.push("", "## Aufgaben (To-Dos)", "");
     report.todos.forEach(todo => {
-      lines.push(`- [ ] ${escapeText(todo)}`);
+      // A checked box in Markdown is the same state the report page shows.
+      // The marker is syntax, not content: escaping it produced "\- \[x\]".
+      lines.push(`- [${todo.done ? "x" : " "}] ${escapeText(formatTodoLine(todo))}`);
     });
   }
   
@@ -80,4 +83,21 @@ export function reportToMarkdown(report: ReportData): string {
     lines.push("", "## Transkript", "", verbatim(report.transcription));
 
   return `${lines.join("\n")}\n`;
+}
+
+/** The short form a person pastes into a chat or a mail, not the full export. */
+export function reportShareText(report: ReportData): string {
+  const lines = [report.title || "Meeting", ""];
+  if (report.summary) lines.push(report.summary, "");
+  if (report.todos?.length) {
+    lines.push("Aufgaben:");
+    for (const todo of report.todos)
+      lines.push(`- ${formatTodoLine(todo)}${todo.done ? " (erledigt)" : ""}`);
+    lines.push("");
+  }
+  if (report.driveFolderId)
+    lines.push(
+      `Dateien: https://drive.google.com/drive/folders/${encodeURIComponent(report.driveFolderId)}`,
+    );
+  return lines.join("\n").trim();
 }

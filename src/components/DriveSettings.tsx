@@ -8,7 +8,7 @@ import {
   savedDriveFolder,
   type DriveFolder,
 } from "../lib/driveSettings";
-import { findOrCreateRootFolder, listDriveReports } from "../lib/drive";
+import { DEFAULT_FOLDER_NAME, findOrCreateRootFolder, listDriveReports } from "../lib/drive";
 import { connectGoogle, ensureDriveToken, errorMessage } from "../lib/session";
 import { getLocal, putLocal } from "../lib/local";
 import { uid } from "../lib/reports";
@@ -40,7 +40,7 @@ export default function DriveSettings({
       const selected = useDefault
         ? {
             id: await findOrCreateRootFolder(token),
-            name: "CheatMeet Recordings",
+            name: DEFAULT_FOLDER_NAME,
           }
         : await chooseDriveFolder(token);
       if (uid() !== owner)
@@ -93,7 +93,7 @@ export default function DriveSettings({
       }
       onImported?.();
       setMessage(
-        `${count} Bericht(e) aus Drive wiederhergestellt. ${skipped ? `${skipped} neuere oder noch nicht synchronisierte lokale Bericht(e) beibehalten. ` : ""}${warnings.length ? `${warnings.length} Datei(en) konnten nicht gelesen werden. ${warnings[0]}` : count ? "Die Übersicht ist aktualisiert. Firebase kann über „Cloud erneut speichern“ nachgezogen werden." : "Keine weiteren Berichte gefunden."}`,
+        `${count} Bericht(e) aus Drive wiederhergestellt. ${skipped ? `${skipped} neuere oder noch nicht synchronisierte lokale Bericht(e) beibehalten. ` : ""}${warnings.length ? `${warnings.length} Datei(en) konnten nicht gelesen werden. ${warnings[0]}` : count ? "Die Übersicht ist aktualisiert." : "Keine weiteren Berichte gefunden."}`,
       );
     } catch (error) {
       setMessage(errorMessage(error));
@@ -108,22 +108,15 @@ export default function DriveSettings({
     >
       <div>
         <span className="eyebrow">GOOGLE DRIVE</span>
-        <h2 id="drive-settings-title">Ihr Speicherort</h2>
+        <h2 id="drive-settings-title">Dein Speicherort</h2>
       </div>
       <p className="muted">
-        Audio, Fotos und Berichte liegen in Ihrem Drive. Jede Meeting erhält
-        einen eigenen Ordner.
+        Audio, Transkript und Bericht liegen in deinem Drive. Jedes Meeting
+        bekommt einen eigenen Ordner.
       </p>
-      <p
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          overflowWrap: "anywhere",
-        }}
-      >
+      <p className="drive-folder">
         <FolderOpen size={20} aria-hidden="true" />{" "}
-        <strong>{folder?.name || "CheatMeet Recordings"}</strong>
+        <strong>{folder?.name || DEFAULT_FOLDER_NAME}</strong>
         {folder && (
           <a
             href={`https://drive.google.com/drive/folders/${encodeURIComponent(folder.id)}`}
@@ -135,7 +128,7 @@ export default function DriveSettings({
           </a>
         )}
       </p>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+      <div className="actions">
         <button
           type="button"
           className="btn btn-primary"
@@ -153,7 +146,7 @@ export default function DriveSettings({
           Standardordner verwenden
         </button>
       </div>
-      <p className="muted" style={{ fontSize: ".85rem" }}>
+      <p className="muted small">
         Eine Änderung gilt für neue Meetings. Bestehende Berichte bleiben in
         ihrem bisherigen Ordner.
       </p>

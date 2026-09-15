@@ -1,11 +1,14 @@
-import { DEFAULT_LANGUAGES, LANGUAGES } from "../../shared/transcription";
+import { LANGUAGES } from "../../shared/transcription";
+import { defaultLanguages } from "../lib/meetingDefaults";
 
 export default function MeetingLanguages({
-  value = DEFAULT_LANGUAGES,
+  value = defaultLanguages(),
   onChange,
+  legend = "Sprachen für dieses Meeting",
 }: {
   value?: string[];
   onChange: (value: string[]) => void;
+  legend?: string;
 }) {
   return (
     <details className="meeting-languages">
@@ -14,7 +17,7 @@ export default function MeetingLanguages({
         {value.map((code) => LANGUAGES[code] || code).join(" + ")}
       </summary>
       <fieldset>
-        <legend>Sprachen für dieses Meeting</legend>
+        <legend>{legend}</legend>
         {Object.entries(LANGUAGES).map(([code, name]) => (
           <label key={code}>
             <input

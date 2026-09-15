@@ -1,144 +1,22 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import {
-  ArrowUpRight,
-  Cloud,
-  LayoutGrid,
-  Loader2,
-  LogOut,
-  Plus,
-  Search,
-  UserRound,
-  WifiOff,
-} from "lucide-react";
-import { signOut } from "firebase/auth";
-import { auth } from "../lib/firebase";
-import type { ReportData } from "../types";
-export function Brand() {
+import { useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
+import { ArrowUpRight, Loader2 } from "lucide-react";
+import { isValidDate, type MeetingStatus } from "../lib/meetingMeta";
+
+/** Sized by CSS per surface, so callers only say where it goes. */
+export function Brand({ className = "" }: { className?: string }) {
   return (
-    <Link to="/dashboard" className="brand" aria-label="CheatMeet Übersicht">
+    <Link
+      to="/dashboard"
+      className={`brand ${className}`.trim()}
+      aria-label="CheatMeet Übersicht"
+    >
       <img className="brand-mark" src="/icons/logo.png" alt="" width={32} height={32} />
       Cheat<span className="brand-light">Meet</span>
       <span className="brand-dot">.</span>
     </Link>
   );
 }
-/**
- * The app frame. The header carries real work — global search over past
- * meetings, the one action that starts a meeting, and the account menu —
- * rather than holding a logo and nothing else.
- */
-export function Shell({
-  children,
-  actions,
-}: {
-  children: ReactNode;
-  actions?: ReactNode;
-}) {
-  const [online, setOnline] = useState(navigator.onLine);
-  const [query, setQuery] = useState("");
-  const navigate = useNavigate();
-  const account = useRef<HTMLDetailsElement>(null);
-
-  useEffect(() => {
-    const update = () => setOnline(navigator.onLine);
-    window.addEventListener("online", update);
-    window.addEventListener("offline", update);
-    return () => {
-      window.removeEventListener("online", update);
-      window.removeEventListener("offline", update);
-    };
-  }, []);
-
-  useEffect(() => {
-    const close = (event: Event) => {
-      const node = account.current;
-      if (!node?.open) return;
-      if (event.type === "keydown") {
-        if ((event as KeyboardEvent).key === "Escape") node.open = false;
-        return;
-      }
-      if (!node.contains(event.target as Node)) node.open = false;
-    };
-    document.addEventListener("pointerdown", close);
-    document.addEventListener("keydown", close);
-    return () => {
-      document.removeEventListener("pointerdown", close);
-      document.removeEventListener("keydown", close);
-    };
-  }, []);
-
-  return (
-    <>
-      <header className="app-header no-print">
-        <div className="header-inner">
-          <Brand />
-          <form
-            className="header-search"
-            role="search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              navigate(
-                query.trim()
-                  ? `/dashboard?q=${encodeURIComponent(query.trim())}`
-                  : "/dashboard",
-              );
-            }}
-          >
-            <label>
-              <Search size={16} />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Meetings und Transkripte durchsuchen …"
-                aria-label="Meetings und Transkripte durchsuchen"
-              />
-            </label>
-          </form>
-          <div className="header-actions">
-            {actions}
-            <Link to="/record?new=1" className="btn btn-primary header-new">
-              <Plus size={17} />
-              <span className="hide-mobile">Neues Meeting</span>
-            </Link>
-            <details className="header-account" ref={account}>
-              <summary aria-label="Konto und Einstellungen">
-                <UserRound size={18} />
-              </summary>
-              <div>
-                <Link to="/dashboard">
-                  <LayoutGrid size={16} /> Übersicht
-                </Link>
-                <button
-                  onClick={() => {
-                    if (account.current) account.current.open = false;
-                    void signOut(auth).catch(() => {});
-                  }}
-                >
-                  <LogOut size={16} /> Abmelden
-                </button>
-              </div>
-            </details>
-          </div>
-        </div>
-      </header>
-      {!online && (
-        <div className="offline no-print">
-          <WifiOff size={16} /> Offline · Lokale Entwürfe sind verfügbar.
-          Analyse und Cloud-Speichern benötigen Internet.
-        </div>
-      )}
-      <main className="page">{children}</main>
-      <footer className="app-footer no-print">
-        <span>CHEATMEET / DEIN DIGITALER MEETING-ASSISTENT</span>
-        <span>
-          <Cloud size={14} /> Dateien in deinem Google Drive
-        </span>
-      </footer>
-    </>
-  );
-}
-
 export function Notice({
   children,
   kind = "error",
@@ -163,38 +41,66 @@ export function Busy({ text }: { text: string }) {
     </div>
   );
 }
+/** `date` is only ever checked as "a string" on the way in, so every label
+ *  path has to survive a value that Date.parse cannot read. */
 export const dateLabel = (date: string) =>
-  new Date(date).toLocaleDateString("de-AT", {
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-  });
+  isValidDate(date)
+    ? new Date(date).toLocaleDateString("de-AT", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      })
+    : "Ohne Datum";
+
+/** The compact form a list row uses: "Di, 12. Sep · 14:30". */
+export const dateTimeLabel = (date: string) => {
+  if (!isValidDate(date)) return "Ohne Datum";
+  const at = new Date(date);
+  return `${at.toLocaleDateString("de-AT", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  })} · ${at.toLocaleTimeString("de-AT", { hour: "2-digit", minute: "2-digit" })}`;
+};
+
+const STATUS_TEXT = {
+  completed: "Bericht erstellt",
+  error: "Analyse fehlgeschlagen",
+  analyzing: "Analyse unterbrochen?",
+  pending: "Entwurf",
+};
+const STATUS_TONE = {
+  completed: "green",
+  error: "red",
+  analyzing: "amber",
+  pending: "amber",
+};
+
+/**
+ * `running` is what the pipeline knows and the stored status cannot: a report
+ * mid-analysis is persisted as "analyzing", so without it the badge reads
+ * "Analyse unterbrochen?" directly beneath a pill saying the analysis is live.
+ */
 export function Status({
-  report,
+  status,
+  syncedAt,
   local,
+  running,
 }: {
-  report: ReportData;
+  status: MeetingStatus;
+  syncedAt?: string;
   local?: boolean;
+  running?: boolean;
 }) {
-  const text =
-    report.status === "completed"
-      ? "Bericht erstellt"
-      : report.status === "error"
-        ? "Analyse wiederholen"
-        : report.status === "analyzing"
-          ? "Analyse unterbrochen?"
-          : "Entwurf";
   return (
     <span className="status-group">
-      <span
-        className={`badge ${report.status !== "completed" ? "amber" : "green"}`}
-      >
+      <span className={`badge ${running ? "blue" : STATUS_TONE[status]}`}>
         <span className="status-dot" />
-        {text}
+        {running ? "Analyse läuft" : STATUS_TEXT[status]}
       </span>
       {local && (
         <span className="badge amber">
-          {report.driveSyncedAt
+          {syncedAt
             ? "Drive gesichert · App-Index ausstehend"
             : "Cloud-Speichern ausstehend"}
         </span>
