@@ -2683,3 +2683,43 @@ body {
   padding-left: 10px;
   color: #b91c1c;
 }
+
+/* The provisions the consent step is built around, linked to their text. */
+.legal-basis > summary {
+  cursor: pointer;
+  color: #2563eb;
+  font-size: 0.85rem;
+}
+.legal-basis ul {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.legal-basis li {
+  display: grid;
+  gap: 2px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.legal-basis a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #2563eb;
+  font-weight: 600;
+}
+.legal-basis li span,
+.legal-basis > p {
+  color: #6b7280;
+}
+.legal-basis > p {
+  margin-top: 8px;
+  font-size: 0.8rem;
+}
+.consent-people {
+  margin: 0;
+  padding-left: 18px;
+  color: #1f2937;
+}

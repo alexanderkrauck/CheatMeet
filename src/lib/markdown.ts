@@ -162,6 +162,11 @@ function yamlValue(value: unknown): string {
     .replace(/[\r\n]+/g, " ")}"`;
 }
 
+const stances = (consent: ConsentRecord, stance: string) =>
+  (consent.participants || [])
+    .filter((person) => person.stance === stance)
+    .map((person) => person.name);
+
 const ELEMENT_HEADINGS: Record<string, string> = {
   purpose: "Zweck",
   means: "Technische Mittel",
@@ -190,8 +195,13 @@ export function consentToMarkdown(consent: ConsentRecord): string {
     ["language", facts.language],
     ["address", facts.address],
     ["method", consent.method],
-    ["all_informed", consent.allInformed],
-    ["participants", consent.participants ?? null],
+    ["record_version", consent.version],
+    // Each person separately: "nobody objected" is not consent under the
+    // GDPR, so it is never written as if it were.
+    ["agreed", stances(consent, "agreed")],
+    ["objected", stances(consent, "objected")],
+    ["informed_no_answer", stances(consent, "silent")],
+    ["all_informed_legacy", consent.allInformed ?? null],
     ["objections", consent.objections ?? null],
     ["sources", facts.sources],
     ["processors", facts.processors.map((p) => p.name)],
@@ -226,11 +236,22 @@ export function consentToMarkdown(consent: ConsentRecord): string {
     "",
     `- Zeitpunkt: ${escapeText(consent.obtainedAt)}`,
     `- Art der Aufklärung: ${escapeText(consent.method)}`,
-    `- Alle Anwesenden informiert: ${consent.allInformed ? "ja" : "nein"}`,
     `- Fassung der Vorlage: ${escapeText(consent.templateVersion)}`,
   );
-  if (consent.participants?.length)
-    lines.push(`- Anwesende: ${escapeText(consent.participants.join(", "))}`);
+  for (const person of consent.participants || [])
+    lines.push(
+      `- ${escapeText(person.name)}: ${
+        person.stance === "agreed"
+          ? "hat zugestimmt"
+          : person.stance === "objected"
+            ? "hat widersprochen"
+            : "informiert, keine ausdrückliche Zustimmung"
+      }`,
+    );
+  if (consent.version === 1)
+    lines.push(
+      `- Alte Fassung ohne Einzelnachweis, alle informiert: ${consent.allInformed ? "ja" : "nein"}`,
+    );
   if (consent.objections)
     lines.push(`- Widerspruch: ${escapeText(consent.objections)}`);
   return lines.join("\n");

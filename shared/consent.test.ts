@@ -8,6 +8,8 @@ import {
   buildConsentRecord,
   validateConsentParts,
   consentFacts,
+  everyoneAgreed,
+  objectors,
   retentionDays,
   validateConsentRecord,
   type ConsentAddress,
@@ -28,7 +30,7 @@ const facts = (over: Partial<Parameters<typeof consentFacts>[0]> = {}) =>
 const meta = {
   obtainedAt: "2026-09-15T12:00:00.000Z",
   method: "spoken" as const,
-  allInformed: true,
+  participants: [{ name: "Sergio", stance: "agreed" as const }],
 };
 
 describe("the notice a real meeting produces", () => {
@@ -188,7 +190,7 @@ describe("phrasing overrides", () => {
 
 describe("validateConsentRecord", () => {
   const record = () =>
-    buildConsentRecord(facts(), { ...meta, participants: ["Sergio"] });
+    buildConsentRecord(facts(), { ...meta });
 
   it("accepts a record it built itself", () => {
     const built = record();
@@ -310,5 +312,49 @@ describe("validateConsentParts", () => {
     const parts = validateConsentParts({ purpose: "x".repeat(601) });
     expect(parts.purpose).toBeUndefined();
     expect(validateConsentParts({ purpose: "x".repeat(600) }).purpose).toHaveLength(600);
+  });
+});
+
+describe("who actually agreed", () => {
+  const record = (participants: { name: string; stance: "agreed" | "objected" | "silent" }[]) =>
+    buildConsentRecord(facts(), { ...meta, participants });
+
+  it("does not count silence as agreement", () => {
+    // GDPR Art. 4(11) wants an affirmative act; Recital 32 rules out silence.
+    expect(everyoneAgreed(record([{ name: "Anna", stance: "silent" }]).participants)).toBe(false);
+    expect(everyoneAgreed(record([{ name: "Anna", stance: "agreed" }]).participants)).toBe(true);
+  });
+
+  it("is false as soon as one person objected", () => {
+    const built = record([
+      { name: "Anna", stance: "agreed" },
+      { name: "Sergio", stance: "objected" },
+    ]);
+    expect(everyoneAgreed(built.participants)).toBe(false);
+    expect(objectors(built.participants).map((p) => p.name)).toEqual(["Sergio"]);
+  });
+
+  it("is false when nobody was named at all", () => {
+    expect(everyoneAgreed([])).toBe(false);
+  });
+
+  it("keeps each person's answer in the record", () => {
+    const built = record([
+      { name: "  Anna  ", stance: "agreed" },
+      { name: "", stance: "agreed" },
+    ]);
+    // Trimmed, and an empty name is not a person.
+    expect(built.participants).toEqual([{ name: "Anna", stance: "agreed" }]);
+    expect(built.version).toBe(2);
+  });
+
+  it("still reads a record written before people were named separately", () => {
+    const legacy = { ...record([{ name: "Anna", stance: "agreed" as const }]), version: 1 as const, participants: [], allInformed: true };
+    expect(() => validateConsentRecord(legacy)).not.toThrow();
+  });
+
+  it("refuses a current record that names nobody", () => {
+    const empty = { ...record([{ name: "Anna", stance: "agreed" as const }]), participants: [] };
+    expect(() => validateConsentRecord(empty)).toThrow(/wer zugestimmt hat/);
   });
 });

@@ -1,6 +1,16 @@
-import { Loader2, Mic, MonitorSpeaker, RotateCcw, Sparkles } from "lucide-react";
+import {
+  Loader2,
+  Mic,
+  MonitorSpeaker,
+  Plus,
+  RotateCcw,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useState } from "react";
-import type { ConsentDecision, ConsentSource } from "../../shared/consent";
+import { LegalBasis } from "./LegalBasis";
+import { PEOPLE_LIST_ID } from "./PeopleDatalist";
+import { objectors, type ConsentDecision, type ConsentSource, type ConsentStance } from "../../shared/consent";
 
 /**
  * The screen between opening the devices and starting to record.
@@ -39,6 +49,27 @@ export function ArmedMeeting({
   hasDraft: boolean;
 }) {
   const [instruction, setInstruction] = useState("");
+  const [person, setPerson] = useState("");
+  const addPerson = () => {
+    const name = person.trim();
+    if (!name) return;
+    if (decision.participants.some((p) => p.name === name)) return setPerson("");
+    setPerson("");
+    onDecision({
+      participants: [...decision.participants, { name, stance: "silent" }],
+    });
+  };
+  const setStance = (name: string, stance: ConsentStance) =>
+    onDecision({
+      participants: decision.participants.map((p) =>
+        p.name === name ? { ...p, stance } : p,
+      ),
+    });
+  const removePerson = (name: string) =>
+    onDecision({
+      participants: decision.participants.filter((p) => p.name !== name),
+    });
+  const refused = objectors(decision.participants);
   const submit = () => {
     const asked = instruction.trim();
     if (!asked || drafting) return;
@@ -140,25 +171,67 @@ export function ArmedMeeting({
           ["calendar", "Einladung"],
         ])}
 
-        <label className="consent-confirm">
-          <input
-            type="checkbox"
-            checked={decision.allInformed}
-            onChange={(event) =>
-              onDecision({ allInformed: event.target.checked })
-            }
-          />
-          <span>
-            Alle Anwesenden wurden informiert und haben nicht widersprochen
-          </span>
-        </label>
+        <div className="consent-roster">
+          <small>Wer ist dabei — und hat zugestimmt?</small>
+          {decision.participants.map((entry) => (
+            <div className="consent-person" key={entry.name}>
+              <strong>{entry.name}</strong>
+              <div className="consent-choice">
+                {(
+                  [
+                    ["agreed", "Ja"],
+                    ["silent", "—"],
+                    ["objected", "Nein"],
+                  ] as [ConsentStance, string][]
+                ).map(([stance, caption]) => (
+                  <button
+                    key={stance}
+                    className={entry.stance === stance ? `is-${stance}` : ""}
+                    onClick={() => setStance(entry.name, stance)}
+                    aria-label={`${entry.name}: ${caption}`}
+                  >
+                    {caption}
+                  </button>
+                ))}
+              </div>
+              <button
+                className="consent-remove"
+                onClick={() => removePerson(entry.name)}
+                aria-label={`${entry.name} entfernen`}
+              >
+                <X size={15} />
+              </button>
+            </div>
+          ))}
+          <div className="consent-add">
+            <input
+              value={person}
+              list={PEOPLE_LIST_ID}
+              placeholder="Name hinzufügen"
+              maxLength={80}
+              onChange={(event) => setPerson(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && addPerson()}
+            />
+            <button onClick={addPerson} disabled={!person.trim()}>
+              <Plus size={16} />
+            </button>
+          </div>
+          {refused.length > 0 && (
+            <p className="consent-error">
+              {refused.map((p) => p.name).join(", ")} hat widersprochen. Ohne
+              Zustimmung aller Anwesenden wird nicht aufgezeichnet.
+            </p>
+          )}
+        </div>
 
         <p className="consent-note">
-          CheatMeet erstellt eine Dokumentationshilfe, keine rechtliche
-          Bewertung. Am Arbeitsplatz und in regulierten Bereichen kann mehr
-          nötig sein als die Zustimmung der Anwesenden — etwa eine
-          Betriebsvereinbarung.
+          Ein „—“ heißt: informiert, aber nicht ausdrücklich zugestimmt. Das
+          reicht der DSGVO nicht als Einwilligung, deshalb zählt es hier auch
+          nicht als eine. CheatMeet erstellt eine Dokumentationshilfe, keine
+          rechtliche Bewertung — am Arbeitsplatz und in regulierten Bereichen
+          kann mehr nötig sein, etwa eine Betriebsvereinbarung.
         </p>
+        <LegalBasis />
       </aside>
     </div>
   );

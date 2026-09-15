@@ -1,4 +1,5 @@
 import { ShieldCheck } from "lucide-react";
+import { LegalBasis } from "./LegalBasis";
 import { audioExpiresAt } from "../lib/retention";
 import type { ReportData } from "../types";
 
@@ -39,11 +40,28 @@ export function ConsentRecordPanel({ report }: { report: ReportData }) {
       {consent ? (
         <>
           <p>
-            {when(consent.obtainedAt)} · {METHODS[consent.method] || consent.method} ·{" "}
-            {consent.allInformed
-              ? "alle Anwesenden informiert"
-              : "nicht bestätigt, dass alle informiert waren"}
+            {when(consent.obtainedAt)} ·{" "}
+            {METHODS[consent.method] || consent.method}
           </p>
+          <ul className="consent-people">
+            {(consent.participants || []).map((person) => (
+              <li key={person.name}>
+                {person.name} —{" "}
+                {person.stance === "agreed"
+                  ? "hat zugestimmt"
+                  : person.stance === "objected"
+                    ? "hat widersprochen"
+                    : "informiert, keine ausdrückliche Zustimmung"}
+              </li>
+            ))}
+            {consent.version === 1 && (
+              <li>
+                {consent.allInformed
+                  ? "Alle Anwesenden informiert, ohne Widerspruch (alte Fassung, ohne Einzelnachweis)"
+                  : "Nicht bestätigt, dass alle informiert waren"}
+              </li>
+            )}
+          </ul>
           {consent.objections && (
             <p className="consent-objection">
               Widerspruch festgehalten: {consent.objections}
@@ -57,6 +75,7 @@ export function ConsentRecordPanel({ report }: { report: ReportData }) {
             Eigene Dokumentation: festgehalten ist, was vorgelesen werden
             sollte und wann es bestätigt wurde — nicht, dass es gesagt wurde.
           </p>
+          <LegalBasis />
         </>
       ) : (
         <p className="muted">

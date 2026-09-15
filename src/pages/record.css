@@ -1343,3 +1343,87 @@
   font-size: 0.82rem;
   line-height: 1.45;
 }
+
+/* Who is present, and what each of them actually answered. */
+.consent-roster {
+  display: grid;
+  gap: 6px;
+}
+.consent-roster > small {
+  color: #4b5563;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.consent-person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.consent-person > strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.consent-person .consent-choice button {
+  flex: 0 0 auto;
+  padding: 5px 11px;
+  font-size: 0.9rem;
+}
+.consent-person .consent-choice button.is-agreed {
+  background: #dcfce7;
+  color: #166534;
+  font-weight: 600;
+}
+.consent-person .consent-choice button.is-silent {
+  background: #eef1f6;
+  color: #4b5563;
+  font-weight: 600;
+}
+.consent-person .consent-choice button.is-objected {
+  background: #fee2e2;
+  color: #b91c1c;
+  font-weight: 600;
+}
+.consent-remove {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  padding: 2px;
+  color: #9aa6b8;
+  line-height: 0;
+}
+.consent-add {
+  display: flex;
+  gap: 6px;
+}
+.consent-add input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #c8d6ef;
+  border-radius: 9px;
+  padding: 8px 11px;
+  font: inherit;
+  font-size: 16px;
+}
+.consent-add button {
+  flex: 0 0 auto;
+  border: 1px solid #c8d6ef;
+  border-radius: 9px;
+  background: #eef4ff;
+  padding: 0 12px;
+  color: #1e40af;
+  line-height: 0;
+}
+.consent-add button:disabled {
+  background: #f1f3f6;
+  color: #9aa6b8;
+}
+/* The roster grows with the meeting; the column absorbs that rather than the
+   page, so the notice and the start button never move. */
+.consent-side {
+  overflow-y: auto;
+}

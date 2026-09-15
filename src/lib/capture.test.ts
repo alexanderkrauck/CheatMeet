@@ -70,7 +70,7 @@ class FakeRecorder {
 
 const DECISION: ConsentDecision = {
   method: "spoken",
-  allInformed: true,
+  participants: [{ name: "Sergio", stance: "agreed" as const }],
   language: "de",
   address: "du",
   folderName: "Ordner",
@@ -263,7 +263,7 @@ it("treats a replacement import as new audio and clears old recording provenance
     driveSyncedAt: "2020-01-02T00:00:00.000Z",
     consent: buildConsentRecord(
       consentFacts({ sources: ["mic"], folderName: "Ordner", retention: { audioDays: 30, textDays: null } }),
-      { obtainedAt: "2020-01-01T00:00:00.000Z", method: "spoken", allInformed: true },
+      { obtainedAt: "2020-01-01T00:00:00.000Z", method: "spoken", participants: [{ name: "Sergio", stance: "agreed" as const }] },
     ),
     audioDeletedAt: "2020-02-01T00:00:00.000Z", audioDeleteAttempts: 2,
     audioDeleteError: "alter Fehler", transcriptChars: 99,

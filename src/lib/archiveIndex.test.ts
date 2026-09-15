@@ -25,7 +25,7 @@ const report = (over: Partial<ReportData> = {}): ReportData => ({
       folderName: "Ordner",
       retention: { audioDays: 30, textDays: null },
     }),
-    { obtainedAt: "2026-09-15T11:59:00.000Z", method: "spoken", allInformed: true },
+    { obtainedAt: "2026-09-15T11:59:00.000Z", method: "spoken", participants: [{ name: "Sergio", stance: "agreed" as const }] },
   ),
   ...over,
 });

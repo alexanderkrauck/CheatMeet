@@ -66,7 +66,7 @@ const consent = buildConsentRecord(
     folderName: "Ordner",
     retention: { audioDays: 30, textDays: null },
   }),
-  { obtainedAt: "2026-09-15T12:00:00.000Z", method: "spoken", allInformed: true },
+  { obtainedAt: "2026-09-15T12:00:00.000Z", method: "spoken", participants: [{ name: "Sergio", stance: "agreed" as const }] },
 );
 
 const report = (over: Partial<ReportData> = {}): ReportData => ({

@@ -75,7 +75,7 @@ const consent = (
     {
       obtainedAt: "2026-09-15T12:00:00.000Z",
       method: "spoken",
-      allInformed: true,
+      participants: [{ name: "Sergio", stance: "agreed" as const }],
       ...over,
     },
   );
@@ -101,8 +101,10 @@ describe("consentToMarkdown", () => {
       "obtained_at:",
       "language:",
       "method:",
-      "all_informed:",
-      "participants:",
+      "record_version:",
+      "agreed:",
+      "objected:",
+      "informed_no_answer:",
       "objections:",
       "sources:",
       "recipients:",
@@ -116,9 +118,24 @@ describe("consentToMarkdown", () => {
     expect(md).toContain('sources: ["mic", "system"]');
   });
 
+  it("never writes silence as if it were agreement", () => {
+    const mixed = consentToMarkdown(
+      consent({
+        participants: [
+          { name: "Sergio", stance: "agreed" },
+          { name: "Anna", stance: "silent" },
+        ],
+      }),
+    );
+    expect(mixed).toContain('agreed: ["Sergio"]');
+    expect(mixed).toContain('informed_no_answer: ["Anna"]');
+    expect(mixed).toContain("objected: []");
+    expect(mixed).toContain(
+      "- Anna: informiert, keine ausdrückliche Zustimmung",
+    );
+  });
+
   it("distinguishes nothing recorded from nothing to record", () => {
-    // No participants and no objections were captured: both say so explicitly.
-    expect(consentToMarkdown(consent())).toContain("participants: null");
     expect(consentToMarkdown(consent())).toContain("objections: null");
     const withObjection = consentToMarkdown(
       consent({ objections: "Sergio wollte nicht aufgenommen werden" }),
@@ -131,10 +148,14 @@ describe("consentToMarkdown", () => {
 
   it("escapes YAML, not Markdown, in the frontmatter", () => {
     const md = consentToMarkdown(
-      consent({ participants: ['Anna "die Chefin": Müller – Wien'] }),
+      consent({
+        participants: [
+          { name: 'Anna "die Chefin": Müller – Wien', stance: "agreed" },
+        ],
+      }),
     );
     expect(md).toContain(
-      'participants: ["Anna \\"die Chefin\\": Müller – Wien"]',
+      'agreed: ["Anna \\"die Chefin\\": Müller – Wien"]',
     );
   });
 

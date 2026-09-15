@@ -384,8 +384,27 @@ export function acceptConsentParts(
 
 export type ConsentMethod = "spoken" | "chat" | "calendar" | "other";
 
+/**
+ * What one person actually did after being informed.
+ *
+ * Two legal standards meet here and they are not the same. For StGB § 201,
+ * being properly informed and continuing to take part can carry the day. The
+ * GDPR does not accept that where consent is the basis: Art. 4(11) wants an
+ * unambiguous affirmative act and Recital 32 rules out silence and inactivity.
+ * So "nobody objected" is recorded as exactly that — never as agreement.
+ */
+export type ConsentStance = "agreed" | "objected" | "silent";
+
+export interface ConsentParticipant {
+  name: string;
+  stance: ConsentStance;
+}
+
+export const CONSENT_RECORD_VERSION = 2;
+
 export interface ConsentRecord {
-  version: 1;
+  /** 1 carried a single "nobody objected" flag; 2 records each person. */
+  version: 1 | 2;
   templateVersion: string;
   facts: ConsentFacts;
   /** The phrasing overrides in force, kept so coverage stays provable. */
@@ -393,11 +412,22 @@ export interface ConsentRecord {
   /** Verbatim, because templates change and the record must not. */
   text: string;
   obtainedAt: string;
+  /** How they were informed. An invitation informs; it does not agree. */
   method: ConsentMethod;
-  allInformed: boolean;
-  participants?: string[];
+  /** Version 2: one entry per person present. */
+  participants: ConsentParticipant[];
+  /** Version 1 only, kept so old records still read. */
+  allInformed?: boolean;
   objections?: string;
 }
+
+/** Nobody present may have objected, and at least one person must have agreed. */
+export const everyoneAgreed = (participants: ConsentParticipant[]) =>
+  participants.length > 0 &&
+  participants.every((person) => person.stance === "agreed");
+
+export const objectors = (participants: ConsentParticipant[]) =>
+  participants.filter((person) => person.stance === "objected");
 
 const METHODS: readonly ConsentMethod[] = ["spoken", "chat", "calendar", "other"];
 
@@ -409,13 +439,13 @@ const METHODS: readonly ConsentMethod[] = ["spoken", "chat", "calendar", "other"
  */
 export interface ConsentDecision {
   method: ConsentMethod;
-  allInformed: boolean;
+  /** Everyone present, and what each of them actually said. */
+  participants: ConsentParticipant[];
   language: ConsentLanguage;
   address: ConsentAddress;
   folderName: string;
   retention: RetentionPolicy;
   recipients?: string[];
-  participants?: string[];
   objections?: string;
   /** Approved phrasing; coverage still comes from the facts, not from this. */
   parts?: ConsentParts | null;
@@ -440,8 +470,7 @@ export function buildConsentRecord(
   meta: {
     obtainedAt: string;
     method: ConsentMethod;
-    allInformed: boolean;
-    participants?: string[];
+    participants: ConsentParticipant[];
     objections?: string;
     parts?: ConsentParts | null;
   },
@@ -450,15 +479,19 @@ export function buildConsentRecord(
   const checked = acceptConsentParts(facts, meta.parts);
   const parts = Object.keys(checked).length ? checked : null;
   return {
-    version: 1,
+    version: CONSENT_RECORD_VERSION,
     templateVersion: CONSENT_TEMPLATE_VERSION,
     facts,
     parts,
     text: assembleConsentText(facts, parts),
     obtainedAt: meta.obtainedAt,
     method: METHODS.includes(meta.method) ? meta.method : "other",
-    allInformed: !!meta.allInformed,
-    ...(meta.participants?.length ? { participants: meta.participants } : {}),
+    participants: meta.participants
+      .map((person) => ({
+        name: String(person.name || "").trim().slice(0, MAX_RECIPIENT_CHARS),
+        stance: person.stance,
+      }))
+      .filter((person) => person.name),
     ...(meta.objections?.trim() ? { objections: meta.objections.trim() } : {}),
   };
 }
@@ -475,7 +508,8 @@ const fail = (reason: string): never => {
 export function validateConsentRecord(value: unknown): ConsentRecord {
   const record = value as ConsentRecord;
   if (!record || typeof record !== "object") fail("kein Datensatz vorhanden.");
-  if (record.version !== 1) fail("unbekannte Version.");
+  if (record.version !== 1 && record.version !== 2)
+    fail("unbekannte Version.");
   if (!record.templateVersion || typeof record.templateVersion !== "string")
     fail("die Fassung der Vorlage fehlt.");
   const facts = record.facts;
@@ -496,8 +530,21 @@ export function validateConsentRecord(value: unknown): ConsentRecord {
   if (!record.obtainedAt || Number.isNaN(Date.parse(record.obtainedAt)))
     fail("der Zeitpunkt fehlt oder ist unlesbar.");
   if (!METHODS.includes(record.method)) fail("die Art der Aufklärung fehlt.");
-  if (typeof record.allInformed !== "boolean")
-    fail("es ist nicht festgehalten, ob alle Anwesenden informiert waren.");
+  if (record.version === 1) {
+    // Written before each person was recorded separately.
+    if (typeof record.allInformed !== "boolean")
+      fail("es ist nicht festgehalten, ob alle Anwesenden informiert waren.");
+  } else if (
+    !Array.isArray(record.participants) ||
+    !record.participants.length ||
+    record.participants.some(
+      (person) =>
+        !person ||
+        typeof person.name !== "string" ||
+        !["agreed", "objected", "silent"].includes(person.stance),
+    )
+  )
+    fail("es ist nicht festgehalten, wer zugestimmt hat.");
   // Rebuilt through the clamp: a hand-edited archive file could otherwise
   // hand the sweep an arbitrary deadline and have it trash the audio at once.
   facts.retention = {

@@ -19,7 +19,7 @@ const DAY = 86_400_000;
 const consent = (retention: RetentionPolicy) =>
   buildConsentRecord(
     consentFacts({ sources: ["mic"], folderName: "Ordner", retention }),
-    { obtainedAt: DATE, method: "spoken", allInformed: true },
+    { obtainedAt: DATE, method: "spoken", participants: [{ name: "Sergio", stance: "agreed" as const }] },
   );
 
 /** A meeting that is safe to sweep, so each test can break exactly one thing. */
@@ -113,7 +113,7 @@ describe("the promise and the deletion come from one number", () => {
       consent: buildConsentRecord(facts, {
         obtainedAt: DATE,
         method: "spoken",
-        allInformed: true,
+        participants: [{ name: "Sergio", stance: "agreed" as const }],
       }),
     });
 

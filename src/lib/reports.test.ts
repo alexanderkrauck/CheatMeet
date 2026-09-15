@@ -104,7 +104,7 @@ describe("saveReport", () => {
           text: "Hinweis",
           obtainedAt: "2026-09-15T11:59:00.000Z",
           method: "spoken",
-          allInformed: true,
+          participants: [{ name: "Sergio", stance: "agreed" as const }],
         },
       }),
     );

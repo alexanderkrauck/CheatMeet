@@ -30,6 +30,7 @@ import { consentStepEnabled, savedRetention } from "../lib/meetingDefaults";
 import {
   assembleConsentText,
   decisionFacts,
+  everyoneAgreed,
   type ConsentDecision,
   type ConsentParts,
 } from "../../shared/consent";
@@ -119,7 +120,7 @@ export default function RecordPage() {
   // read at render time, so it cannot go stale while the notice is on screen.
   const [decision, setDecision] = useState<Omit<ConsentDecision, "folderName">>(() => ({
     method: "spoken",
-    allInformed: false,
+    participants: [],
     language: "de",
     address: "du",
     retention: savedRetention(),
@@ -670,7 +671,7 @@ export default function RecordPage() {
                 <>
                   <button
                     className="walk-primary"
-                    disabled={!!busy || !decision.allInformed}
+                    disabled={!!busy || !everyoneAgreed(decision.participants)}
                     onClick={consentGiven}
                   >
                     <Mic size={22} />
