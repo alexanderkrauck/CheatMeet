@@ -1,4 +1,9 @@
 import { formatTodoLine } from "../../shared/analysis";
+import {
+  CONSENT_REQUIRED,
+  consentSentences,
+  type ConsentRecord,
+} from "../../shared/consent";
 import type { ReportData } from "../types";
 
 function escapeText(text: string): string {
@@ -60,6 +65,8 @@ export function reportToMarkdown(report: ReportData): string {
       "",
       `[Vollständiges Transkript](${driveLink(report.driveTranscriptId)})`,
     );
+  if (report.driveConsentId)
+    lines.push("", `[Einwilligung](${driveLink(report.driveConsentId)})`);
   
   lines.push("", "## Zusammenfassung", "", escapeText(report.summary));
   
@@ -100,4 +107,95 @@ export function reportShareText(report: ReportData): string {
       `Dateien: https://drive.google.com/drive/folders/${encodeURIComponent(report.driveFolderId)}`,
     );
   return lines.join("\n").trim();
+}
+
+/**
+ * YAML scalars, not Markdown. escapeText() is the wrong grammar here — it
+ * escapes Markdown metacharacters, which a YAML reader would hand back
+ * verbatim including the backslashes.
+ */
+function yamlValue(value: unknown): string {
+  if (value === undefined || value === null) return "null";
+  if (typeof value === "boolean" || typeof value === "number")
+    return String(value);
+  if (Array.isArray(value))
+    return value.length ? `[${value.map(yamlValue).join(", ")}]` : "[]";
+  return `"${String(value)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/[\r\n]+/g, " ")}"`;
+}
+
+const ELEMENT_HEADINGS: Record<string, string> = {
+  purpose: "Zweck",
+  means: "Technische Mittel",
+  recipients: "Speicherort und Empfänger",
+  retention: "Aufbewahrung",
+  ask: "Frage nach der Zustimmung",
+};
+
+/**
+ * The record of what was actually said, as a file a person can read.
+ *
+ * Fidelity is the whole point, so the notice goes through the same fence the
+ * transcript uses rather than a blockquote: a quoted notice containing `#` or
+ * `-` would re-render as headings and lists and stop reproducing the words.
+ * Absent optionals are written as literal `null` so a reader can tell "nobody
+ * objected" from "this writer never recorded objections".
+ */
+export function consentToMarkdown(consent: ConsentRecord): string {
+  const { facts } = consent;
+  const sentences = consentSentences(facts);
+  const frontmatter: [string, unknown][] = [
+    ["schema", "cheatmeet.consent/1"],
+    ["generator", "cheatmeet"],
+    ["template_version", consent.templateVersion],
+    ["obtained_at", consent.obtainedAt],
+    ["language", facts.language],
+    ["address", facts.address],
+    ["method", consent.method],
+    ["all_informed", consent.allInformed],
+    ["participants", consent.participants ?? null],
+    ["objections", consent.objections ?? null],
+    ["sources", facts.sources],
+    ["processors", facts.processors.map((p) => p.name)],
+    ["storage_folder", facts.storage.folder],
+    ["recipients", facts.recipients],
+    ["retention_audio_days", facts.retention.audioDays],
+    ["retention_text_days", facts.retention.textDays],
+  ];
+  const lines = [
+    "---",
+    ...frontmatter.map(([key, value]) => `${key}: ${yamlValue(value)}`),
+    "---",
+    "",
+    "# Einwilligung zur Aufzeichnung",
+    "",
+    "## Wortlaut",
+    "",
+    verbatim(consent.text),
+  ];
+  // One heading per required element, so coverage is checkable without
+  // parsing the prose back apart.
+  for (const key of CONSENT_REQUIRED)
+    lines.push(
+      "",
+      `## ${ELEMENT_HEADINGS[key] || key}`,
+      "",
+      escapeText((consent.parts?.[key] || "").trim() || sentences[key]),
+    );
+  lines.push(
+    "",
+    "## Dokumentation",
+    "",
+    `- Zeitpunkt: ${escapeText(consent.obtainedAt)}`,
+    `- Art der Aufklärung: ${escapeText(consent.method)}`,
+    `- Alle Anwesenden informiert: ${consent.allInformed ? "ja" : "nein"}`,
+    `- Fassung der Vorlage: ${escapeText(consent.templateVersion)}`,
+  );
+  if (consent.participants?.length)
+    lines.push(`- Anwesende: ${escapeText(consent.participants.join(", "))}`);
+  if (consent.objections)
+    lines.push(`- Widerspruch: ${escapeText(consent.objections)}`);
+  return lines.join("\n");
 }

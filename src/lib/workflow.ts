@@ -9,7 +9,7 @@ import {
   downloadDriveFile,
 } from "./drive";
 import { audioExtension, validateAnalysis } from "../../shared/analysis";
-import { reportToMarkdown } from "./markdown";
+import { consentToMarkdown, reportToMarkdown } from "./markdown";
 import { withWebmDuration } from "./webmDuration";
 import type { Draft, ReportData } from "../types";
 import { prepareTranscript } from "./prepareTranscript";
@@ -41,6 +41,34 @@ function localRevision(report: ReportData) {
   report.updatedAt = new Date(
     Math.max(Date.now(), (Date.parse(report.updatedAt || "") || 0) + 1),
   ).toISOString();
+}
+
+/**
+ * Writes the permission next to the recording it covers, once.
+ *
+ * No existingId is passed: there is never a second version to replace, and
+ * omitting it turns an accidental second call into a visible duplicate rather
+ * than a silent overwrite of evidence.
+ */
+async function uploadConsent(
+  report: ReportData,
+  token: string,
+  run: <T>(operation: () => Promise<T>) => Promise<T>,
+): Promise<boolean> {
+  if (!report.consent || report.driveConsentId) return false;
+  const id = await run(() =>
+    uploadFileToFolder(
+      new Blob([consentToMarkdown(report.consent!)], {
+        type: "text/markdown;charset=utf-8",
+      }),
+      "einwilligung.md",
+      "text/markdown",
+      report.driveFolderId!,
+      token,
+    ),
+  );
+  report.driveConsentId = id;
+  return true;
 }
 
 /** The summary prompt is optional; a missing or unreadable setting is not an error. */
@@ -147,6 +175,10 @@ export async function backupDraft(
     );
     await checkpoint();
   }
+  // Before the audio, not after: the transcription and summary between here
+  // and syncReport take minutes, and Drive must never hold a recording with
+  // nothing authorising it.
+  if (await uploadConsent(report, token, run)) await checkpoint();
   if (!report.rawAudioUrl && draft.audio) {
     progress("Audio in Google Drive sichern …");
     // MediaRecorder omits the container duration, so the stored file would not
@@ -189,6 +221,7 @@ export async function syncReport(report: ReportData, token: string) {
     );
     await checkpoint();
   }
+  if (await uploadConsent(next, token, run)) await checkpoint();
   next.driveMarkdownId = await run(() =>
     uploadFileToFolder(
       new Blob([reportToMarkdown(next)], {
