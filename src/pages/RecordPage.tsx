@@ -384,11 +384,9 @@ export default function RecordPage() {
                     />
                   </label>
                   <div className="walk-ready-intro">
-                    <h1>
-                      Ein Meeting.
-                      <br />
-                      Alles festgehalten.
-                    </h1>
+                    {/* One line: at 22px this is a panel heading, not the
+                        two-line billboard the review step still wants. */}
+                    <h1>Ein Meeting. Alles festgehalten.</h1>
                     <p>
                       Sprich und diskutiere frei, CheatMeet protokolliert im
                       Hintergrund.
