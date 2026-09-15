@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { FileText, Mic, SearchX, X } from "lucide-react";
 import AttentionQueue from "../components/AttentionQueue";
 import MeetingRow from "../components/MeetingRow";
+import NextMeeting from "../components/NextMeeting";
 import { Busy, Notice, dateLabel } from "../components/UI";
 import {
   groupByMonth,
@@ -77,6 +78,8 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      <NextMeeting reports={reports} />
 
       <AttentionQueue workspace={workspace} />
 

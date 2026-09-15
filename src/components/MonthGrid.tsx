@@ -1,11 +1,17 @@
 import { dayIntensity, dayKeyLabel, plural, type DayCell } from "../lib/meetingMeta";
 
 const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+/** More than three dots in a cell this small is texture, not a count. */
+const MAX_DOTS = 3;
 
 /**
- * A retrospective month: which days were recorded on, and roughly how much.
- * Density is three discrete steps rather than a continuous heatmap — with a
- * handful of meetings a day a smooth scale reads as noise.
+ * One month in two tenses. The background fill is the past — how much was
+ * recorded that day, in three discrete steps, because with a handful of
+ * meetings a smooth scale reads as noise. The dots underneath are the future:
+ * what is scheduled and still unrecorded.
+ *
+ * Every day of the month is selectable, including empty ones: a day with
+ * nothing on it is an answer to "what have I got today", not a dead cell.
  */
 export default function MonthGrid({
   weeks,
@@ -40,14 +46,29 @@ export default function MonthGrid({
                 month: "long",
               })}${cell.isToday ? " · heute" : ""} · ${plural(
                 cell.count,
-                "Meeting",
-                "Meetings",
-              )}`}
-              disabled={!cell.count}
-              onClick={() => onSelect(cell.key === selected ? "" : cell.key)}
+                "Meeting aufgezeichnet",
+                "Meetings aufgezeichnet",
+              )}${
+                cell.events
+                  ? ` · ${plural(cell.events, "Termin geplant", "Termine geplant")}`
+                  : ""
+              }`}
+              disabled={!cell.inMonth}
+              onClick={() => onSelect(cell.key)}
             >
               <span className="day-number">{cell.day}</span>
-              {cell.count > 0 && <span className="day-count">{cell.count}</span>}
+              <span className="day-marks">
+                {cell.count > 0 && <span className="day-count">{cell.count}</span>}
+                {cell.events > 0 &&
+                  Array.from({ length: Math.min(cell.events, MAX_DOTS) }, (_, i) => (
+                    <span
+                      key={i}
+                      className={`day-dot${
+                        i === MAX_DOTS - 1 && cell.events > MAX_DOTS ? " is-more" : ""
+                      }`}
+                    />
+                  ))}
+              </span>
             </button>
           ))}
         </div>

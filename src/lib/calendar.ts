@@ -38,6 +38,14 @@ export interface CalendarEvent {
   /** Google gives a date with no time; rendering it as 00:00 is a lie. */
   allDay: boolean;
   attendees: string[];
+  /** A video link is the other tell that an entry is a meeting with people. */
+  conference: boolean;
+  /**
+   * Google's own classification. A birthday, a working-location marker or a
+   * ticket Gmail parsed out of a confirmation mail is never a meeting, and
+   * guessing that from the title is guesswork the API already answers.
+   */
+  kind: string;
   description: string;
   htmlLink?: string;
 }
@@ -48,6 +56,9 @@ interface RawEvent {
   description?: string;
   htmlLink?: string;
   status?: string;
+  eventType?: string;
+  hangoutLink?: string;
+  conferenceData?: { entryPoints?: unknown[] };
   start?: { dateTime?: string; date?: string };
   end?: { dateTime?: string; date?: string };
   attendees?: { displayName?: string; email?: string; self?: boolean; resource?: boolean }[];
@@ -80,6 +91,10 @@ export function toEvent(raw: RawEvent, calendarId: string): CalendarEvent | null
       .filter((a) => !a.resource && !a.self)
       .map(attendeeName)
       .filter(Boolean),
+    conference: Boolean(
+      raw.hangoutLink || raw.conferenceData?.entryPoints?.length,
+    ),
+    kind: raw.eventType || "default",
     description: raw.description || "",
     htmlLink: raw.htmlLink,
   };

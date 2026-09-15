@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMonthGrid,
+  dayHeading,
   dayKeyLabel,
   isMonthKey,
   plural,
@@ -15,6 +16,7 @@ import {
   meetingDurationMs,
   meetingStatus,
   matchesQuery,
+  monthEventRange,
   monthKeyOf,
   searchSnippet,
   shiftMonth,
@@ -219,14 +221,84 @@ describe("buildMonthGrid", () => {
 });
 
 describe("dayIntensity", () => {
-  const cell = (count: number, minutes: number) => ({
-    key: "2026-09-14", day: 14, inMonth: true, isToday: false, count, minutes,
+  const cell = (count: number, minutes: number, events = 0) => ({
+    key: "2026-09-14", day: 14, inMonth: true, isToday: false, count, minutes, events,
   });
   it("steps with recorded time and is flat when nothing was recorded", () => {
     expect(dayIntensity(cell(0, 0))).toBe(0);
     expect(dayIntensity(cell(1, 10))).toBe(1);
     expect(dayIntensity(cell(1, 45))).toBe(2);
     expect(dayIntensity(cell(3, 200))).toBe(3);
+  });
+  it("is driven by the past only — a day of scheduled events stays unfilled", () => {
+    // Fill means recorded. Letting the future tint the cell would make the two
+    // channels say the same thing in different alphabets.
+    expect(dayIntensity(cell(0, 0, 4))).toBe(0);
+  });
+});
+
+describe("buildMonthGrid scheduled counts", () => {
+  const now = new Date(2026, 8, 14, 10);
+  it("counts scheduled entries per day without touching the recorded count", () => {
+    const weeks = buildMonthGrid(
+      "2026-09",
+      [report({ date: new Date(2026, 8, 14, 9).toISOString() })],
+      now,
+      new Map([["2026-09-14", { length: 2 }], ["2026-09-21", { length: 5 }]]),
+    );
+    const day = (key: string) => weeks.flat().find((c) => c.key === key)!;
+    expect(day("2026-09-14").count).toBe(1);
+    expect(day("2026-09-14").events).toBe(2);
+    expect(day("2026-09-21").count).toBe(0);
+    expect(day("2026-09-21").events).toBe(5);
+  });
+
+  it("leaves a neighbouring month's cell blank in both channels", () => {
+    const weeks = buildMonthGrid("2026-10", [], now, new Map([["2026-09-28", { length: 3 }]]));
+    const outside = weeks.flat().find((c) => c.key === "2026-09-28")!;
+    expect(outside.inMonth).toBe(false);
+    expect(outside.events).toBe(0);
+  });
+
+  it("reports no scheduled entries at all without a calendar grant", () => {
+    const weeks = buildMonthGrid("2026-09", [], now);
+    expect(weeks.flat().every((c) => c.events === 0)).toBe(true);
+  });
+});
+
+describe("monthEventRange", () => {
+  const now = new Date(2026, 8, 14, 10);
+  it("asks for nothing in a month that is already over", () => {
+    expect(monthEventRange("2026-08", now)).toBe(null);
+  });
+
+  it("starts the current month at local midnight, not at the current time", () => {
+    // "Heute" at 14:00 must still list the 09:00 standup.
+    const range = monthEventRange("2026-09", now)!;
+    expect(range.fromMs).toBe(new Date(2026, 8, now.getDate()).getTime());
+    expect(range.toMs).toBe(new Date(2026, 9, 1).getTime());
+  });
+
+  it("covers a future month end to end", () => {
+    const range = monthEventRange("2026-11", now)!;
+    expect(range.fromMs).toBe(new Date(2026, 10, 1).getTime());
+    expect(range.toMs).toBe(new Date(2026, 11, 1).getTime());
+  });
+});
+
+describe("dayHeading", () => {
+  const now = new Date(2026, 8, 14, 10);
+  it("names the days a person would name", () => {
+    const today = `2026-09-${String(now.getDate()).padStart(2, "0")}`;
+    expect(dayHeading(today, now)).toBe("Heute");
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    expect(
+      dayHeading(
+        `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`,
+        now,
+      ),
+    ).toBe("Morgen");
+    expect(dayHeading("2026-12-24", now)).toContain("24");
   });
 });
 

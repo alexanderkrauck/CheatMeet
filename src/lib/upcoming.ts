@@ -4,11 +4,38 @@ import type { CalendarEvent } from "./calendar";
  * Turning a raw calendar feed into something a meeting recorder can use.
  *
  * A calendar holds a life, not a meeting list: karaoke, the gym, a concert,
- * a dentist. Offering "record this" on all of it equally is noise, and it
- * buries the one entry that matters. The discriminator is already in the
- * data — a meeting has other people in it.
+ * a dentist. Two separate questions follow from that, and conflating them was
+ * the bug: *can* this be recorded at all, and is it *worth* putting forward.
  */
 export const hasGuests = (event: CalendarEvent) => event.attendees.length > 0;
+
+/**
+ * Worth emphasising. Other people, or a video link to meet them in — this
+ * ranks entries, it no longer hides them.
+ */
+export const isMeeting = (event: CalendarEvent) =>
+  hasGuests(event) || event.conference;
+
+/**
+ * Kinds Google itself says are not appointments with anyone. Excluding these
+ * is not a guess about the title: a birthday has no start you attend, a
+ * working-location marker is a status, and "fromGmail" is a ticket or booking
+ * parsed out of a confirmation mail.
+ */
+const NOT_AN_APPOINTMENT = new Set([
+  "birthday",
+  "workingLocation",
+  "outOfOffice",
+  "fromGmail",
+]);
+
+/**
+ * Could be recorded, whatever it turns out to be. A whole-day entry counts: a
+ * workshop blocked out across a day is a sitting you can sit in. What does not
+ * count is an entry with nobody to meet — see above.
+ */
+export const isRecordable = (event: CalendarEvent) =>
+  !NOT_AN_APPOINTMENT.has(event.kind);
 
 /** Over, so not something you can still record. A running one is not over. */
 export const isOver = (event: CalendarEvent, nowMs: number) =>
@@ -19,28 +46,41 @@ export const isRunning = (event: CalendarEvent, nowMs: number) =>
   // running put it in the hero, ahead of the meeting actually starting next.
   !event.allDay && event.startMs <= nowMs && event.endMs > nowMs;
 
-export interface UpcomingSplit {
-  /** The one thing worth a prominent offer. Null when nothing qualifies. */
-  next: CalendarEvent | null;
-  /** Everything else with guests, in start order. */
-  meetings: CalendarEvent[];
-  /** Solo blocks. Kept, but folded away — sometimes one is a call you dial into. */
-  personal: CalendarEvent[];
-}
+/** How far ahead the home screen starts caring. */
+export const ALERT_LEAD_MS = 30 * 60 * 1000;
 
-export function splitUpcoming(
+/**
+ * The one entry the home screen should interrupt for, or null.
+ *
+ * Guests rank, they do not gate. Requiring attendees here is what made the
+ * previous version invisible to anyone whose meetings are plain calendar
+ * entries: their feed has no attendee lists, so nothing ever qualified and the
+ * feature looked broken rather than quiet. A timed entry starting in ten
+ * minutes is recordable whether or not Google knows who else is in it.
+ */
+export function imminentMeeting(
   events: CalendarEvent[],
   nowMs: number,
-): UpcomingSplit {
-  const live = events
-    .filter((event) => !isOver(event, nowMs))
-    .sort((a, b) => a.startMs - b.startMs);
-  const withGuests = live.filter(hasGuests);
-  return {
-    next: withGuests[0] ?? null,
-    meetings: withGuests.slice(1),
-    personal: live.filter((event) => !hasGuests(event)),
-  };
+  leadMs = ALERT_LEAD_MS,
+): CalendarEvent | null {
+  const candidates = events.filter(
+    (event) =>
+      isRecordable(event) &&
+      // A whole-day block has no start to arrive at, so counting down to it
+      // would be counting down to midnight.
+      !event.allDay &&
+      !isOver(event, nowMs) &&
+      event.startMs - nowMs <= leadMs,
+  );
+  if (!candidates.length) return null;
+  // Already started beats about to start; then the soonest; then, only as a
+  // tie-break, the one with people in it.
+  return candidates.sort((a, b) => {
+    const running = Number(isRunning(b, nowMs)) - Number(isRunning(a, nowMs));
+    if (running) return running;
+    if (a.startMs !== b.startMs) return a.startMs - b.startMs;
+    return Number(isMeeting(b)) - Number(isMeeting(a));
+  })[0];
 }
 
 const HOUR = 60 * 60 * 1000;
