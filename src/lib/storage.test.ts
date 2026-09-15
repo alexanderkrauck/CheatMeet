@@ -15,7 +15,7 @@ vi.mock("idb-keyval", () => ({
   getMany: async (ks: string[]) => ks.map((k) => db.get(k)),
 }));
 
-const { inspectStorage, releaseSyncedAudio } = await import("./local");
+const { inspectStorage, releaseSyncedAudio, acceptRemoteReport } = await import("./local");
 
 const put = (key: string, report: Record<string, unknown>, dirty = false) =>
   db.set(key, { report: { todos: [], takeaways: [], ...report }, dirty });
@@ -114,5 +114,44 @@ describe("putDraft does not duplicate journalled audio", () => {
     db.set("u1:audio-chunk:a:0", { sequence: 0, blob: { size: 10 }, durationMs: 1 });
     await putDraft("u1", draft("c", { size: 10 }) as never);
     expect((db.get("u1:draft:c") as { audio?: unknown }).audio).toBeDefined();
+  });
+});
+
+describe("acceptRemoteReport", () => {
+  const full = {
+    id: "r1",
+    date: "2026-09-15T12:00:00.000Z",
+    updatedAt: "2026-09-15T12:00:00.000Z",
+    title: "Weekly Sync",
+    summary: "Roadmap besprochen.",
+    transcription: "Alles Gesagte",
+    speech: { provider: "assemblyai", phase: "final", languages: ["de"], speakerNames: {}, turns: [] },
+    todos: [],
+    takeaways: [],
+  };
+
+  it("does not let the cloud echo erase the transcript it just wrote", async () => {
+    put("u1:report:r1", full);
+    // The projection comes back at the SAME revision, so neither staleness
+    // guard rejects it — only the merge stops it.
+    await acceptRemoteReport("u1", {
+      ...full,
+      transcription: "",
+      speech: undefined,
+      transcriptChars: 13,
+    } as never);
+
+    const stored = db.get("u1:report:r1") as { report: Record<string, unknown> };
+    expect(stored.report.transcription).toBe("Alles Gesagte");
+    expect(stored.report.speech).toBeTruthy();
+    // The rest of the remote document still wins.
+    expect(stored.report.transcriptChars).toBe(13);
+  });
+
+  it("accepts a full remote copy on a device that has none", async () => {
+    await acceptRemoteReport("u1", full as never);
+
+    const stored = db.get("u1:report:r1") as { report: Record<string, unknown> };
+    expect(stored.report.transcription).toBe("Alles Gesagte");
   });
 });

@@ -40,8 +40,14 @@ export default function Dashboard() {
     if (reports.length) void rememberPeople(uid(), knownSpeakers(reports)).catch(() => {});
   }, [reports]);
 
-  // Reports carry their full transcript, so the match is computed once per
-  // query change rather than on every keystroke-driven re-render.
+  // Matching runs once per query change rather than on every keystroke-driven
+  // re-render. A report synced from another device carries no transcript here,
+  // so its words are not searchable until it is restored from Drive.
+  // How much of the archive this device cannot search.
+  const elsewhere = useMemo(
+    () => reports.filter((report) => !report.transcriptLocal).length,
+    [reports],
+  );
   const found = useMemo(
     () => reports.filter((report) => matchesQuery(report, query)),
     [reports, query],
@@ -88,12 +94,21 @@ export default function Dashboard() {
       )}
 
       {query && (
-        <p className="search-summary">
-          <strong>{found.length}</strong> Treffer für „{params.get("q")}“
-          <button className="text-button" onClick={() => setParams({})}>
-            <X size={14} /> Suche aufheben
-          </button>
-        </p>
+        <>
+          <p className="search-summary">
+            <strong>{found.length}</strong> Treffer für „{params.get("q")}“
+            <button className="text-button" onClick={() => setParams({})}>
+              <X size={14} /> Suche aufheben
+            </button>
+          </p>
+          {elsewhere > 0 && (
+            <p className="muted small">
+              {elsewhere} Meeting(s) liegen hier nur als Kurzfassung vor; ihre
+              Transkripte werden nicht durchsucht. In den Einstellungen lassen
+              sie sich aus Drive wiederherstellen.
+            </p>
+          )}
+        </>
       )}
 
       {/* Only worth offering once there is something to narrow. */}
@@ -155,8 +170,8 @@ export default function Dashboard() {
             <>
               <h2>Keine passenden Meetings</h2>
               <p className="muted">
-                Durchsucht werden Titel, Zusammenfassung, Transkript und
-                Aufgaben.
+                Durchsucht werden Titel, Zusammenfassung, Aufgaben
+                {elsewhere < reports.length ? " und Transkript" : ""}.
               </p>
             </>
           ) : (

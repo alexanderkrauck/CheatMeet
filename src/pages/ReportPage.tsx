@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { transcriptIsElsewhere } from "../lib/reportProjection";
 import { ConsentRecordPanel } from "../components/ConsentRecordPanel";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import {
@@ -609,7 +610,9 @@ export default function ReportPage({
             <textarea className="field" value={view.transcription} onChange={e => setEdited({ ...view, transcription: e.target.value })} />
           ) : (
             <TranscriptTimeline transcript={view.transcription} startedAt={view.date}
-              empty="Für dieses Meeting wurde kein Transkript gespeichert." />
+              empty={transcriptIsElsewhere(view)
+                ? "Das Transkript liegt in Google Drive, aber nicht auf diesem Gerät. Es lässt sich in den Einstellungen unter „Aus Drive wiederherstellen“ zurückholen."
+                : "Für dieses Meeting wurde kein Transkript gespeichert."} />
           )}
       </section>
     </>

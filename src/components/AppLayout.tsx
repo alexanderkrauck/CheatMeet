@@ -167,8 +167,8 @@ export default function AppLayout() {
                   if (onOverview)
                     navigate(target(event.target.value), { replace: true });
                 }}
-                placeholder="Meetings und Transkripte durchsuchen …"
-                aria-label="Meetings und Transkripte durchsuchen (Taste /)"
+                placeholder="Meetings durchsuchen …"
+                aria-label="Meetings durchsuchen (Taste /)"
                 aria-keyshortcuts="/"
               />
             </label>

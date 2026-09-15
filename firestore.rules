@@ -6,14 +6,21 @@ service cloud.firestore {
     }
     match /users/{userId}/reports/{reportId} {
       allow read, delete: if owns(userId);
+      // The cloud copy is an index: the transcript lives in the user's Drive
+      // and on their devices. The projection still writes an empty
+      // `transcription`, so the bound is on content, not on the key.
+      // Deliberately not hasOnly(): the index grows with every feature, and a
+      // service-worker-cached client still writing yesterday's key set must
+      // not be locked out of saving at all.
       allow create, update: if owns(userId)
         && request.resource.data.id == reportId
         && request.resource.data.title is string
         && request.resource.data.date is string
         && request.resource.data.get('summary', '') is string
-        && request.resource.data.get('transcription', '') is string
         && request.resource.data.get('todos', []) is list
-        && request.resource.data.get('takeaways', []) is list;
+        && request.resource.data.get('takeaways', []) is list
+        && request.resource.data.get('transcription', '') == ''
+        && !request.resource.data.keys().hasAny(['speech']);
     }
     match /users/{userId}/settings/preferences {
       allow read, delete: if owns(userId);

@@ -10,6 +10,7 @@ import {
   getMany,
 } from "idb-keyval";
 import { asTodos } from "../../shared/analysis";
+import { mergeRemoteReport } from "./reportProjection";
 import type { Draft, ReportData } from "../types";
 const store = createStore("cheatmeet", "workspace");
 const key = (uid: string, id: string) => `${uid}:report:${id}`;
@@ -59,7 +60,13 @@ export async function acceptRemoteReport(uid: string, report: ReportData) {
         : 0;
       if (existing && remoteTime < localTime) return existing;
       changed = true;
-      return { report, dirty: false };
+      // The cloud copy is an index: it carries no transcript, and at an equal
+      // revision it would otherwise replace the full copy on the very device
+      // that recorded it.
+      return {
+        report: mergeRemoteReport(existing?.report, report),
+        dirty: false,
+      };
     },
     store,
   );

@@ -1,6 +1,6 @@
 {
   "firestore": {
     "rules": "firestore.rules",
-    "database": "ai-studio-drivesyncnotes-8da1f6ea-9bd9-4a7e-b5b0-39b87715e2d0"
+    "database": "ai-studio-cheatmeet-c8257751-dd98-4e6c-940c-cef077d124e4"
   }
 }

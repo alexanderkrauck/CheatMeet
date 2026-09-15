@@ -35,10 +35,34 @@ Single Express process serves both the API and the SPA (`server.ts`): in dev it 
 **Three independent storage backends, each able to fail alone.** This is the central design constraint:
 
 - **Google Drive** (`src/lib/drive.ts`, `driveSettings.ts`) — durable store for the raw audio, `zusammenfassung.md`, `transkript.md`, and `bericht_daten.json`, all inside a per-report subfolder of a user-chosen root folder.
-- **Firestore** (`src/lib/firebase.ts`, `reports.ts`) — cross-device *index* only, under `users/{uid}/reports/{id}`. `firestore.rules` locks every path to its owner and denies everything else.
+- **Firestore** (`src/lib/firebase.ts`, `reports.ts`) — cross-device *index* only, under `users/{uid}/reports/{id}`. `saveReport` writes `projectReport(next)`, which strips `transcription` and `speech`; the rules reject a non-empty transcript or any `speech` key. `acceptRemoteReport` must therefore merge rather than replace (`mergeRemoteReport`), or the cloud echo of a projection erases the transcript on the device that recorded it. The honest consequence — a meeting recorded on one device is not searchable by transcript content on another until it is restored from Drive — is surfaced on the dashboard rather than hidden. `firestore.rules` locks every path to its owner and denies everything else.
 - **IndexedDB** (`src/lib/local.ts`, store `cheatmeet/workspace`) — same-device drafts and unsynced report copies, keyed `{uid}:report:{id}`, with a `BroadcastChannel` so multiple tabs stay in sync.
 
 A local write succeeding must never be presented as a cloud save succeeding. `saveReport` writes locally first, then races the Firestore write against a 10s timeout and returns a *warning string* rather than throwing.
+
+**Recording is gated on consent, and the notice is data.** `armCapture` opens
+the microphone and the screen share and stops there: nothing is journaled to
+IndexedDB and no AssemblyAI socket is opened until `beginRecording`. German
+StGB § 201 is completed by the act of recording onto a storage medium, so
+"record first, delete if they refuse" is the offence, not a workaround; the
+armed window exists only so the consent press starts capture with no browser
+dialogs left. `shared/consent.ts` derives the four legally required elements
+(purpose, means, recipients, retention) from the meeting's real configuration
+and assembles them in a fixed order. `POST /api/consent-notice` may only
+*rephrase* an element; anything it omits or mangles falls back to the
+deterministic German sentence, so coverage is structural. `einwilligung.md` is
+written write-once **before** the audio, and each meeting's retention deadline
+is read out of its own consent record (`audioExpiresAt`), so the days promised
+are the days `retentionSweep.ts` enforces and a meeting recorded before consent
+existed is never swept.
+
+**The Drive folder is the archive, and it is meant to be read without this
+app.** `src/lib/archive.ts` is the versioned interchange boundary for
+`bericht_daten.json` — `toArchive` strips session internals, `fromArchive`
+constructs the result explicitly so an externally edited file cannot inject
+keys into the local store, and v0 files stay readable forever. The root also
+carries a derived `index.json` and a `SCHEMA.md`; the per-meeting JSON is the
+source of truth and the index says so.
 
 **Drive authorization is server-held** (`server/googleAuth.ts`, `server/tokenStore.ts`). Firebase's Google sign-in hands the browser an access token that expires in about an hour and **never a refresh token**, so the browser alone cannot renew and the user gets re-prompted. Instead the server runs the authorization-code flow (`access_type=offline`, PKCE), keeps the refresh token per user, and mints short-lived access tokens at `POST /api/drive-token`. The browser still uploads straight to Drive — media never passes through the server. The grant is keyed by the Google `sub`, read from the Firebase ID token's `firebase.identities["google.com"]` claim, because deriving the Firebase uid server-side would need the Admin SDK. `server/tokenStore.ts` reaches Firestore over REST with a token from the Cloud Run metadata server, so there is still no Admin SDK and no extra dependency. **If `GOOGLE_OAUTH_CLIENT_SECRET` is unset, `/api/auth/config` reports `serverAuth: false` and the client keeps the old popup flow** — an incomplete deployment degrades instead of locking everyone out. `app.set("trust proxy", true)` in `server.ts` is load-bearing: without it `req.protocol` is `http` behind Cloud Run, Google rejects the redirect URI, and the state cookie loses `Secure`. Signing out does **not** revoke the grant — Google's revoke endpoint kills it for that OAuth client on every device, so `POST /api/auth/revoke` exists but is reserved for an explicit "revoke access" action.
 

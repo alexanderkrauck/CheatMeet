@@ -490,3 +490,48 @@ describe("knownSpeakers", () => {
     );
   });
 });
+
+describe("summarise for a report whose transcript is elsewhere", () => {
+  const base = {
+    id: "r1",
+    date: "2026-09-15T12:00:00.000Z",
+    title: "Weekly Sync",
+    summary: "Roadmap besprochen.",
+    transcription: "",
+    todos: [],
+    takeaways: [],
+  };
+
+  it("reads the participants resolved before the projection", () => {
+    const result = summarise({
+      ...base,
+      participants: ["Alex", "Sergio"],
+      speakerReviewPending: true,
+      transcriptChars: 42,
+    } as never);
+
+    expect(result.speakers).toEqual(["Alex", "Sergio"]);
+    expect(result.needsReview).toBe(true);
+    expect(result.transcriptLocal).toBe(false);
+  });
+
+  it("still prefers the real transcript when this device has it", () => {
+    const result = summarise({
+      ...base,
+      transcription: "Alles Gesagte",
+      participants: ["Veraltet"],
+      speech: {
+        provider: "assemblyai",
+        phase: "final",
+        languages: ["de"],
+        speakerNames: { "mic:0:A": "Alex" },
+        turns: [
+          { id: "mic:0:0", speaker: "mic:0:A", text: "Hallo", startMs: 0, endMs: 1000, final: true },
+        ],
+      },
+    } as never);
+
+    expect(result.speakers).toEqual(["Alex"]);
+    expect(result.transcriptLocal).toBe(true);
+  });
+});

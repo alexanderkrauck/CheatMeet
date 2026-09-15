@@ -1,4 +1,5 @@
 import { auth } from "./firebase";
+import { transcriptIsElsewhere } from "./reportProjection";
 import { putDraft, putLocal } from "./local";
 import { audioExtension } from "../../shared/analysis";
 import {
@@ -24,6 +25,10 @@ export function prepareTranscript(
 ): Promise<void> {
   if (
     !draft.report.speech &&
+    // A projected report has all three markers but its transcript is simply
+    // on another device: re-submitting would pay for the same audio twice and
+    // burn one of the two transcriptions this meeting is allowed.
+    !transcriptIsElsewhere(draft.report) &&
     (draft.report.transcriptionOrigin === "live" ||
       draft.report.captureState ||
       draft.report.captureSources?.length)

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildConsentRecord, consentFacts } from "../../shared/consent";
 import {
   mergeRemoteReport,
+  mergeRestoredReport,
   projectReport,
   transcriptIsElsewhere,
 } from "./reportProjection";
@@ -193,5 +194,48 @@ describe("transcriptIsElsewhere", () => {
 
   it("is true for a projection", () => {
     expect(transcriptIsElsewhere(projectReport(full()))).toBe(true);
+  });
+});
+
+describe("mergeRestoredReport", () => {
+  it("brings the transcript back even though the local copy looks newer", () => {
+    // Syncing writes the Drive file and then bumps the local revision twice,
+    // so a timestamp comparison would skip every restore forever.
+    const projected = {
+      ...projectReport(full()),
+      updatedAt: "2026-12-31T23:59:59.000Z",
+    };
+
+    const merged = mergeRestoredReport(
+      { report: projected, dirty: false },
+      full(),
+    );
+
+    expect(merged?.transcription).toBe("Alles Gesagte");
+    expect(merged?.speech?.turns).toHaveLength(1);
+    // The local metadata is still the newer one.
+    expect(merged?.updatedAt).toBe("2026-12-31T23:59:59.000Z");
+    expect(merged?.transcriptChars).toBeUndefined();
+  });
+
+  it("never overwrites work this device has not synced yet", () => {
+    expect(
+      mergeRestoredReport(
+        { report: projectReport(full()), dirty: true },
+        full(),
+      ),
+    ).toBeNull();
+  });
+
+  it("leaves a device that already has the meeting alone", () => {
+    expect(
+      mergeRestoredReport({ report: full(), dirty: false }, full()),
+    ).toBeNull();
+  });
+
+  it("takes a meeting this device has never seen", () => {
+    expect(mergeRestoredReport(undefined, full()).transcription).toBe(
+      "Alles Gesagte",
+    );
   });
 });

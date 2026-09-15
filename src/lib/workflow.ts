@@ -10,6 +10,7 @@ import {
 } from "./drive";
 import { audioExtension, validateAnalysis } from "../../shared/analysis";
 import { toArchive } from "./archive";
+import { transcriptIsElsewhere } from "./reportProjection";
 import {
   consentToMarkdown,
   reportToMarkdown,
@@ -208,6 +209,12 @@ export async function backupDraft(
 }
 export async function syncReport(report: ReportData, token: string) {
   const { owner, run, assertOwner } = ownedOperation();
+  // Saving a stub would overwrite the user's own Drive copy with it, which is
+  // worse than anything the cloud index can do: the archive is the last copy.
+  if (transcriptIsElsewhere(report))
+    throw new Error(
+      "Dieses Meeting liegt auf diesem Gerät nur als Kurzfassung vor. Bitte es zuerst aus Google Drive wiederherstellen.",
+    );
   const next = { ...report };
   // Keep completed upload IDs locally and on the caller's report if a later step fails.
   const checkpoint = async () => {

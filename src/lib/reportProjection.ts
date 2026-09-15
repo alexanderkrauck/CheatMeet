@@ -61,3 +61,33 @@ export function transcriptIsElsewhere(report: ReportData): boolean {
     (report.transcriptChars ?? 0) > 0
   );
 }
+
+/**
+ * What to keep when a meeting is restored from Drive.
+ *
+ * The local copy is almost always "newer" — syncing writes the archive file
+ * and then bumps the local revision twice — so comparing timestamps would skip
+ * every restore forever. What actually matters is content: the Drive copy is
+ * the only place a projected meeting's transcript still exists on this device.
+ */
+export function mergeRestoredReport(
+  local: { report: ReportData; dirty: boolean } | undefined,
+  fromDrive: ReportData,
+): ReportData | null {
+  if (!local) return fromDrive;
+  // Unsynced local edits are the user's work and outrank a stored copy.
+  if (local.dirty) return null;
+  const missingContent =
+    !local.report.speech && !local.report.transcription?.trim();
+  const driveHasContent =
+    !!fromDrive.speech || !!fromDrive.transcription?.trim();
+  if (!missingContent || !driveHasContent) return null;
+  return {
+    ...local.report,
+    transcription: fromDrive.transcription,
+    speech: fromDrive.speech,
+    todos: fromDrive.todos,
+    takeaways: fromDrive.takeaways,
+    transcriptChars: undefined,
+  };
+}

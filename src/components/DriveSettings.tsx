@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { mergeRestoredReport } from "../lib/reportProjection";
 import { FolderOpen, ExternalLink } from "lucide-react";
 import {
   chooseDriveFolder,
@@ -79,16 +80,12 @@ export default function DriveSettings({
       let skipped = 0;
       for (const report of reports) {
         const local = await getLocal(user, report.id);
-        if (
-          local &&
-          (local.dirty ||
-            (local.report.updatedAt || local.report.date) >=
-              (report.updatedAt || report.date))
-        ) {
+        const merged = mergeRestoredReport(local, report);
+        if (!merged) {
           skipped++;
           continue;
         }
-        await putLocal(user, report);
+        await putLocal(user, merged);
         count++;
       }
       onImported?.();

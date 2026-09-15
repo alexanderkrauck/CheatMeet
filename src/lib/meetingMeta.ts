@@ -354,6 +354,8 @@ export interface ReportSummary {
   calendarError?: string;
   /** Kept whole: search matches on it and the row quotes it back. */
   transcription: string;
+  /** False when the transcript exists but lives on another device. */
+  transcriptLocal: boolean;
   /** To-dos and takeaways as one string, so search still reaches them. */
   items: string;
 }
@@ -384,14 +386,21 @@ export function summarise(report: ReportData): ReportSummary {
     openTodoCount: (report.todos || []).filter((todo) => !todo.done).length,
     takeawayCount: report.takeaways?.length || 0,
     durationMs: meetingDurationMs(report),
-    speakers: speakerNamesOf(report.speech),
-    needsReview: needsSpeakerReview(report.speech),
+    // A projected report has no turns to read, but carries what was resolved
+    // from them before it was projected.
+    speakers: report.speech
+      ? speakerNamesOf(report.speech)
+      : (report.participants ?? []),
+    needsReview: report.speech
+      ? needsSpeakerReview(report.speech)
+      : !!report.speakerReviewPending,
     driveFolderId: report.driveFolderId,
     driveSyncedAt: report.driveSyncedAt,
     calendarEventId: report.calendarEventId,
     calendarSyncedAt: report.calendarSyncedAt,
     calendarError: report.calendarError,
     transcription: report.transcription || "",
+    transcriptLocal: !!report.transcription,
     items: [
       ...(report.todos || []).map((todo) => `${todo.text} ${todo.owner || ""}`),
       ...(report.takeaways || []),
