@@ -80,8 +80,9 @@ export interface RetentionPolicy {
   textDays: number | null;
 }
 
+/** Nothing is deleted unless the user asks for it. */
 export const DEFAULT_RETENTION: RetentionPolicy = {
-  audioDays: 30,
+  audioDays: null,
   textDays: null,
 };
 export const MAX_RETENTION_DAYS = 3650;

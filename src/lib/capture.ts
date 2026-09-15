@@ -479,7 +479,7 @@ export async function armCapture(
  * recording, and that write is awaited before the recorder starts — so there
  * is no window in which audio is journaled without the permission for it.
  */
-export async function beginRecording(decision: ConsentDecision) {
+export async function beginRecording(decision: ConsentDecision | null) {
   if (busyOperation || snapshot.state !== "armed") return;
   const mic = sources.mic;
   if (!mic) {
@@ -501,11 +501,15 @@ export async function beginRecording(decision: ConsentDecision) {
       system,
     });
     // Built here, from the sources that are actually live, so the record can
-    // never claim a source the recording does not contain.
-    const consent = buildConsentRecord(decisionFacts(decision, resolved.sources), {
-      ...decision,
-      obtainedAt: new Date().toISOString(),
-    });
+    // never claim a source the recording does not contain. Null when the user
+    // turned the step off: a meeting with no notice documents none, rather
+    // than carrying a record that claims an agreement nobody was asked for.
+    const consent = decision
+      ? buildConsentRecord(decisionFacts(decision, resolved.sources), {
+          ...decision,
+          obtainedAt: new Date().toISOString(),
+        })
+      : undefined;
     // The mixed stream is the durable recording; transcription reads each
     // source separately so speech is never lost under what is playing. Built
     // here rather than at arm: a share ended while the notice was being read

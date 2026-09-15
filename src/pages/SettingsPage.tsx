@@ -10,9 +10,11 @@ import { Notice } from "../components/UI";
 import { auth } from "../lib/firebase";
 import {
   calendarSyncEnabled,
+  consentStepEnabled,
   defaultLanguages,
   ownSpeakerName,
   setCalendarSync,
+  setConsentStep,
   setDefaultLanguages,
   setOwnSpeakerName,
 } from "../lib/meetingDefaults";
@@ -43,6 +45,7 @@ export default function SettingsPage() {
   const [languages, setLanguages] = useState(defaultLanguages);
   const [myName, setMyName] = useState(() => ownSpeakerName(user?.displayName));
   const [calendarSync, setCalendarSyncState] = useState(calendarSyncEnabled);
+  const [consentStep, setConsentStepState] = useState(consentStepEnabled);
   const calendarReady = useSyncExternalStore(
     subscribeDriveSession,
     hasCalendarGrant,
@@ -157,6 +160,26 @@ export default function SettingsPage() {
             Wird verwendet, sobald du für ein Meeting „Nur eine Person am
             Mikrofon“ aktivierst. Leer lassen übernimmt den Google-Namen.
           </p>
+          <label className="confirm-option">
+            <input
+              type="checkbox"
+              checked={consentStep}
+              onChange={(event) => {
+                setConsentStepState(event.target.checked);
+                setConsentStep(event.target.checked);
+              }}
+            />
+            <span>
+              <strong>Vor der Aufnahme nach Einwilligung fragen</strong>
+              <small>
+                Zeigt vor jedem Start den Hinweis, den du vorliest, und hält
+                fest, wann und wie alle Anwesenden informiert wurden. Ohne
+                diesen Schritt startet die Aufnahme sofort — dann wird für das
+                Meeting auch keine Einwilligung dokumentiert. Sinnvoll nur,
+                wenn außer dir niemand aufgenommen wird.
+              </small>
+            </span>
+          </label>
           <div className="choice-list" role="group" aria-label="Standard-Tonquelle">
             {SOURCES.map(({ id, label, hint }) => (
               <button

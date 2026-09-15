@@ -2670,3 +2670,16 @@ body {
   padding-top: 14px;
   border-top: 1px solid var(--line-soft);
 }
+
+/* The consent record as it reads on a saved report. */
+.consent-quote {
+  border-left: 3px solid #2563eb;
+  padding-left: 12px;
+  color: #111827;
+  line-height: 1.55;
+}
+.consent-objection {
+  border-left: 3px solid #b91c1c;
+  padding-left: 10px;
+  color: #b91c1c;
+}

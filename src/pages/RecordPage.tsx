@@ -26,7 +26,7 @@ import RecordingSheet from "../components/RecordingSheet";
 import { savedDriveFolder } from "../lib/driveSettings";
 import { ArmedMeeting } from "../components/ArmedMeeting";
 import { draftConsentNotice } from "../lib/consentDraft";
-import { savedRetention } from "../lib/meetingDefaults";
+import { consentStepEnabled, savedRetention } from "../lib/meetingDefaults";
 import {
   assembleConsentText,
   decisionFacts,
@@ -320,6 +320,7 @@ export default function RecordPage() {
         if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
         await verifyDriveAccess(token);
       }, sources);
+      await skipConsentStep();
       return;
     }
     try {
@@ -349,6 +350,13 @@ export default function RecordPage() {
       },
       sources,
     );
+    await skipConsentStep();
+  }
+
+  /** No notice means no record: the meeting documents no consent at all. */
+  async function skipConsentStep() {
+    if (consentStepEnabled() || captureSnapshot().state !== "armed") return;
+    await beginRecording(null).catch((e) => setCaptureError(errorMessage(e)));
   }
 
   function startRecording(localOnly = false) {

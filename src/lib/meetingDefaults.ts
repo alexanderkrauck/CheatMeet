@@ -15,6 +15,7 @@ const LANGUAGE_KEY = "cheatmeet:languages";
 const NAME_KEY = "cheatmeet:my-name";
 const CALENDAR_KEY = "cheatmeet:calendar-sync";
 const RETENTION_KEY = "cheatmeet:retention";
+const CONSENT_STEP_KEY = "cheatmeet:consent-step";
 
 const read = (key: string): string | null => {
   try {
@@ -67,6 +68,17 @@ export const setOwnSpeakerName = (name: string) =>
  * Off by default: writing into someone's calendar is not something to start
  * doing because a scope happens to be available.
  */
+/**
+ * Whether to stop for the consent notice before recording.
+ *
+ * On by default. Turning it off is honest about what it means: no notice is
+ * shown, so no consent record is written and the meeting documents none —
+ * the right setting for a solo recording with nobody else to inform.
+ */
+export const consentStepEnabled = () => read(CONSENT_STEP_KEY) !== "off";
+export const setConsentStep = (on: boolean) =>
+  write(CONSENT_STEP_KEY, on ? "" : "off");
+
 export const calendarSyncEnabled = () => read(CALENDAR_KEY) === "on";
 export const setCalendarSync = (on: boolean) => write(CALENDAR_KEY, on ? "on" : "");
 

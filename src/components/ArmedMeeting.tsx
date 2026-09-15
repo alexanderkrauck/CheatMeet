@@ -1,13 +1,18 @@
-import { Loader2, Mic, MonitorSpeaker, Sparkles } from "lucide-react";
+import { Loader2, Mic, MonitorSpeaker, RotateCcw, Sparkles } from "lucide-react";
 import { useState } from "react";
 import type { ConsentDecision, ConsentSource } from "../../shared/consent";
 
 /**
  * The screen between opening the devices and starting to record.
  *
- * The notice is not editable free text on purpose: hand-editing would let the
- * retention promise or the processors be deleted out of it, which is exactly
- * the coverage the assembled text guarantees. The wording changes through the
+ * Two columns on purpose: the notice and the box that rewrites it sit
+ * together, so it is obvious what the typing changes, and everything that is
+ * merely a setting moves out of the reading path. Nothing scrolls — the step
+ * has to be readable at a glance while someone is waiting on the call.
+ *
+ * The notice is not editable free text: hand-editing would let the retention
+ * promise or the processors be deleted out of it, which is exactly the
+ * coverage the assembled text guarantees. The wording changes through the
  * settings that feed it, or through a rephrasing that may only reword.
  */
 export function ArmedMeeting({
@@ -41,55 +46,44 @@ export function ArmedMeeting({
     onDraft(asked);
   };
 
+  const choice = <K extends keyof ConsentDecision>(
+    label: string,
+    field: K,
+    options: [ConsentDecision[K], string][],
+  ) => (
+    <div className="consent-field">
+      <small>{label}</small>
+      <div className="consent-choice" role="group" aria-label={label}>
+        {options.map(([option, caption]) => (
+          <button
+            key={String(option)}
+            className={decision[field] === option ? "is-selected" : ""}
+            onClick={() => onDecision({ [field]: option } as Partial<ConsentDecision>)}
+          >
+            {caption}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div className="consent">
-      <div className="consent-sources">
-        <small>Bereit — es wird noch nichts aufgenommen.</small>
-        <span>
-          <Mic size={16} /> Mikrofon
-        </span>
-        {sources.includes("system") && (
-          <span>
-            <MonitorSpeaker size={16} /> Systemton
-          </span>
-        )}
-      </div>
-
-      <div className="consent-toggles">
-        <div className="consent-choice">
-          {(["de", "en"] as const).map((value) => (
+      <div className="consent-main">
+        <div className="consent-head">
+          <strong>Das liest du vor</strong>
+          {hasDraft && (
             <button
-              key={value}
-              className={decision.language === value ? "is-selected" : ""}
-              onClick={() => onDecision({ language: value })}
+              className="consent-reset"
+              onClick={onResetDraft}
+              disabled={drafting}
             >
-              {value === "de" ? "Deutsch" : "English"}
+              <RotateCcw size={14} /> angepasst · Standardtext
             </button>
-          ))}
+          )}
         </div>
-        {decision.language === "de" && (
-          <div className="consent-choice">
-            {(["du", "sie"] as const).map((value) => (
-              <button
-                key={value}
-                className={decision.address === value ? "is-selected" : ""}
-                onClick={() => onDecision({ address: value })}
-              >
-                {value === "du" ? "Du" : "Sie"}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+        <p className="consent-text">{text}</p>
 
-      <p className="consent-text">{text}</p>
-
-      <div className="consent-draft">
-        {chat.map((line, index) => (
-          <p className="consent-chat" key={index}>
-            {line}
-          </p>
-        ))}
         <div className="consent-ask">
           <input
             value={instruction}
@@ -104,20 +98,49 @@ export function ArmedMeeting({
             disabled={drafting || !instruction.trim()}
             onClick={submit}
           >
-            {drafting ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
+            {drafting ? (
+              <Loader2 className="spin" size={17} />
+            ) : (
+              <Sparkles size={17} />
+            )}
             Formulieren
           </button>
         </div>
-        {hasDraft && !drafting && (
-          <button className="consent-reset" onClick={onResetDraft}>
-            Standardtext verwenden
-          </button>
-        )}
         {draftError && <p className="consent-error">{draftError}</p>}
+        {!!chat.length && (
+          <p className="consent-chat">Angepasst für: {chat.join(" · ")}</p>
+        )}
       </div>
 
-      <div className="consent-meta">
-        <label>
+      <aside className="consent-side">
+        <div className="consent-sources">
+          <span>
+            <Mic size={15} /> Mikrofon
+          </span>
+          {sources.includes("system") && (
+            <span>
+              <MonitorSpeaker size={15} /> Systemton
+            </span>
+          )}
+          <small>Bereit — noch wird nichts aufgenommen.</small>
+        </div>
+
+        {choice("Sprache", "language", [
+          ["de", "Deutsch"],
+          ["en", "English"],
+        ])}
+        {decision.language === "de" &&
+          choice("Anrede", "address", [
+            ["du", "Du"],
+            ["sie", "Sie"],
+          ])}
+        {choice("So informiert", "method", [
+          ["spoken", "Gesprochen"],
+          ["chat", "Chat"],
+          ["calendar", "Einladung"],
+        ])}
+
+        <label className="consent-confirm">
           <input
             type="checkbox"
             checked={decision.allInformed}
@@ -125,32 +148,18 @@ export function ArmedMeeting({
               onDecision({ allInformed: event.target.checked })
             }
           />
-          Alle Anwesenden wurden informiert und haben nicht widersprochen
+          <span>
+            Alle Anwesenden wurden informiert und haben nicht widersprochen
+          </span>
         </label>
-        <div className="consent-choice">
-          {(
-            [
-              ["spoken", "Gesprochen"],
-              ["chat", "Chat"],
-              ["calendar", "Einladung"],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              className={decision.method === value ? "is-selected" : ""}
-              onClick={() => onDecision({ method: value })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
 
-      <p className="consent-note">
-        CheatMeet erstellt eine Dokumentationshilfe, keine rechtliche
-        Bewertung. Am Arbeitsplatz und in regulierten Bereichen kann mehr nötig
-        sein als die Zustimmung der Anwesenden — etwa eine Betriebsvereinbarung.
-      </p>
+        <p className="consent-note">
+          CheatMeet erstellt eine Dokumentationshilfe, keine rechtliche
+          Bewertung. Am Arbeitsplatz und in regulierten Bereichen kann mehr
+          nötig sein als die Zustimmung der Anwesenden — etwa eine
+          Betriebsvereinbarung.
+        </p>
+      </aside>
     </div>
   );
 }

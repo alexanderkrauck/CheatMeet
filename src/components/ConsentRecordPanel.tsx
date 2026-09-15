@@ -51,7 +51,7 @@ export function ConsentRecordPanel({ report }: { report: ReportData }) {
           )}
           <details>
             <summary>Wortlaut</summary>
-            <p className="consent-text">{consent.text}</p>
+            <p className="consent-quote">{consent.text}</p>
           </details>
           <p className="muted small">
             Eigene Dokumentation: festgehalten ist, was vorgelesen werden
