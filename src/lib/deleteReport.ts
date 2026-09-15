@@ -1,6 +1,6 @@
 import { deleteDoc, doc } from "firebase/firestore";
 import { db } from "./firebase";
-import { trashDriveFolder } from "./drive";
+import { trashDriveFile } from "./drive";
 import { deleteDraft, dropLocal } from "./local";
 import { ensureDriveToken } from "./session";
 import type { ReportData } from "../types";
@@ -42,7 +42,7 @@ export async function deleteReport(
           warnings.push(
             "Google Drive ist nicht verbunden. Die Dateien liegen weiterhin dort.",
           );
-        else await trashDriveFolder(report.driveFolderId, token);
+        else await trashDriveFile(report.driveFolderId, token);
       } catch (cause) {
         warnings.push(
           cause instanceof Error

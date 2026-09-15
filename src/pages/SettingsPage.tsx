@@ -1,4 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
+import { RetentionSettings } from "../components/RetentionSettings";
 import { signOut } from "firebase/auth";
 import { LogOut, Mic, ShieldOff, UserRound } from "lucide-react";
 import DriveSettings from "../components/DriveSettings";
@@ -125,6 +126,8 @@ export default function SettingsPage() {
         </section>
 
         <DriveSettings />
+
+        <RetentionSettings />
 
         <Preferences />
 

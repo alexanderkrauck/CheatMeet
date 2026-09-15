@@ -15,7 +15,7 @@ vi.mock("firebase/firestore", () => ({
   },
 }));
 vi.mock("./drive", () => ({
-  trashDriveFolder: async (id: string) => {
+  trashDriveFile: async (id: string) => {
     if (driveFails) throw new Error("Der Drive-Ordner konnte nicht gelöscht werden (500).");
     calls.push(`drive:${id}`);
   },

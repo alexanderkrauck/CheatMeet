@@ -311,7 +311,7 @@ function driveConnectionValid(error: unknown) {
  *
  * A folder that is already gone is not an error — deleting twice must succeed.
  */
-export async function trashDriveFolder(id: string, token: string) {
+export async function trashDriveFile(id: string, token: string) {
   const response = await fetch(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?supportsAllDrives=true`,
     {
@@ -332,6 +332,6 @@ export async function trashDriveFolder(id: string, token: string) {
     );
   }
   throw new Error(
-    `Der Drive-Ordner konnte nicht gelöscht werden (${response.status}).`,
+    `Die Datei konnte nicht aus Drive gelöscht werden (${response.status}).`,
   );
 }

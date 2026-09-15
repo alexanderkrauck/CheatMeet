@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import { captureSnapshot, disarmCapture } from "./lib/capture";
+import {
+  startRetentionSweep,
+  stopRetentionSweep,
+} from "./lib/retentionSweep";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { auth } from "./lib/firebase";
@@ -45,9 +49,13 @@ export default function App() {
         if (armed.state === "armed" && u?.uid !== armed.owner) disarmCapture();
         // Signed in implies Drive-authorized: keep a usable token on hand
         // instead of prompting when an upload is already under way.
-        if (u) startDriveTokenRefresh();
-        else {
+        if (u) {
+          startDriveTokenRefresh();
+          // Deletion has no server to run on: it happens while the app is open.
+          startRetentionSweep();
+        } else {
           stopDriveTokenRefresh();
+          stopRetentionSweep();
           rememberToken(undefined);
         }
         setLoading(false);

@@ -16,7 +16,7 @@ import { prepareTranscript } from "./prepareTranscript";
 import { needsSpeakerReview } from "../../shared/transcription";
 
 // An operation belongs to the account that started it, including across tab sign-outs.
-function ownedOperation() {
+export function ownedOperation() {
   const owner = uid();
   const assertOwner = () => {
     if (auth.currentUser?.uid !== owner)
