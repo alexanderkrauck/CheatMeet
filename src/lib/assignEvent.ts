@@ -1,5 +1,5 @@
 import { getLocal } from "./local";
-import { saveReport } from "./reports";
+import { saveReport, uid } from "./reports";
 import { syncReportToCalendar } from "./calendarSync";
 import { errorMessage, hasCalendarGrant } from "./session";
 import type { CalendarEvent } from "./calendar";
@@ -40,31 +40,62 @@ export async function assignReportToEvent(
       warnings: ["Der Bericht ist auf diesem Gerät nicht mehr vorhanden."],
     };
 
-  let report: ReportData = {
-    ...stored.report,
+  const link = {
     calendarEventId: event.id,
     calendarId: event.calendarId,
     calendarLink: event.htmlLink,
     calendarError: undefined,
     calendarSyncedAt: undefined,
-  };
+  } as Partial<ReportData>;
+  let patch: Partial<ReportData> = link;
 
-  if (writeBack && hasCalendarGrant()) {
-    try {
-      // create:false — this is an assignment to an event that exists. Creating
-      // one here would put a duplicate on the calendar next to the target.
-      report = { ...report, ...(await syncReportToCalendar(report, { create: false })) };
-      if (report.calendarError) warnings.push(report.calendarError);
-    } catch (cause) {
+  if (writeBack) {
+    if (!hasCalendarGrant())
       warnings.push(
-        `Der Termin konnte nicht aktualisiert werden: ${errorMessage(cause)}`,
+        "Die Notizen konnten nicht geschrieben werden: Der Kalender ist nicht freigegeben.",
       );
-    }
+    else
+      try {
+        // create:false — this assigns to an event that exists. Creating one
+        // here would put a duplicate on the calendar next to the target.
+        const result = await syncReportToCalendar({ ...stored.report, ...link }, {
+          create: false,
+        });
+        // A vanished event comes back as a patch that CLEARS the link rather
+        // than as a throw. Persisting that would save an error about a link
+        // that never existed, and report success for an assignment that did
+        // not happen.
+        if (!result.calendarEventId && "calendarEventId" in result)
+          return {
+            assigned: false,
+            warnings: [
+              "Dieser Termin existiert nicht mehr im Google Kalender. Bitte die Ansicht neu laden.",
+            ],
+          };
+        patch = { ...link, ...result };
+        if (patch.calendarError) warnings.push(patch.calendarError);
+      } catch (cause) {
+        warnings.push(
+          `Der Termin konnte nicht aktualisiert werden: ${errorMessage(cause)}`,
+        );
+      }
   }
+
+  // Re-read after the network round trip. The calendar call can take 30s, and
+  // writing the snapshot taken before it would silently undo anything saved in
+  // the meantime — a speaker rename, a ticked to-do.
+  const fresh = await getLocal(owner, reportId);
+  // A sign-out mid-flight must not write this account's report into the next
+  // one: saveReport resolves the account itself.
+  if (uid() !== owner)
+    return {
+      assigned: false,
+      warnings: ["Das Google-Konto wurde gewechselt. Es wurde nichts gespeichert."],
+    };
 
   // saveReport returns a warning rather than throwing: a local write must never
   // be reported as a cloud save.
-  const warning = await saveReport(report);
+  const warning = await saveReport({ ...(fresh?.report ?? stored.report), ...patch });
   if (warning) warnings.push(warning);
   return { assigned: true, warnings };
 }

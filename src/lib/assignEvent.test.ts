@@ -3,23 +3,26 @@ import type { ReportData } from "../types";
 
 const state = {
   stored: undefined as { report: ReportData } | undefined,
+  /** What a second read returns, when a concurrent write changed it. */
+  freshest: undefined as { report: ReportData } | undefined,
   granted: true,
   saveWarning: "",
   syncPatch: {} as Partial<ReportData>,
   syncThrows: null as Error | null,
+  signedIn: "u1",
 };
 const saved: ReportData[] = [];
 const synced: { report: ReportData; create?: boolean }[] = [];
 
 vi.mock("./local", () => ({
-  getLocal: async () => state.stored,
+  getLocal: async () => state.freshest ?? state.stored,
 }));
 vi.mock("./reports", () => ({
   saveReport: async (report: ReportData) => {
     saved.push(report);
     return state.saveWarning;
   },
-  uid: () => "u1",
+  uid: () => state.signedIn,
 }));
 vi.mock("./calendarSync", () => ({
   syncReportToCalendar: async (
@@ -59,6 +62,8 @@ beforeEach(() => {
   saved.length = 0;
   synced.length = 0;
   state.stored = { report: report() };
+  state.freshest = undefined;
+  state.signedIn = "u1";
   state.granted = true;
   state.saveWarning = "";
   state.syncPatch = { calendarSyncedAt: "2026-09-15T12:00:00.000Z" };
@@ -104,11 +109,50 @@ describe("assignReportToEvent", () => {
     expect(saved[0].calendarEventId).toBe("ev-you-two");
   });
 
-  it("skips the write-back without a calendar grant, and still links", async () => {
+  it("links without a grant, but says the notes were not written", async () => {
     state.granted = false;
     const outcome = await assignReportToEvent("u1", "r1", event);
     expect(synced).toHaveLength(0);
     expect(outcome.assigned).toBe(true);
+    expect(saved[0].calendarEventId).toBe("ev-you-two");
+    // Silently dropping half of what was asked for is how a feature looks done
+    // and is not.
+    expect(outcome.warnings[0]).toContain("nicht freigegeben");
+  });
+
+  it("refuses when the target event has vanished, instead of saving a cleared link", async () => {
+    // syncReportToCalendar signals a deleted event by RETURNING a patch that
+    // clears the link. Spreading that would persist an error about a link that
+    // never existed and call it a success.
+    state.syncPatch = {
+      calendarEventId: undefined,
+      calendarId: undefined,
+      calendarLink: undefined,
+      calendarSyncedAt: undefined,
+      calendarError: "Der verknüpfte Kalendereintrag existiert nicht mehr.",
+    };
+    const outcome = await assignReportToEvent("u1", "r1", event);
+    expect(outcome.assigned).toBe(false);
+    expect(saved).toHaveLength(0);
+    expect(outcome.warnings[0]).toContain("existiert nicht mehr");
+  });
+
+  it("writes nothing when the account changed while the calendar was called", async () => {
+    state.syncPatch = {};
+    synced.length = 0;
+    const promise = assignReportToEvent("u1", "r1", event);
+    state.signedIn = "u2";
+    const outcome = await promise;
+    expect(outcome.assigned).toBe(false);
+    expect(saved).toHaveLength(0);
+  });
+
+  it("applies the link to the newest stored copy, not the one read first", async () => {
+    // The calendar call can take 30s. Writing back the pre-call snapshot would
+    // undo a speaker rename or a ticked to-do saved in the meantime.
+    state.freshest = { report: report({ title: "Umbenannt" }) };
+    await assignReportToEvent("u1", "r1", event);
+    expect(saved[0].title).toBe("Umbenannt");
     expect(saved[0].calendarEventId).toBe("ev-you-two");
   });
 

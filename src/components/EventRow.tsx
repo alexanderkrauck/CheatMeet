@@ -34,7 +34,9 @@ export default function EventRow({
   const carriesReport = (types: readonly string[]) =>
     types.includes(MIME);
 
-  const drops = onDropReport
+  // A birthday or an out-of-office block is not a sitting anyone recorded.
+  const droppable = onDropReport && isRecordable(event);
+  const drops = droppable
     ? {
         onDragOver: (drag: React.DragEvent) => {
           if (!carriesReport(drag.dataTransfer.types)) return;
@@ -42,11 +44,16 @@ export default function EventRow({
           drag.dataTransfer.dropEffect = "link";
           setOver(true);
         },
-        onDragLeave: () => setOver(false),
+        onDragLeave: (drag: React.DragEvent) => {
+          // dragleave also fires when the pointer crosses into a child, which
+          // made the highlight flicker off over the title and the button.
+          if (drag.currentTarget.contains(drag.relatedTarget as Node | null)) return;
+          setOver(false);
+        },
         onDrop: (drag: React.DragEvent) => {
+          setOver(false);
           if (!carriesReport(drag.dataTransfer.types)) return;
           drag.preventDefault();
-          setOver(false);
           const id = drag.dataTransfer.getData(MIME);
           if (id) onDropReport(id);
         },

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { CalendarPlus, CloudUpload, ExternalLink, MoreHorizontal } from "lucide-react";
 import Menu from "./Menu";
@@ -14,7 +14,11 @@ import {
 } from "../lib/meetingMeta";
 import { getLocal } from "../lib/local";
 import { saveReport, uid } from "../lib/reports";
-import { errorMessage } from "../lib/session";
+import {
+  errorMessage,
+  hasCalendarGrant,
+  subscribeDriveSession,
+} from "../lib/session";
 
 /**
  * One meeting, rendered the same way wherever meetings are listed. The row is
@@ -41,6 +45,11 @@ export default function MeetingRow({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [assigning, setAssigning] = useState(false);
+  const calendarReady = useSyncExternalStore(
+    subscribeDriveSession,
+    hasCalendarGrant,
+    () => false,
+  );
 
   const meta = [
     dateTimeLabel(report.date),
@@ -88,10 +97,14 @@ export default function MeetingRow({
     <div
       className="meeting-row"
       draggable={draggable}
-      onDragStart={(drag) => {
-        drag.dataTransfer.setData(MIME, report.id);
-        drag.dataTransfer.effectAllowed = "link";
-      }}
+      onDragStart={
+        draggable
+          ? (drag) => {
+              drag.dataTransfer.setData(MIME, report.id);
+              drag.dataTransfer.effectAllowed = "link";
+            }
+          : undefined
+      }
     >
       {/* The row's own link would otherwise start a URL drag of its own. */}
       <Link className="meeting-row-main" draggable={false} to={`/report/${report.id}`}>
@@ -123,10 +136,14 @@ export default function MeetingRow({
       <Menu title="Weitere Aktionen" icon={<MoreHorizontal size={18} />}>
         <>
           {/* The reachable half of drag-and-drop: the same assignment, by
-              keyboard and on a phone. */}
-          <button onClick={() => setAssigning(true)}>
-            <CalendarPlus size={16} /> Termin zuordnen
-          </button>
+              keyboard and on a phone. Without a grant there is nothing to pick
+              from, so the dialog would open with an empty list and a confirm
+              button that can never enable. */}
+          {calendarReady && (
+            <button onClick={() => setAssigning(true)}>
+              <CalendarPlus size={16} /> Termin zuordnen
+            </button>
+          )}
           {dirty && (
             <button onClick={() => void retry()} disabled={busy}>
               <CloudUpload size={16} />
