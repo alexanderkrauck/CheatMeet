@@ -5,6 +5,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createAnalysisRouter } from "../server/analysis";
+import { consentFacts } from "../shared/consent";
 
 const report = {
   title: "Weekly Sync",
@@ -608,6 +609,58 @@ describe("analysis endpoints", () => {
       expect((await post("transcribe-segment", segmentBody())).status).toBe(200);
       finish({ text: JSON.stringify(report) });
       expect((await analysis).status).toBe(200);
+    });
+  });
+
+  describe("consent notice", () => {
+    const facts = consentFacts({
+      sources: ["mic", "system"],
+      folderName: "CheatMeet Recordings (App)",
+      retention: { audioDays: 30, textDays: null },
+    });
+
+    const draft = (body: unknown, token = "valid-token") =>
+      fetch(`${base}/api/consent-notice`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+
+    it("rephrases without letting the model drop what the notice must say", async () => {
+      // A model that answers only the friendly part and forgets the rest.
+      client.models.generateContent.mockResolvedValueOnce({
+        text: JSON.stringify({ opening: "Kurz vorab:", purpose: "Ich schreibe mit." }),
+      });
+
+      const response = await draft({
+        facts,
+        instructions: ["Sergio von StackFuel, Verkaufsgespräch"],
+      });
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.parts).toEqual({ opening: "Kurz vorab:", purpose: "Ich schreibe mit." });
+      // The elements it omitted are still in the assembled text.
+      expect(data.text).toContain("Die Audioaufnahme lösche ich nach 30 Tagen");
+      expect(data.text).toContain("AssemblyAI");
+      expect(data.text.trim().endsWith("?")).toBe(true);
+      // The facts reached the prompt, so it cannot invent a different setup.
+      const prompt = client.models.generateContent.mock.calls[0][0].contents[0].parts[0].text;
+      expect(prompt).toContain("Sergio von StackFuel");
+      expect(prompt).toContain("Stimmen der anderen Teilnehmenden");
+    });
+
+    it("refuses an unusable response rather than shipping an empty notice", async () => {
+      client.models.generateContent.mockResolvedValueOnce({ text: "kein JSON" });
+      expect((await draft({ facts })).status).toBe(502);
+    });
+
+    it("needs an account and a description of the recording", async () => {
+      expect((await draft({ facts }, "")).status).toBe(401);
+      expect((await draft({})).status).toBe(400);
     });
   });
 });

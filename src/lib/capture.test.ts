@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildConsentRecord, consentFacts } from "../../shared/consent";
+import {
+  assembleConsentText,
+  buildConsentRecord,
+  consentFacts,
+  decisionFacts,
+  type ConsentDecision,
+} from "../../shared/consent";
 
-vi.mock("./firebase", () => ({ auth: { currentUser: { uid: "capture-test" } } }));
+const account = vi.hoisted(() => ({ uid: "capture-test" }));
+vi.mock("./firebase", () => ({ auth: { get currentUser() { return account; } } }));
 vi.mock("./local", () => ({
   appendRecordingChunk: vi.fn().mockResolvedValue(undefined),
   deleteDraft: vi.fn().mockResolvedValue(undefined),
@@ -51,18 +58,41 @@ class FakeStream {
 
 class FakeRecorder {
   static isTypeSupported = () => true;
+  /** The instance capture just built, so tests can read its real state. */
+  static last: FakeRecorder | undefined;
+  constructor() { FakeRecorder.last = this; }
   state = "inactive";
   onstop?: () => void;
+  ondataavailable?: (event: { data: Blob }) => void;
   start() { this.state = "recording"; }
   stop() { this.state = "inactive"; this.onstop?.(); }
 }
 
+const DECISION: ConsentDecision = {
+  method: "spoken",
+  allInformed: true,
+  language: "de",
+  address: "du",
+  folderName: "Ordner",
+  retention: { audioDays: 30, textDays: null },
+};
+
 const capture = await import("./capture");
+
+/** Arm, then consent — what every test that wants a running recording does. */
+const startRecording = async (
+  ...args: Parameters<typeof capture.armCapture>
+) => {
+  await capture.armCapture(...args);
+  await capture.beginRecording(DECISION);
+};
 const { startAssemblyLive } = await import("./assemblyLive");
 let getDisplayMedia: ReturnType<typeof vi.fn>;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  account.uid = "capture-test";
+  FakeRecorder.last = undefined;
   getDisplayMedia = vi.fn().mockResolvedValue(new FakeStream());
   vi.stubGlobal("navigator", {
     onLine: false,
@@ -79,8 +109,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // stopCapture first: disarming a running session would drop the recorder
+  // without stopping it, and the next test would inherit it.
   capture.stopCapture();
   await capture.finishTranscription();
+  capture.disarmCapture();
   await capture.discardCapture();
   vi.unstubAllGlobals();
 });
@@ -90,7 +123,7 @@ describe("discardCapture", () => {
     // It used to return the id of the fresh blank draft, and the only caller
     // read that as a destination — so asking to discard left the user standing
     // on the recorder looking at the take they had just thrown away.
-    await capture.startCapture(true, async () => {}, "mic");
+    await startRecording(true, async () => {}, "mic");
     const discarded = capture.captureSnapshot().draft.report.id;
     capture.stopCapture();
     await capture.finishTranscription();
@@ -106,14 +139,14 @@ describe("recording audio-source selection", () => {
   it("opens sharing in the click before asynchronous Drive verification", async () => {
     Object.defineProperty(navigator, "onLine", { value: true });
     let verified!: () => void;
-    const pending = capture.startCapture(false, () => new Promise<void>(resolve => { verified = resolve; }), "mic+system");
+    const pending = capture.armCapture(false, () => new Promise<void>(resolve => { verified = resolve; }), "mic+system");
     expect(getDisplayMedia).toHaveBeenCalledOnce();
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
     verified(); await pending;
-    expect(capture.captureSnapshot()).toMatchObject({ state: "recording", warning: "" });
+    expect(capture.captureSnapshot()).toMatchObject({ state: "armed", warning: "" });
   });
   it("starts mic-only without requesting screen sharing", async () => {
-    await capture.startCapture(true, async () => {}, "mic");
+    await startRecording(true, async () => {}, "mic");
     expect(getDisplayMedia).not.toHaveBeenCalled();
     expect(capture.captureSnapshot()).toMatchObject({ state: "recording", warning: "", error: "" });
     expect(vi.mocked(startAssemblyLive).mock.calls[0][0].system).toBeUndefined();
@@ -135,7 +168,7 @@ describe("recording audio-source selection", () => {
   it("keeps recording when the user stops sharing their screen", async () => {
     const systemTrack = new FakeTrack();
     getDisplayMedia.mockResolvedValue(new FakeStream([systemTrack]));
-    await capture.startCapture(true, async () => {}, "mic+system");
+    await startRecording(true, async () => {}, "mic+system");
     expect(capture.captureSnapshot()).toMatchObject({ state: "recording" });
 
     // Chrome's "Freigabe beenden", or the shared tab being closed.
@@ -153,13 +186,13 @@ describe("recording audio-source selection", () => {
     vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(
       new FakeStream([micTrack]) as unknown as MediaStream,
     );
-    await capture.startCapture(true, async () => {}, "mic");
+    await startRecording(true, async () => {}, "mic");
     expect(capture.captureSnapshot()).toMatchObject({ state: "recording" });
     expect(micTrack.readyState).toBe("live");
   });
 
   it("requests sharing and passes the two audio sources separately", async () => {
-    await capture.startCapture(true, async () => {}, "mic+system");
+    await startRecording(true, async () => {}, "mic+system");
     expect(getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: true });
     const sources = vi.mocked(startAssemblyLive).mock.calls[0][0];
     expect(sources.mic).toBeDefined();
@@ -170,7 +203,7 @@ describe("recording audio-source selection", () => {
 
   it("continues with mic-only and a warning when sharing is cancelled", async () => {
     getDisplayMedia.mockRejectedValue(new DOMException("Cancelled", "NotAllowedError"));
-    await capture.startCapture(true, async () => {}, "mic+system");
+    await startRecording(true, async () => {}, "mic+system");
     expect(capture.captureSnapshot()).toMatchObject({ state: "recording", error: "" });
     expect(capture.captureSnapshot().warning).toContain("nicht freigegeben");
     expect(vi.mocked(startAssemblyLive).mock.calls[0][0].system).toBeUndefined();
@@ -178,7 +211,7 @@ describe("recording audio-source selection", () => {
 
   it("does not transcribe a screen share without audio", async () => {
     getDisplayMedia.mockResolvedValue(new FakeStream([new FakeTrack("video")]));
-    await capture.startCapture(true, async () => {}, "mic+system");
+    await startRecording(true, async () => {}, "mic+system");
     expect(capture.captureSnapshot().state).toBe("recording");
     expect(capture.captureSnapshot().warning).toContain("kein Systemaudio");
     expect(vi.mocked(startAssemblyLive).mock.calls[0][0].system).toBeUndefined();
@@ -186,14 +219,14 @@ describe("recording audio-source selection", () => {
 
   it("continues with mic-only when the browser cannot share a screen", async () => {
     delete navigator.mediaDevices.getDisplayMedia;
-    await capture.startCapture(true, async () => {}, "mic+system");
+    await startRecording(true, async () => {}, "mic+system");
     expect(capture.captureSnapshot().state).toBe("recording");
     expect(capture.captureSnapshot().warning).toContain("keine Bildschirmfreigabe");
     expect(vi.mocked(startAssemblyLive).mock.calls[0][0].system).toBeUndefined();
   });
 });
 it("retains a live speaker name through partials and final live updates", async () => {
-  await capture.startCapture(true, async () => {}, "mic");
+  await startRecording(true, async () => {}, "mic");
   const changed = vi.mocked(startAssemblyLive).mock.calls[0][2];
   const speech = { provider: "assemblyai", phase: "live", languages: ["de"], speakerNames: { "mic:0:A": "Sprecher 1" },
     turns: [{ id: "mic:0:0", speaker: "mic:0:A", text: "Hallo", startMs: 0, endMs: 1000, final: true }] } as const;
@@ -208,7 +241,7 @@ it("retains a live speaker name through partials and final live updates", async 
 });
 
 it("treats a replacement import as new audio and clears old recording provenance", async () => {
-  await capture.startCapture(true, async () => {}, "mic");
+  await startRecording(true, async () => {}, "mic");
   capture.stopCapture(); await capture.finishTranscription();
   const draft = capture.captureSnapshot().draft;
   const previous = draft.report.id;
@@ -274,7 +307,7 @@ it("persists independent single-person choices, passes them to streaming and loc
   capture.setCaptureSingleSpeaker("system", true);
   capture.setCaptureSingleSpeaker("system", false);
   expect(capture.captureSnapshot().draft.report.singleSpeakerSources).toEqual({mic: true, system: false});
-  await capture.startCapture(true, async () => {}, "mic+system");
+  await startRecording(true, async () => {}, "mic+system");
   expect(vi.mocked(startAssemblyLive).mock.calls[0][5]).toEqual({mic: true, system: false});
   capture.setCaptureSingleSpeaker("mic", false);
   expect(capture.captureSnapshot().draft.report.singleSpeakerSources?.mic).toBe(true);
@@ -282,4 +315,146 @@ it("persists independent single-person choices, passes them to streaming and loc
   await capture.finishTranscription();
   await capture.importAudio(new File(["test"], "import.wav", {type: "audio/wav"}));
   expect(capture.captureSnapshot().draft.report.singleSpeakerSources).toBeUndefined();
+});
+
+describe("the consent gate", () => {
+  const recordedDraft = async () => {
+    const { putDraft } = await import("./local");
+    return vi
+      .mocked(putDraft)
+      .mock.calls.map(([, draft]) => draft)
+      .reverse()
+      .find((draft) => draft.report.captureState === "recording");
+  };
+
+  it("opens the devices but records and transmits nothing", async () => {
+    const { appendRecordingChunk } = await import("./local");
+    await capture.armCapture(true, async () => {}, "mic+system");
+
+    expect(capture.captureSnapshot().state).toBe("armed");
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled();
+    expect(getDisplayMedia).toHaveBeenCalled();
+    // Nothing reaches a provider and nothing reaches the disk: the journal is
+    // fed only by the recorder's data events, and the recorder is not running.
+    expect(startAssemblyLive).not.toHaveBeenCalled();
+    expect(appendRecordingChunk).not.toHaveBeenCalled();
+    expect(FakeRecorder.last?.state).not.toBe("recording");
+  });
+
+  it("starts the recording the participants agreed to", async () => {
+    await capture.armCapture(true, async () => {}, "mic+system");
+    await capture.beginRecording(DECISION);
+
+    expect(capture.captureSnapshot().state).toBe("recording");
+    expect(FakeRecorder.last?.state).toBe("recording");
+    expect(startAssemblyLive).toHaveBeenCalledOnce();
+    const passed = vi.mocked(startAssemblyLive).mock.calls[0][0];
+    expect(passed.mic).toBeDefined();
+    expect(passed.system).toBeDefined();
+    expect(passed.mic).not.toBe(passed.system);
+    // The permission is durable before the first byte of audio is journaled.
+    const draft = await recordedDraft();
+    expect(draft?.report.consent?.text).toBe(
+      assembleConsentText(decisionFacts(DECISION, ["mic", "system"])),
+    );
+  });
+
+  it("does not stop the screen share it just acquired", async () => {
+    const systemTrack = new FakeTrack();
+    getDisplayMedia.mockResolvedValue(new FakeStream([systemTrack]));
+
+    await capture.armCapture(true, async () => {}, "mic+system");
+
+    // The teardown guard used to fire for any state that was not "recording",
+    // which after the split is every successful arm.
+    expect(systemTrack.stop).not.toHaveBeenCalled();
+    await capture.beginRecording(DECISION);
+    expect(vi.mocked(startAssemblyLive).mock.calls[0][0].system).toBeDefined();
+  });
+
+  it("records only the microphone when the share ended while armed", async () => {
+    const systemTrack = new FakeTrack();
+    getDisplayMedia.mockResolvedValue(new FakeStream([systemTrack]));
+    await capture.armCapture(true, async () => {}, "mic+system");
+
+    systemTrack.end();
+    await capture.beginRecording(DECISION);
+
+    expect(vi.mocked(startAssemblyLive).mock.calls[0][0].system).toBeUndefined();
+    expect((await recordedDraft())?.report.captureSources).toEqual(["mic"]);
+  });
+
+  it("closes every device when the user backs out instead of consenting", async () => {
+    const micTrack = new FakeTrack();
+    const systemTrack = new FakeTrack();
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(
+      new FakeStream([micTrack]) as unknown as MediaStream,
+    );
+    getDisplayMedia.mockResolvedValue(new FakeStream([systemTrack]));
+    await capture.armCapture(true, async () => {}, "mic+system");
+
+    capture.disarmCapture();
+
+    expect(capture.captureSnapshot().state).toBe("ready");
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(systemTrack.stop).toHaveBeenCalled();
+  });
+
+  it("closes the devices when an armed session is discarded", async () => {
+    const micTrack = new FakeTrack();
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(
+      new FakeStream([micTrack]) as unknown as MediaStream,
+    );
+    await capture.armCapture(true, async () => {}, "mic");
+
+    await capture.discardCapture();
+
+    expect(micTrack.stop).toHaveBeenCalled();
+  });
+
+  it("aborts when the account changed between arming and consenting", async () => {
+    await capture.armCapture(true, async () => {}, "mic");
+
+    account.uid = "jemand-anderes";
+    await capture.beginRecording(DECISION);
+
+    expect(FakeRecorder.last?.state).not.toBe("recording");
+    expect(startAssemblyLive).not.toHaveBeenCalled();
+  });
+
+  it("describes the sources it actually got, not the ones requested", async () => {
+    getDisplayMedia.mockRejectedValue(new DOMException("Cancelled", "NotAllowedError"));
+    await capture.armCapture(true, async () => {}, "mic+system");
+    await capture.beginRecording(DECISION);
+
+    const draft = await recordedDraft();
+    // The share was declined, so the notice must not claim the other
+    // participants' voices are being recorded.
+    expect(draft?.report.consent?.facts.sources).toEqual(["mic"]);
+    expect(draft?.report.consent?.text).not.toContain("Stimmen der anderen");
+    expect(draft?.report.consent?.text).toBe(
+      assembleConsentText(decisionFacts(DECISION, ["mic"])),
+    );
+  });
+
+  it("stamps the consent no later than the meeting it covers", async () => {
+    await capture.armCapture(true, async () => {}, "mic");
+    await capture.beginRecording(DECISION);
+
+    const draft = await recordedDraft();
+    expect(
+      Date.parse(draft!.report.consent!.obtainedAt),
+    ).toBeLessThanOrEqual(Date.parse(draft!.report.date));
+  });
+
+  it("is not capturing while armed, but is holding devices", async () => {
+    await capture.armCapture(true, async () => {}, "mic");
+
+    expect(capture.isCapturing()).toBe(false);
+    expect(capture.hasOpenDevices()).toBe(true);
+
+    await capture.beginRecording(DECISION);
+    expect(capture.isCapturing()).toBe(true);
+    expect(capture.hasOpenDevices()).toBe(true);
+  });
 });

@@ -289,6 +289,34 @@ export function assembleConsentText(
     .join(" ");
 }
 
+/** The longest a single rephrased element may be, so a model cannot bury the notice. */
+export const MAX_PART_CHARS = 600;
+
+/** What a model is allowed to return: phrasing for each element, nothing else. */
+export const consentPartsSchema = {
+  type: "object",
+  properties: Object.fromEntries(
+    CONSENT_ORDER.map((key) => [key, { type: "string" }]),
+  ),
+  required: [...CONSENT_REQUIRED],
+  additionalProperties: false,
+} as const;
+
+/**
+ * Keeps only known elements with usable text. Never throws: phrasing is an
+ * enhancement, and anything it drops falls back to the deterministic sentence,
+ * so a bad model response degrades to the notice that always works.
+ */
+export function validateConsentParts(value: unknown): ConsentParts {
+  const raw = (value || {}) as Record<string, unknown>;
+  const parts: ConsentParts = {};
+  for (const key of CONSENT_ORDER) {
+    const text = typeof raw[key] === "string" ? (raw[key] as string).trim() : "";
+    if (text) parts[key] = text.slice(0, MAX_PART_CHARS);
+  }
+  return parts;
+}
+
 export type ConsentMethod = "spoken" | "chat" | "calendar" | "other";
 
 export interface ConsentRecord {
@@ -307,6 +335,40 @@ export interface ConsentRecord {
 }
 
 const METHODS: readonly ConsentMethod[] = ["spoken", "chat", "calendar", "other"];
+
+/**
+ * Everything the person obtaining consent decides, independent of what the
+ * devices ended up capturing. The sources come from the recorder, so the
+ * notice on screen and the notice in the record are built from one function
+ * and cannot disagree.
+ */
+export interface ConsentDecision {
+  method: ConsentMethod;
+  allInformed: boolean;
+  language: ConsentLanguage;
+  address: ConsentAddress;
+  folderName: string;
+  retention: RetentionPolicy;
+  recipients?: string[];
+  participants?: string[];
+  objections?: string;
+  /** Approved phrasing; coverage still comes from the facts, not from this. */
+  parts?: ConsentParts | null;
+}
+
+export function decisionFacts(
+  decision: ConsentDecision,
+  sources: ConsentSource[],
+): ConsentFacts {
+  return consentFacts({
+    sources,
+    folderName: decision.folderName,
+    retention: decision.retention,
+    recipients: decision.recipients,
+    language: decision.language,
+    address: decision.address,
+  });
+}
 
 export function buildConsentRecord(
   facts: ConsentFacts,

@@ -1,4 +1,9 @@
 import { MAX_FILE_BYTES, AUDIO_MIME_TYPES } from "../../shared/analysis";
+import {
+  buildConsentRecord,
+  decisionFacts,
+  type ConsentDecision,
+} from "../../shared/consent";
 import type { Draft } from "../types";
 import { appendRecordingChunk, deleteDraft, getDraft, putDraft } from "./local";
 import { mergeAudioStreams, type MergedAudio } from "./audioMerge";
@@ -16,7 +21,7 @@ import { startAssemblyLive } from "./assemblyLive";
 import { renderTranscript, validLanguages, renameSpeaker } from "../../shared/transcription";
 import { defaultLanguages } from "./meetingDefaults";
 
-export type CaptureState = "ready" | "recording" | "paused" | "review";
+export type CaptureState = "ready" | "armed" | "recording" | "paused" | "review";
 
 export interface CaptureSnapshot {
   owner: string;
@@ -92,6 +97,13 @@ export function subscribeCapture(onChange: () => void) {
 export const captureSnapshot = () => snapshot;
 export const isCapturing = () =>
   snapshot.state === "recording" || snapshot.state === "paused";
+/**
+ * Devices are open — armed or recording. Deliberately separate from
+ * isCapturing(): the bar, the attention queue and the recorder screen all mean
+ * "audio is being recorded" by that one, and an armed session records nothing.
+ */
+export const hasOpenDevices = () =>
+  snapshot.state === "armed" || isCapturing();
 
 // --- session internals -----------------------------------------------------
 
@@ -117,6 +129,11 @@ let queue: Promise<void> = Promise.resolve();
 let revision = 0;
 let pendingSnapshot: Draft | null = null;
 let busyOperation = false;
+/** What arm asked for, so consent resolves against the sources still alive. */
+let armedSources: {
+  requested: AudioSourcePreference;
+  displayMediaSupported: boolean;
+} | null = null;
 
 const elapsed = () => clock.read();
 const ownerChanged = () => auth.currentUser?.uid !== snapshot.owner;
@@ -164,6 +181,7 @@ function releaseCapture() {
     stream?.getTracks().forEach((track) => track.stop());
   sources = {};
   captureTracks = [];
+  armedSources = null;
   stopLifecycle?.();
   stopLifecycle = null;
   void wakeLock?.release().catch(() => {});
@@ -232,6 +250,7 @@ function persist(draft: Draft) {
 export const captureQueue = () => queue;
 
 async function acquireWakeLock() {
+  if (wakeLock && !wakeLock.released) return;
   if (!navigator.wakeLock || document.visibilityState !== "visible") {
     emit({ wakeLock: "unavailable" });
     return;
@@ -254,7 +273,7 @@ export async function openDraft(
   id: string | undefined,
   startNew: boolean,
 ): Promise<string> {
-  if (isCapturing()) return snapshot.draft.report.id;
+  if (hasOpenDevices()) return snapshot.draft.report.id;
   if (snapshot.owner !== owner) snapshot = blank(owner);
   const stored = startNew ? undefined : await getDraft(owner, id);
   if (!stored) {
@@ -320,7 +339,8 @@ export const setCaptureSpeakerName = (speaker: string, name: string) => {
   } }).catch(() => {});
 };
 export const setCaptureSingleSpeaker = (source: "mic" | "system", enabled: boolean) => {
-  if (ownerChanged() || busyOperation || snapshot.state !== "ready") return;
+  if (ownerChanged() || busyOperation) return;
+  if (snapshot.state !== "ready" && snapshot.state !== "armed") return;
   void persist({ ...snapshot.draft, report: { ...snapshot.draft.report,
     singleSpeakerSources: { ...snapshot.draft.report.singleSpeakerSources, [source]: enabled },
   } }).catch(() => {});
@@ -331,12 +351,21 @@ export const setCaptureLanguages = (languages: string[]) => {
     speech: { provider: "assemblyai", phase: "pending", turns: [], speakerNames: {}, ...snapshot.draft.report.speech, languages } } }).catch(() => {});
 };
 
-export async function startCapture(
+/**
+ * Opens the devices and stops there.
+ *
+ * Nothing is written to disk and nothing is sent to a provider until
+ * `beginRecording` runs: recording someone before they agree is the offence
+ * German law describes, and deleting the file afterwards does not undo it. The
+ * armed window exists so that the consent press starts capture instantly, with
+ * every browser dialog already behind the user.
+ */
+export async function armCapture(
   localOnly: boolean,
   verify: () => Promise<void>,
   audioSources: AudioSourcePreference = "mic+system",
 ) {
-  if (busyOperation || isCapturing()) return;
+  if (busyOperation || hasOpenDevices()) return;
   busyOperation = true;
   emit({ busy: "Aufnahme vorbereiten …", error: "", warning: "", localStartOffered: false });
   const captureOwner = snapshot.owner;
@@ -397,15 +426,77 @@ export async function startCapture(
     });
     if (resolved.warning) emit({ warning: resolved.warning });
 
-    // The mixed stream is the durable recording; transcription reads each
-    // source separately so speech is never lost under what is playing.
-    const merged = mergeAudioStreams(mic, system);
-    sources.merged = merged;
     // Microphone only: this list answers "is the capture device still alive",
     // and the display source is independently disposable. Including it meant
     // that clicking Chrome's "Freigabe beenden" ended the whole meeting.
     captureTracks = [...mic.getAudioTracks()];
     stopSystemWatch = watchSystemAudio(system);
+    armedSources = { requested: audioSources, displayMediaSupported };
+    // Asking for persistent storage raises its own prompt in some browsers —
+    // exactly the dialog the armed window exists to get out of the way.
+    void navigator.storage?.persist?.().catch(() => {});
+    // The user is about to read the notice aloud and not touch the screen.
+    void acquireWakeLock();
+    emit({ state: "armed" });
+  } catch (e) {
+    releaseCapture();
+    recorder = null;
+    emit({
+      error:
+        (e as Error).name === "NotAllowedError"
+          ? "Mikrofonzugriff nicht erlaubt. Bitte in den Browser-Einstellungen freigeben oder Audio importieren."
+          : errorMessage(e),
+    });
+  } finally {
+    if (snapshot.state !== "armed") {
+      // A Drive/mic failure can happen while the native picker is still open.
+      void share?.then(stream => stream?.getTracks().forEach(t => t.stop()));
+    }
+    busyOperation = false;
+    emit({ busy: "" });
+  }
+}
+
+/**
+ * Starts the recording the participants just agreed to.
+ *
+ * The consent record is persisted in the same write that marks the report as
+ * recording, and that write is awaited before the recorder starts — so there
+ * is no window in which audio is journaled without the permission for it.
+ */
+export async function beginRecording(decision: ConsentDecision) {
+  if (busyOperation || snapshot.state !== "armed") return;
+  const mic = sources.mic;
+  if (!mic) {
+    emit({
+      error:
+        "Das Mikrofon ist nicht mehr verfügbar. Bitte die Aufnahme neu vorbereiten.",
+    });
+    return;
+  }
+  busyOperation = true;
+  try {
+    if (ownerChanged()) { releaseCapture(); return; }
+    // Read the share again rather than trusting what arm saw: a share stopped
+    // while the notice was being read is already cleared from module state.
+    const system = sources.system;
+    const resolved = describeAudioSources({
+      requested: armedSources?.requested ?? "mic",
+      displayMediaSupported: armedSources?.displayMediaSupported ?? false,
+      system,
+    });
+    // Built here, from the sources that are actually live, so the record can
+    // never claim a source the recording does not contain.
+    const consent = buildConsentRecord(decisionFacts(decision, resolved.sources), {
+      ...decision,
+      obtainedAt: new Date().toISOString(),
+    });
+    // The mixed stream is the durable recording; transcription reads each
+    // source separately so speech is never lost under what is playing. Built
+    // here rather than at arm: a share ended while the notice was being read
+    // would otherwise leave a dead input mixed into the recording.
+    const merged = mergeAudioStreams(mic, system);
+    sources.merged = merged;
 
     const mimeType = preferredRecordingMimeType();
     const rec = new MediaRecorder(merged.stream, {
@@ -415,13 +506,13 @@ export async function startCapture(
     recorder = rec;
     chunks = [];
     chunkSequence = 0;
+    pendingChunks.clear();
     transcriptionDone = null;
     clock.reset();
     await persist({
       ...snapshot.draft,
-      report: { ...snapshot.draft.report, date: new Date().toISOString(), captureState: "recording", transcriptionOrigin: "live", captureSources: resolved.sources },
+      report: { ...snapshot.draft.report, date: new Date().toISOString(), captureState: "recording", transcriptionOrigin: "live", captureSources: resolved.sources, consent },
     });
-    void navigator.storage?.persist?.().catch(() => {});
 
     const systemAudio =
       system && system.getAudioTracks().length
@@ -535,7 +626,6 @@ export async function startCapture(
       },
     });
 
-    void acquireWakeLock();
     ticker = window.setInterval(() => {
       if (recorder?.state !== "recording") return;
       emit({ durationMs: elapsed(), transcribing: live?.pendingSegments || 0 });
@@ -547,20 +637,19 @@ export async function startCapture(
   } catch (e) {
     releaseCapture();
     recorder = null;
-    emit({
-      error:
-        (e as Error).name === "NotAllowedError"
-          ? "Mikrofonzugriff nicht erlaubt. Bitte in den Browser-Einstellungen freigeben oder Audio importieren."
-          : errorMessage(e),
-    });
+    emit({ error: errorMessage(e) });
   } finally {
-    if (snapshot.state !== "recording") {
-      // A Drive/mic failure can happen while the native picker is still open.
-      void share?.then(stream => stream?.getTracks().forEach(t => t.stop()));
-    }
     busyOperation = false;
     emit({ busy: "" });
   }
+}
+
+/** Closes the devices without ever having recorded anything. */
+export function disarmCapture() {
+  releaseCapture();
+  recorder = null;
+  live = null;
+  emit({ state: "ready", busy: "", warning: "" });
 }
 
 export function pauseCapture() {
@@ -645,7 +734,7 @@ export function stopCapture() {
 }
 
 export async function importAudio(file: File) {
-  if (busyOperation || isCapturing()) return;
+  if (busyOperation || hasOpenDevices()) return;
   if (
     file.size > MAX_FILE_BYTES ||
     !file.size ||
@@ -703,6 +792,7 @@ export async function importAudio(file: File) {
  * the recorder after asking to discard.
  */
 export async function discardCapture() {
+  releaseCapture();
   await queue.catch(() => {});
   await deleteDraft(snapshot.owner, snapshot.draft.report.id);
   chunks = [];
@@ -718,6 +808,7 @@ export async function discardCapture() {
 
 /** Clears the session after its draft has been handed to the save pipeline. */
 export function releaseAfterHandoff() {
+  releaseCapture();
   chunks = [];
   pendingChunks.clear();
   pendingSnapshot = null;

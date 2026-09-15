@@ -10,6 +10,15 @@ import {
 } from "@google/genai";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import firebaseConfig from "../firebase-applet-config.json";
+import { MAX_CONSENT_TURNS } from "../shared/analysis";
+import {
+  CONSENT_ORDER,
+  assembleConsentText,
+  consentPartsSchema,
+  consentSentences,
+  validateConsentParts,
+  type ConsentFacts,
+} from "../shared/consent";
 import {
   MAX_ASSIST_CONTEXT_CHARS,
   MAX_FILE_BYTES,
@@ -90,6 +99,8 @@ export function createAnalysisRouter(options: Options = {}) {
   // One expensive analysis per user at a time; segment transcription is already
   // serialized by the recording client and must not be blocked by it.
   const analysing = new Set<string>();
+  // One consent draft per user at a time: it is a button, not a stream.
+  const drafting = new Set<string>();
 
   const getAi = (): Client => {
     if (!options.createClient && !process.env.GEMINI_API_KEY)
@@ -228,6 +239,88 @@ export function createAnalysisRouter(options: Options = {}) {
     );
     return parse(response.text || "");
   }
+
+  /**
+   * Rephrases the consent notice for the situation the user describes.
+   *
+   * The model may only reword: the facts come from the caller's own meeting
+   * configuration, every element it omits falls back to the deterministic
+   * German sentence, and the client assembles the final text itself. So the
+   * worst a bad response can do is sound flat — it cannot drop the retention
+   * period, the processors or the recipients out of the notice.
+   */
+  router.post("/consent-notice", express.json({ limit: "64kb" }), async (req, res) => {
+    try {
+      const owner = await authenticate(req);
+      const body = req.body as { facts?: ConsentFacts; instructions?: unknown };
+      const facts = body.facts;
+      if (!facts || typeof facts !== "object" || !Array.isArray(facts.sources))
+        throw new RequestError(400, "Die Angaben zur Aufnahme fehlen.");
+      if (drafting.has(owner))
+        throw new RequestError(429, "Es läuft bereits eine Formulierung.");
+      const instructions = (Array.isArray(body.instructions) ? body.instructions : [])
+        .map((line: unknown) => String(line || "").trim())
+        .filter(Boolean)
+        .slice(-MAX_CONSENT_TURNS)
+        .map((line: string) => line.slice(0, MAX_QUESTION_CHARS));
+      const sentences = consentSentences(facts);
+      const reference = CONSENT_ORDER.filter((key) => sentences[key])
+        .map((key) => `${key}: ${sentences[key]}`)
+        .join("\n");
+      const prompt = `Du formulierst den Hinweis, mit dem eine Person die Zustimmung zur Aufzeichnung eines Gesprächs einholt.
+
+Nicht verhandelbar:
+- Du darfst ausschließlich umformulieren. Jede Angabe aus dem Referenztext bleibt erhalten: Zweck, welche Tonquellen aufgenommen werden, welche Dienste verarbeiten, wo gespeichert wird, wie lange aufbewahrt wird und wer die Zusammenfassung bekommt.
+- Erfinde nichts dazu und lasse nichts weg. Keine Verharmlosung wie „nur ein kleines Tool“, keine Zusage, die im Referenztext nicht steht.
+- Schreibe warm, kurz und gesprochen, so dass die Gegenseite gern zustimmt. Nenne den Nutzen für die andere Person.
+- Sprache: ${facts.language === "en" ? "Englisch" : "Deutsch"}. Anrede: ${facts.address === "sie" ? "Sie" : "du"}.
+- „opening“ ist ein kurzer, freundlicher Einstieg und darf leer bleiben. „ask“ endet mit einer Frage.
+
+Beispiel für den Ton (nicht den Inhalt übernehmen):
+{"opening":"Kurz vorab, bevor wir starten:","purpose":"Ich lass das Gespräch mitschreiben, dann kann ich dir zuhören statt zu tippen – und du bekommst die Zusammenfassung danach von mir."}
+
+Referenztext (verbindliche Angaben):
+"""
+${reference}
+"""
+${instructions.length ? `\nSituation, die die aufnehmende Person beschreibt:\n"""\n${instructions.join("\n")}\n"""\n` : ""}
+Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
+
+      drafting.add(owner);
+      try {
+        const client = getAi();
+        const response = await withRetry(() =>
+          client.models.generateContent({
+            model: fastModel(),
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            config: {
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              responseMimeType: "application/json",
+              responseJsonSchema: consentPartsSchema,
+            },
+          }),
+        );
+        let parsed: unknown = {};
+        try {
+          parsed = JSON.parse(response.text || "{}");
+        } catch {
+          parsed = {};
+        }
+        const parts = validateConsentParts(parsed);
+        if (!Object.keys(parts).length)
+          throw new RequestError(
+            502,
+            "Die Formulierung kam unbrauchbar zurück. Der Standardtext bleibt gültig.",
+          );
+        // Returned assembled as well, so the caller never has to re-derive it.
+        res.json({ parts, text: assembleConsentText(facts, parts) });
+      } finally {
+        drafting.delete(owner);
+      }
+    } catch (error) {
+      fail(res, error, "Consent notice error");
+    }
+  });
 
   // Answers a question using only what has been said so far. This is the live
   // "cheat" during a meeting, so it must never stall on a long transcript.

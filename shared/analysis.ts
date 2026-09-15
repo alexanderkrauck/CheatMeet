@@ -154,6 +154,8 @@ export function audioExtension(mime: string) {
 
 /** The assistant only ever reasons over the recent part of a long meeting. */
 export const MAX_ASSIST_CONTEXT_CHARS = 12000;
+/** How many lines of the consent mini-chat travel with a draft request. */
+export const MAX_CONSENT_TURNS = 6;
 export const MAX_QUESTION_CHARS = 500;
 
 export interface MeetingInsights {

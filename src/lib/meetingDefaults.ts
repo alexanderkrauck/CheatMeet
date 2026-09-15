@@ -1,3 +1,8 @@
+import {
+  DEFAULT_RETENTION,
+  retentionDays,
+  type RetentionPolicy,
+} from "../../shared/consent";
 import { DEFAULT_LANGUAGES, validLanguages } from "../../shared/transcription";
 
 /**
@@ -9,6 +14,7 @@ import { DEFAULT_LANGUAGES, validLanguages } from "../../shared/transcription";
 const LANGUAGE_KEY = "cheatmeet:languages";
 const NAME_KEY = "cheatmeet:my-name";
 const CALENDAR_KEY = "cheatmeet:calendar-sync";
+const RETENTION_KEY = "cheatmeet:retention";
 
 const read = (key: string): string | null => {
   try {
@@ -63,3 +69,32 @@ export const setOwnSpeakerName = (name: string) =>
  */
 export const calendarSyncEnabled = () => read(CALENDAR_KEY) === "on";
 export const setCalendarSync = (on: boolean) => write(CALENDAR_KEY, on ? "on" : "");
+
+/**
+ * What a NEW meeting promises. Per device on purpose: the enforced value is
+ * frozen into each meeting's consent record, so a different default on another
+ * machine can only change what the next notice says — never what an existing
+ * promise enforces.
+ */
+export function savedRetention(): RetentionPolicy {
+  const stored = read(RETENTION_KEY);
+  if (!stored) return DEFAULT_RETENTION;
+  try {
+    const parsed = JSON.parse(stored);
+    return {
+      audioDays: retentionDays(parsed?.audioDays),
+      textDays: retentionDays(parsed?.textDays),
+    };
+  } catch {
+    return DEFAULT_RETENTION;
+  }
+}
+
+export const setSavedRetention = (policy: RetentionPolicy) =>
+  write(
+    RETENTION_KEY,
+    JSON.stringify({
+      audioDays: retentionDays(policy.audioDays),
+      textDays: retentionDays(policy.textDays),
+    }),
+  );
