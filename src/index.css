@@ -635,6 +635,15 @@ textarea {
   border-color: #f0dcbc;
   color: #6d4409;
 }
+.attention-row.is-brand {
+  border-color: var(--brand);
+  background: var(--brand-wash);
+  color: var(--brand-ink);
+}
+.attention-row.is-brand .attention-icon {
+  background: var(--brand);
+  color: #fff;
+}
 .attention-row.is-red {
   background: var(--red-wash);
   border-color: #f2ccc9;
@@ -934,10 +943,34 @@ textarea {
 .day-number {
   line-height: 1;
 }
+/* Two channels in one cell: the fill above says what was recorded, this row
+   says what is still to come. */
+.day-marks {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 6px;
+}
 .day-count {
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
+}
+.day-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--brand);
+  opacity: 0.55;
+}
+/* More than fits: the last dot stretches rather than lying about the count. */
+.day-dot.is-more {
+  width: 9px;
+  border-radius: 3px;
+}
+.day.is-selected .day-dot,
+.day.level-3 .day-dot {
+  opacity: 0.9;
 }
 .calendar-day,
 .undated {
@@ -952,6 +985,7 @@ textarea {
 .calendar-empty {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 9px;
   padding: 20px;
   border: 1px dashed var(--line);
@@ -2350,11 +2384,6 @@ body {
 }
 
 /* --- What is coming up ------------------------------------------------------ */
-.upcoming {
-  display: grid;
-  gap: 16px;
-  margin-bottom: 34px;
-}
 .sr-only {
   position: absolute;
   width: 1px;
@@ -2376,112 +2405,41 @@ body {
   color: var(--muted);
 }
 
-/* The one thing worth interrupting for. */
-.next-meeting {
-  display: grid;
-  justify-items: start;
-  gap: 4px;
-  padding: 22px 24px;
-  border-radius: var(--r-lg);
-  background: linear-gradient(140deg, var(--brand), var(--brand-deep));
-  color: #fff;
-  box-shadow: 0 18px 40px -22px #2563ebd1;
-}
-.next-meeting .eyebrow {
-  margin-bottom: 2px;
-  color: #ffffffc4;
-}
-.next-meeting h3 {
-  font-size: 19px;
-  font-weight: 650;
-  letter-spacing: -0.4px;
-  line-height: 1.25;
-}
-.next-meta {
-  font-size: 13px;
-  color: #ffffffdb;
-  overflow-wrap: anywhere;
-}
-.next-meta strong {
-  font-weight: 650;
-  color: #fff;
-}
-.next-meeting .btn {
-  margin-top: 12px;
-  background: #fff;
-  border-color: #fff;
-  color: var(--brand-ink);
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-.next-meeting .btn:hover:not(:disabled) {
-  background: #eef3ff;
-}
-/* Already captured: informative, not an offer. */
-.next-meeting.is-done {
-  background: #fff;
-  color: var(--ink);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-1);
-}
-.next-meeting.is-done .eyebrow {
-  color: var(--muted);
-}
-.next-meeting.is-done .next-meta {
-  color: var(--muted);
-}
-.next-meeting.is-done .btn {
-  background: var(--hover);
-  border-color: var(--line);
-  color: var(--ink-soft);
-}
-
-.upcoming-day {
-  display: grid;
-  gap: 6px;
-}
-.upcoming-day h3 {
-  margin-bottom: 2px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.upcoming-row {
+/* A scheduled entry, sitting in the same list as the recordings around it. */
+.event-row {
   display: flex;
   align-items: center;
   gap: 14px;
   min-width: 0;
-  padding: 9px 12px;
+  padding: 11px 14px;
   border-radius: var(--r-md);
-  border: 1px solid transparent;
+  border: 1px solid var(--line-soft);
+  background: #ffffff70;
 }
-.upcoming-row:hover {
-  border-color: var(--line-soft);
-  background: #ffffff8f;
+.event-row:hover {
+  border-color: var(--line);
+  background: #ffffffb0;
 }
-.upcoming-time {
+.event-time {
   flex: 0 0 96px;
   font-variant-numeric: tabular-nums;
   font-size: 12.5px;
   color: var(--muted);
 }
-.upcoming-body {
+.event-body {
   flex: 1;
   min-width: 0;
   display: grid;
   gap: 1px;
 }
-.upcoming-body > strong {
+.event-body > strong {
   font-size: 13.5px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.upcoming-body small {
+.event-body small {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -2491,13 +2449,24 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Quiet, but never hidden: the hero owns the emphasis, and an action you can
-   only find by hovering is an action most people never find. */
-.upcoming-row .btn {
+.event-row .btn {
   flex: 0 0 auto;
   min-height: 34px;
   padding: 0 12px;
   font-size: 11.5px;
+}
+/* The gym and the concert: still here, still recordable, no longer shouting
+   over the meeting two rows down. */
+.event-row.is-quiet {
+  border-color: transparent;
+  background: none;
+}
+.event-row.is-quiet .event-body > strong {
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+.event-row.is-quiet .btn {
+  padding: 0 9px;
   color: var(--muted);
   background: none;
   border-color: var(--line-soft);
@@ -2505,78 +2474,30 @@ body {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-.upcoming-row:hover .btn,
-.upcoming-row:focus-within .btn {
+.event-row.is-quiet:hover .btn,
+.event-row.is-quiet:focus-within .btn {
   color: var(--brand-ink);
   border-color: var(--brand);
   background: var(--brand-wash);
 }
 
-.upcoming-other > summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 38px;
-  padding: 0 10px;
-  margin-left: -10px;
-  border-radius: var(--r-sm);
-  font-size: 12.5px;
-  color: var(--muted);
-  cursor: pointer;
-  list-style: none;
-}
-.upcoming-other > summary::-webkit-details-marker {
-  display: none;
-}
-/* An explicit affordance: without it the row reads as a caption, not a control. */
-.upcoming-other > summary::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(-45deg);
-  transition: transform 0.14s;
-}
-.upcoming-other[open] > summary::before {
-  transform: rotate(45deg);
-}
-.upcoming-other > summary:hover {
-  background: var(--hover);
-  color: var(--ink-soft);
-}
-.upcoming-other > div {
-  display: grid;
-  gap: 4px;
-  margin-top: 4px;
+/* The month in both tenses, under the navigator that moves between them. */
+.month-meta {
+  margin: -6px 0 14px;
 }
 
 @media (max-width: 560px) {
-  .upcoming-row {
+  .event-row {
     flex-wrap: wrap;
     gap: 4px 12px;
   }
-  .upcoming-time {
+  .event-time {
     flex: 0 0 auto;
   }
-  .upcoming-row .btn {
-    opacity: 1;
+  .event-row .btn {
     width: 100%;
     margin-top: 6px;
   }
-}
-
-.archive-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding-top: 8px;
-  border-top: 1px solid var(--line-soft);
-}
-.archive-head .group-heading {
-  margin: 0;
 }
 
 /* Installing the app is its own concern, not part of the storage figures. */

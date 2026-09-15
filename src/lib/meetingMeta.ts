@@ -155,6 +155,8 @@ export interface DayCell {
   isToday: boolean;
   count: number;
   minutes: number;
+  /** Scheduled and not yet recorded — the future half of the same day. */
+  events: number;
 }
 
 export function meetingsByDay<T extends Dated>(reports: T[]): Map<string, T[]> {
@@ -175,6 +177,8 @@ export function buildMonthGrid(
   month: string,
   reports: Dated[],
   now: Date,
+  /** Scheduled entries per day key. Absent without a calendar grant. */
+  scheduled?: Map<string, { length: number }>,
 ): DayCell[][] {
   const byDay = meetingsByDay(reports);
   const today = localDayKey(now.toISOString());
@@ -207,6 +211,7 @@ export function buildMonthGrid(
         minutes: Math.round(
           items.reduce((sum, r) => sum + (r.durationMs || 0), 0) / 60000,
         ),
+        events: inMonth ? scheduled?.get(key)?.length || 0 : 0,
       });
     }
     weeks.push(row);
@@ -218,6 +223,41 @@ export function buildMonthGrid(
  *  a day, a smooth scale reads as noise rather than as information. */
 export const dayIntensity = (cell: DayCell): 0 | 1 | 2 | 3 =>
   !cell.count ? 0 : cell.minutes >= 120 ? 3 : cell.minutes >= 30 ? 2 : 1;
+
+/**
+ * Which slice of a month is worth asking Google about.
+ *
+ * A month already over has no recordable future in it, and an unrecorded past
+ * event is not something the user can act on — so it costs nothing and is
+ * fetched as nothing. The current month starts at local midnight rather than
+ * at `now`, because "Heute" at 14:00 must still show the 09:00 standup.
+ */
+export function monthEventRange(
+  month: string,
+  now: Date,
+): { fromMs: number; toMs: number } | null {
+  const [year, index] = month.split("-").map(Number);
+  const end = new Date(year, index, 1).getTime();
+  const midnight = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  ).getTime();
+  if (end <= midnight) return null;
+  const start = new Date(year, index - 1, 1).getTime();
+  return { fromMs: Math.max(start, midnight), toMs: end };
+}
+
+/** Today, tomorrow, then the weekday — the way a person reads a schedule. */
+export function dayHeading(key: string, now: Date): string {
+  const today = localDayKey(now.toISOString());
+  const tomorrow = localDayKey(
+    new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(),
+  );
+  if (key === today) return "Heute";
+  if (key === tomorrow) return "Morgen";
+  return dayKeyLabel(key, { weekday: "long", day: "numeric", month: "long" });
+}
 
 const searchable = (report: ReportSummary): string[] => [
   report.title,

@@ -3,9 +3,11 @@ import {
   countdownLabel,
   guestLabel,
   hasGuests,
+  imminentMeeting,
+  isMeeting,
   isOver,
+  isRecordable,
   isRunning,
-  splitUpcoming,
   timeLabel,
 } from "./upcoming";
 import type { CalendarEvent } from "./calendar";
@@ -21,6 +23,8 @@ const event = (over: Partial<CalendarEvent> = {}): CalendarEvent => ({
   endMs: at(10, 30),
   allDay: false,
   attendees: ["Maik Retzlaff"],
+  conference: false,
+  kind: "default",
   description: "",
   ...over,
 });
@@ -46,44 +50,72 @@ describe("isOver / isRunning", () => {
   });
 });
 
-describe("splitUpcoming", () => {
-  const karaoke = event({ id: "k", title: "ROX Karaoke Night", attendees: [], startMs: at(20), endMs: at(23) });
-  const gym = event({ id: "g", title: "krauckie gym", attendees: [], allDay: true, startMs: at(0, 0, 20), endMs: at(0, 0, 21) });
-  const call = event({ id: "c", title: "AI Product Call" });
-  const later = event({ id: "l", title: "Retro", startMs: at(16), endMs: at(17) });
+describe("isMeeting", () => {
+  it("counts a video link as company, not just an attendee list", () => {
+    expect(isMeeting(event({ attendees: [] }))).toBe(false);
+    expect(isMeeting(event({ attendees: [], conference: true }))).toBe(true);
+    expect(isMeeting(event())).toBe(true);
+  });
+});
 
-  it("promotes the next meeting with guests and lists the rest behind it", () => {
-    const split = splitUpcoming([karaoke, later, call, gym], now);
-    expect(split.next?.id).toBe("c");
-    expect(split.meetings.map((e) => e.id)).toEqual(["l"]);
+describe("isRecordable", () => {
+  it("rejects what has no sitting to attend", () => {
+    expect(isRecordable(event({ allDay: true }))).toBe(false);
+    expect(isRecordable(event({ kind: "birthday" }))).toBe(false);
+    expect(isRecordable(event({ kind: "workingLocation" }))).toBe(false);
+    // A ticket Gmail parsed out of a confirmation mail is not a meeting.
+    expect(isRecordable(event({ kind: "fromGmail" }))).toBe(false);
   });
 
-  it("folds the things that are not meetings away, without losing them", () => {
-    const split = splitUpcoming([karaoke, call, gym], now);
-    expect(split.personal.map((e) => e.id)).toEqual(["k", "g"]);
-    expect(split.next?.id).toBe("c");
+  it("accepts a plain timed entry, attendees or not", () => {
+    expect(isRecordable(event())).toBe(true);
+    expect(isRecordable(event({ attendees: [] }))).toBe(true);
+  });
+});
+
+describe("imminentMeeting", () => {
+  const call = event({ id: "c", startMs: at(8, 20), endMs: at(9) });
+  const later = event({ id: "l", startMs: at(16), endMs: at(17) });
+  const gym = event({
+    id: "g",
+    title: "krauckie gym",
+    attendees: [],
+    allDay: true,
+    startMs: at(0),
+    endMs: at(0, 0, 17),
+  });
+
+  it("alerts for an entry without attendees — guests rank, they do not gate", () => {
+    // The regression this exists to prevent: a calendar whose meetings carry
+    // no attendee list produced no alert at all, and read as broken.
+    const solo = event({ id: "s", attendees: [], startMs: at(8, 10), endMs: at(9) });
+    expect(imminentMeeting([solo], now)?.id).toBe("s");
+  });
+
+  it("stays quiet until the meeting is close", () => {
+    expect(imminentMeeting([later], now)).toBe(null);
+    expect(imminentMeeting([call], now)?.id).toBe("c");
+  });
+
+  it("never alerts for a whole-day block", () => {
+    expect(imminentMeeting([gym], now)).toBe(null);
+  });
+
+  it("prefers the one already running over the one about to start", () => {
+    const running = event({ id: "r", startMs: at(7, 50), endMs: at(8, 30) });
+    expect(imminentMeeting([call, running], now)?.id).toBe("r");
   });
 
   it("drops what has already finished", () => {
-    const done = event({ id: "d", startMs: at(6), endMs: at(7) });
-    const split = splitUpcoming([done, call], now);
-    expect(split.next?.id).toBe("c");
-    expect([...split.meetings, ...split.personal].map((e) => e.id)).not.toContain("d");
+    const done = event({ id: "d", startMs: at(7), endMs: at(7, 30) });
+    expect(imminentMeeting([done], now)).toBe(null);
   });
 
-  it("keeps a meeting that is running right now as the next one", () => {
-    expect(splitUpcoming([event()], at(10, 0)).next?.id).toBe("e1");
-  });
-
-  it("has no hero when nothing has guests", () => {
-    const split = splitUpcoming([karaoke, gym], now);
-    expect(split.next).toBe(null);
-    expect(split.personal).toHaveLength(2);
-  });
-
-  it("orders by start time regardless of input order", () => {
-    const split = splitUpcoming([later, call], now);
-    expect(split.next?.id).toBe("c");
+  it("takes the soonest, then prefers one with people in it", () => {
+    const solo = event({ id: "s", attendees: [], startMs: at(8, 20), endMs: at(9) });
+    expect(imminentMeeting([solo, call], now)?.id).toBe("c");
+    const sooner = event({ id: "x", attendees: [], startMs: at(8, 5), endMs: at(9) });
+    expect(imminentMeeting([sooner, call], now)?.id).toBe("x");
   });
 });
 
