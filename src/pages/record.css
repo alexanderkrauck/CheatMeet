@@ -1161,3 +1161,134 @@
   color: #1d4ed8;
   font-size: 13px;
 }
+
+/* --- the armed screen: devices open, nothing recorded yet ---------------- */
+.walk-armed .walk-content {
+  gap: 16px;
+}
+.consent {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.consent-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.consent-sources small {
+  flex: 1 0 100%;
+  color: #4b5563;
+}
+.consent-sources span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #d5dae2;
+  border-radius: 999px;
+  background: #f7f9fc;
+  padding: 5px 12px;
+  color: #1f2937;
+  font-size: 0.92rem;
+}
+.consent-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.consent-choice {
+  display: inline-flex;
+  border: 1px solid #d5dae2;
+  border-radius: 10px;
+  background: #f7f9fc;
+  overflow: hidden;
+}
+.consent-choice button {
+  border: 0;
+  background: transparent;
+  padding: 9px 15px;
+  color: #4b5563;
+  font: inherit;
+}
+.consent-choice button.is-selected {
+  background: #e0f2fe;
+  color: #1e40af;
+  font-weight: 600;
+}
+.consent-choice button:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: -3px;
+}
+/* Sized to be read aloud from across a desk. */
+.consent-text {
+  border: 1px solid #d5dae2;
+  border-left: 4px solid #2563eb;
+  border-radius: 10px;
+  background: #fff;
+  padding: 16px 18px;
+  color: #111827;
+  font-size: 1.12rem;
+  line-height: 1.6;
+}
+.consent-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.consent-chat {
+  align-self: flex-end;
+  max-width: 85%;
+  border-radius: 12px 12px 2px 12px;
+  background: #e0f2fe;
+  padding: 8px 12px;
+  color: #1e40af;
+  font-size: 0.94rem;
+}
+.consent-ask {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.consent-ask input {
+  flex: 1 1 220px;
+  min-width: 0;
+  border: 1px solid #d5dae2;
+  border-radius: 10px;
+  padding: 11px 13px;
+  font: inherit;
+}
+.consent-ask .walk-secondary {
+  flex: 0 0 auto;
+}
+.consent-reset {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: #2563eb;
+  font: inherit;
+  text-decoration: underline;
+}
+.consent-error {
+  color: #b91c1c;
+  font-size: 0.94rem;
+}
+.consent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.consent-meta label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #1f2937;
+}
+.consent-note {
+  color: #6b7280;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}

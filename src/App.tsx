@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { captureSnapshot, disarmCapture } from "./lib/capture";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { auth } from "./lib/firebase";
@@ -37,6 +38,11 @@ export default function App() {
     () =>
       onAuthStateChanged(auth, (u) => {
         setUser(u);
+        // A revoked Drive grant signs the user out, and the refresher ticks
+        // every few minutes — which can land while someone is reading the
+        // consent notice aloud with the microphone already open.
+        const armed = captureSnapshot();
+        if (armed.state === "armed" && u?.uid !== armed.owner) disarmCapture();
         // Signed in implies Drive-authorized: keep a usable token on hand
         // instead of prompting when an upload is already under way.
         if (u) startDriveTokenRefresh();

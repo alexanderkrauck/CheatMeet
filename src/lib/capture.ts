@@ -3,6 +3,7 @@ import {
   buildConsentRecord,
   decisionFacts,
   type ConsentDecision,
+  type ConsentSource,
 } from "../../shared/consent";
 import type { Draft } from "../types";
 import { appendRecordingChunk, deleteDraft, getDraft, putDraft } from "./local";
@@ -39,6 +40,8 @@ export interface CaptureSnapshot {
   warning: string;
   localStartOffered: boolean;
   wakeLock: RecordingWakeLockState;
+  /** The sources actually live, so the notice can name what is captured. */
+  sources: ConsentSource[];
 }
 
 const freshDraft = (): Draft => ({
@@ -70,6 +73,7 @@ const blank = (owner: string): CaptureSnapshot => ({
   warning: "",
   localStartOffered: false,
   wakeLock: "idle",
+  sources: [],
 });
 
 /**
@@ -437,7 +441,7 @@ export async function armCapture(
     void navigator.storage?.persist?.().catch(() => {});
     // The user is about to read the notice aloud and not touch the screen.
     void acquireWakeLock();
-    emit({ state: "armed" });
+    emit({ state: "armed", sources: resolved.sources });
   } catch (e) {
     releaseCapture();
     recorder = null;
@@ -633,7 +637,7 @@ export async function beginRecording(decision: ConsentDecision) {
       // recorder's own data events.
       live?.tick();
     }, 500);
-    emit({ state: "recording", durationMs: 0 });
+    emit({ state: "recording", durationMs: 0, sources: resolved.sources });
   } catch (e) {
     releaseCapture();
     recorder = null;

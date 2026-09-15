@@ -24,6 +24,17 @@ import { AudioPreview } from "../components/UI";
 import LiveMeeting from "../components/LiveMeeting";
 import RecordingSheet from "../components/RecordingSheet";
 import { savedDriveFolder } from "../lib/driveSettings";
+import { ArmedMeeting } from "../components/ArmedMeeting";
+import { draftConsentNotice } from "../lib/consentDraft";
+import { savedRetention } from "../lib/meetingDefaults";
+import {
+  assembleConsentText,
+  consentFacts,
+  decisionFacts,
+  type ConsentDecision,
+  type ConsentParts,
+} from "../../shared/consent";
+import { describeAudioSources } from "../lib/audioSourceState";
 import {
   audioSourcePreference,
   setAudioSourcePreference,
@@ -62,7 +73,9 @@ import {
   setCaptureEvent,
   setCaptureLanguages,
   setCaptureSingleSpeaker,
-  startCapture,
+  armCapture,
+  beginRecording,
+  disarmCapture,
   stopCapture,
   subscribeCapture,
 } from "../lib/capture";
@@ -99,7 +112,33 @@ export default function RecordPage() {
     localStartOffered,
     wakeLock,
     failed,
+    sources: liveSources,
   } = snap;
+
+  // What the user decides before consenting. The notice is derived from it, so
+  // the text on screen and the text in the record are the same function.
+  const [decision, setDecision] = useState<ConsentDecision>(() => ({
+    method: "spoken",
+    allInformed: false,
+    language: "de",
+    address: "du",
+    folderName: savedDriveFolder()?.name || DEFAULT_FOLDER_NAME,
+    retention: savedRetention(),
+  }));
+  const [consentParts, setConsentParts] = useState<ConsentParts | null>(null);
+  const [consentChat, setConsentChat] = useState<string[]>([]);
+  const [drafting, setDrafting] = useState(false);
+  const [draftError, setDraftError] = useState("");
+  const draftRequest = useRef(0);
+
+  // Armed is page-local: it holds open devices and nothing else, and no other
+  // surface can stop them — the recording bar deliberately ignores armed.
+  useEffect(
+    () => () => {
+      if (captureSnapshot().state === "armed") disarmCapture();
+    },
+    [],
+  );
 
   const [loading, setLoading] = useState(true);
   const [sheet, setSheet] = useState<
@@ -135,6 +174,7 @@ export default function RecordPage() {
   const audioInput = useRef<HTMLInputElement>(null);
   const saveButton = useRef<HTMLButtonElement>(null);
   const recording = state === "recording" || state === "paused";
+  const armed = state === "armed";
   // The readiness label must never be stricter than the gate the action
   // itself applies: a 10-minute preflight against ensureDriveToken's 5-minute
   // renewal margin made the button read "Google Drive freigeben" and then
@@ -212,6 +252,48 @@ export default function RecordPage() {
     }
   }
 
+  // The notice on screen and the notice in the record come from the same pure
+  // functions over the same inputs, so they cannot disagree.
+  const consentFactsNow = decisionFacts(decision, liveSources.length ? liveSources : ["mic"]);
+  const consentText = assembleConsentText(consentFactsNow, consentParts);
+
+  async function refineNotice(instruction: string) {
+    const request = ++draftRequest.current;
+    setConsentChat((lines) => [...lines, instruction]);
+    setDrafting(true);
+    setDraftError("");
+    try {
+      const parts = await draftConsentNotice(consentFactsNow, [
+        ...consentChat,
+        instruction,
+      ]);
+      if (request === draftRequest.current) setConsentParts(parts);
+    } catch (e) {
+      if (request === draftRequest.current) setDraftError(errorMessage(e));
+    } finally {
+      if (request === draftRequest.current) setDrafting(false);
+    }
+  }
+
+  function resetNotice() {
+    draftRequest.current++;
+    setConsentParts(null);
+    setConsentChat([]);
+    setDraftError("");
+    setDrafting(false);
+  }
+
+  function consentGiven() {
+    void beginRecording({ ...decision, parts: consentParts }).catch((e) =>
+      setCaptureError(errorMessage(e)),
+    );
+  }
+
+  function cancelArmed() {
+    disarmCapture();
+    resetNotice();
+  }
+
   // `sources` is always explicit, never read from the component's own state,
   // because the explainer sheet below sometimes changes that state and starts
   // a recording in the same click -- reading `audioSources` there would race
@@ -225,7 +307,7 @@ export default function RecordPage() {
     // The explainer's confirmation click must reach getDisplayMedia without
     // an intervening await (native browser activation requirement).
     if (sharingExplained && sources === "mic+system") {
-      await startCapture(localOnly, async () => {
+      await armCapture(localOnly, async () => {
         const token = await ensureDriveToken();
         if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
         await verifyDriveAccess(token);
@@ -250,7 +332,7 @@ export default function RecordPage() {
       setSheet("share-explainer");
       return;
     }
-    await startCapture(
+    await armCapture(
       localOnly,
       async () => {
         const token = await ensureDriveToken();
@@ -323,6 +405,9 @@ export default function RecordPage() {
 
   function leave() {
     if (busy) return;
+    // Armed holds an open microphone and screen share with no bar to stop them
+    // from anywhere else, and nothing has been recorded — so leaving releases.
+    if (armed) disarmCapture();
     // A running meeting keeps going: the session lives outside this screen and
     // stays reachable from the recording bar.
     if (recording || !draft.audio) navigate("/dashboard");
@@ -346,7 +431,9 @@ export default function RecordPage() {
             <span className="walk-step">
               {recording
                 ? "LÄUFT IM HINTERGRUND WEITER"
-                : state === "review"
+                : armed
+                  ? "NOCH WIRD NICHTS AUFGENOMMEN"
+                  : state === "review"
                   ? "SCHRITT 2 VON 2"
                   : "SCHRITT 1 VON 2"}
             </span>
@@ -446,6 +533,21 @@ export default function RecordPage() {
                     </button>
                   </div>
                 </>
+              ) : armed ? (
+                <ArmedMeeting
+                  sources={liveSources}
+                  text={consentText}
+                  decision={decision}
+                  onDecision={(patch) =>
+                    setDecision((current) => ({ ...current, ...patch }))
+                  }
+                  onDraft={(instruction) => void refineNotice(instruction)}
+                  onResetDraft={resetNotice}
+                  drafting={drafting}
+                  draftError={draftError}
+                  chat={consentChat}
+                  hasDraft={!!consentParts}
+                />
               ) : recording ? (
                 <LiveMeeting
                   transcript={draft.report.transcription}
@@ -548,6 +650,20 @@ export default function RecordPage() {
                     </button>
                   </div>
                 </>
+              ) : armed ? (
+                <>
+                  <button
+                    className="walk-primary"
+                    disabled={!!busy || !decision.allInformed}
+                    onClick={consentGiven}
+                  >
+                    <Mic size={22} />
+                    Einwilligung erteilt · Aufnahme starten
+                  </button>
+                  <button className="walk-secondary" onClick={cancelArmed}>
+                    Abbrechen
+                  </button>
+                </>
               ) : state === "ready" ? (
                 <>
                   <button
@@ -558,7 +674,7 @@ export default function RecordPage() {
                     <Mic size={22} />
                     {online && !driveReady
                       ? "Google Drive freigeben"
-                      : "Aufnahme starten"}
+                      : "Aufnahme vorbereiten"}
                   </button>
                   {localStartOffered && (
                     <button
@@ -849,6 +965,7 @@ export default function RecordPage() {
                 className="danger"
                 disabled={recording}
                 onClick={() => {
+                  if (armed) resetNotice();
                   void discardCapture()
                     .then(() => {
                       setSheet(null);
