@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMonthGrid,
+  calendarState,
   dayHeading,
   dayKeyLabel,
   isMonthKey,
@@ -283,6 +284,28 @@ describe("monthEventRange", () => {
     const range = monthEventRange("2026-11", now)!;
     expect(range.fromMs).toBe(new Date(2026, 10, 1).getTime());
     expect(range.toMs).toBe(new Date(2026, 11, 1).getTime());
+  });
+});
+
+describe("calendarState", () => {
+  it("separates a link from a write-back that actually happened", () => {
+    // A report can point at an event whose notes were never updated; calling
+    // both of those "synced" is how a silently failing write-back hides.
+    expect(calendarState({})).toBe("none");
+    expect(calendarState({ calendarEventId: "e1" })).toBe("linked");
+    expect(
+      calendarState({ calendarEventId: "e1", calendarSyncedAt: "2026-09-15T10:00:00Z" }),
+    ).toBe("synced");
+  });
+
+  it("lets an error outrank everything else", () => {
+    expect(
+      calendarState({
+        calendarEventId: "e1",
+        calendarSyncedAt: "2026-09-15T10:00:00Z",
+        calendarError: "Der Termin gehört jemand anderem.",
+      }),
+    ).toBe("error");
   });
 });
 

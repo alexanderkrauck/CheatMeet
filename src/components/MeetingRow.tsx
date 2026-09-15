@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
-import { CloudUpload, ExternalLink, MoreHorizontal } from "lucide-react";
+import { CalendarPlus, CloudUpload, ExternalLink, MoreHorizontal } from "lucide-react";
 import Menu from "./Menu";
+import AssignEvent from "./AssignEvent";
+import { MIME } from "./EventRow";
 import DeleteMeeting from "./DeleteMeeting";
-import { Status, dateTimeLabel } from "./UI";
+import { CalendarStatus, Status, dateTimeLabel } from "./UI";
 import {
   formatDuration,
   plural,
@@ -12,7 +14,11 @@ import {
 } from "../lib/meetingMeta";
 import { getLocal } from "../lib/local";
 import { saveReport, uid } from "../lib/reports";
-import { errorMessage } from "../lib/session";
+import {
+  errorMessage,
+  hasCalendarGrant,
+  subscribeDriveSession,
+} from "../lib/session";
 
 /**
  * One meeting, rendered the same way wherever meetings are listed. The row is
@@ -24,17 +30,26 @@ export default function MeetingRow({
   dirty,
   running,
   query,
+  draggable,
   onWarning,
 }: {
   report: ReportSummary;
   dirty?: boolean;
   running?: boolean;
   query?: string;
+  /** Only where something can receive it — the calendar's own day list. */
+  draggable?: boolean;
   /** A partial delete removes this row, so its warning has to outlive it. */
   onWarning?: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [assigning, setAssigning] = useState(false);
+  const calendarReady = useSyncExternalStore(
+    subscribeDriveSession,
+    hasCalendarGrant,
+    () => false,
+  );
 
   const meta = [
     dateTimeLabel(report.date),
@@ -79,8 +94,20 @@ export default function MeetingRow({
   }
 
   return (
-    <div className="meeting-row">
-      <Link className="meeting-row-main" to={`/report/${report.id}`}>
+    <div
+      className="meeting-row"
+      draggable={draggable}
+      onDragStart={
+        draggable
+          ? (drag) => {
+              drag.dataTransfer.setData(MIME, report.id);
+              drag.dataTransfer.effectAllowed = "link";
+            }
+          : undefined
+      }
+    >
+      {/* The row's own link would otherwise start a URL drag of its own. */}
+      <Link className="meeting-row-main" draggable={false} to={`/report/${report.id}`}>
         <span className="row-head">
           <h3>{report.title || "Unbenanntes Meeting"}</h3>
           <Status
@@ -89,6 +116,7 @@ export default function MeetingRow({
             local={dirty}
             running={running}
           />
+          <CalendarStatus report={report} />
         </span>
         <span className="row-meta">{meta.join(" · ")}</span>
         {snippet ? (
@@ -107,6 +135,15 @@ export default function MeetingRow({
       </Link>
       <Menu title="Weitere Aktionen" icon={<MoreHorizontal size={18} />}>
         <>
+          {/* The reachable half of drag-and-drop: the same assignment, by
+              keyboard and on a phone. Without a grant there is nothing to pick
+              from, so the dialog would open with an empty list and a confirm
+              button that can never enable. */}
+          {calendarReady && (
+            <button onClick={() => setAssigning(true)}>
+              <CalendarPlus size={16} /> Termin zuordnen
+            </button>
+          )}
           {dirty && (
             <button onClick={() => void retry()} disabled={busy}>
               <CloudUpload size={16} />
@@ -130,6 +167,13 @@ export default function MeetingRow({
           />
         </>
       </Menu>
+      {assigning && (
+        <AssignEvent
+          report={report}
+          onClose={() => setAssigning(false)}
+          onWarning={onWarning}
+        />
+      )}
       {message && (
         <p className="row-warning" role="status">
           {message}

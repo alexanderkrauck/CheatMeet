@@ -92,7 +92,7 @@ export default function DeleteMeeting({
           under a collapsed one is display:none and never opens. */}
       {createPortal(
         <dialog
-          className="confirm"
+          className="confirm is-danger"
           ref={dialog}
           aria-labelledby={`del-${id}`}
         >

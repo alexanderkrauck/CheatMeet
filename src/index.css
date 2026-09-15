@@ -2273,10 +2273,10 @@ body {
 }
 /* Red only inside the destructive dialog: the same row is a plain setting
    elsewhere, and a red tick there reads as a warning it is not. */
-.confirm .confirm-option input {
+.confirm.is-danger .confirm-option input {
   accent-color: var(--red);
 }
-.confirm .confirm-option:hover {
+.confirm.is-danger .confirm-option:hover {
   border-color: #e3b3af;
 }
 .confirm-option strong {
@@ -2485,6 +2485,45 @@ body {
   color: var(--brand-ink);
   border-color: var(--brand);
   background: var(--brand-wash);
+}
+
+.meeting-row[draggable="true"] {
+  cursor: grab;
+}
+.meeting-row[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+/* The event a dropped recording landed on, restated so the dialog is not a
+   confirmation of something the user can no longer see. */
+.assign-target {
+  display: grid;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--brand-wash);
+}
+.assign-target strong {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+.assign-target small {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* A recording is hovering over this event and will be assigned to it.
+   Declared after .is-quiet: at equal specificity the later rule wins, and a
+   quiet row was cancelling the highlight it needs most. */
+.event-row.is-drop {
+  border-color: var(--brand);
+  background: var(--brand-wash);
+  box-shadow: 0 0 0 3px #2563eb2e;
+}
+.event-row.is-drop .event-body > strong {
+  color: var(--brand-ink);
+  font-weight: 650;
 }
 
 /* The month in both tenses, under the navigator that moves between them. */
