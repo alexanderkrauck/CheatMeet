@@ -645,13 +645,13 @@ describe("analysis endpoints", () => {
       expect(data.parts).toEqual({ opening: "Kurz vorab:", purpose: "Ich schreibe mit." });
       // The elements it omitted are still in the notice the caller assembles.
       const assembled = assembleConsentText(facts, data.parts);
-      expect(assembled).toContain("Die Audioaufnahme lösche ich nach 30 Tagen");
+      expect(assembled).toContain("Die Aufnahme lösche ich nach 30 Tagen");
       expect(assembled).toContain("AssemblyAI");
       expect(assembled.trim().endsWith("?")).toBe(true);
       // The facts reached the prompt, so it cannot invent a different setup.
       const prompt = client.models.generateContent.mock.calls[0][0].contents[0].parts[0].text;
       expect(prompt).toContain("Sergio von StackFuel");
-      expect(prompt).toContain("Stimmen der anderen Teilnehmenden");
+      expect(prompt).toContain("auch deine Stimme");
     });
 
     it("refuses an unusable response rather than shipping an empty notice", async () => {

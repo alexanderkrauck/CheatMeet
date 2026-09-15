@@ -60,31 +60,33 @@ describe("the notice a real meeting produces", () => {
                 // Purpose.
                 expect(result).toContain(
                   language === "de"
-                    ? "Ich möchte dieses Gespräch aufzeichnen"
-                    : "I'd like to record this conversation",
+                    ? "Ich zeichne das Gespräch auf"
+                    : "I'm recording this",
                 );
                 // Technical means, including whether others are captured.
                 expect(result).toContain(
-                  language === "de" ? "Mikrofons" : "microphone",
+                  language === "de" ? "Mikrofon" : "microphone",
                 );
                 if (sources.includes("system"))
                   expect(result).toContain(
                     language === "de"
-                      ? "Stimmen der anderen Teilnehmenden"
-                      : "other participants",
+                      ? "auch deine Stimme"
+                      : "your voice too",
                   );
                 expect(result).toContain("AssemblyAI");
                 expect(result).toContain("Google Gemini");
                 // Recipients and storage location.
+                // The storage service is the fact; the folder name is not
+                // spoken — it would be noise to a listener.
                 expect(result).toContain("Google Drive");
-                expect(result).toContain(FOLDER);
+                expect(result).not.toContain(FOLDER);
                 if (recipients.length) expect(result).toContain("Sergio");
                 // Retention, with the literal number that was promised.
                 expect(result).toContain(
                   audio === null
                     ? language === "de"
-                      ? "Audioaufnahme bewahre ich unbefristet auf"
-                      : "keep the audio recording indefinitely"
+                      ? "behalte ich unbefristet"
+                      : "indefinitely"
                     : language === "de"
                       ? `nach ${audio} ${audio === 1 ? "Tag" : "Tagen"}`
                       : `after ${audio} ${audio === 1 ? "day" : "days"}`,
@@ -110,20 +112,20 @@ describe("processors are named only when they actually process", () => {
     const result = assembleConsentText(facts({ processors: [] }));
     expect(result).not.toContain("AssemblyAI");
     expect(result).not.toContain("Gemini");
-    expect(result).toContain("von keinem externen Dienst verarbeitet");
+    expect(result).toContain("Kein externer Dienst verarbeitet die Aufnahme");
   });
 
   it("names only the processors that are in play", () => {
     const result = assembleConsentText(
       facts({ processors: [ASSEMBLYAI_PROCESSOR] }),
     );
-    expect(result).toContain("AssemblyAI (Transkription, Server in der EU)");
+    expect(result).toContain("AssemblyAI (Transkription, EU)");
     expect(result).not.toContain("Gemini");
   });
 
   it("does not claim an EU region for the summarising model", () => {
     const result = assembleConsentText(facts({ processors: [GEMINI_PROCESSOR] }));
-    expect(result).toContain("Server außerhalb der EU möglich");
+    expect(result).toContain("ggf. außerhalb der EU");
   });
 });
 
@@ -143,7 +145,7 @@ describe("retentionDays", () => {
     const result = assembleConsentText(
       facts({ retention: { audioDays: 0 as number, textDays: null } }),
     );
-    expect(result).toContain("Audioaufnahme bewahre ich unbefristet auf");
+    expect(result).toContain("behalte ich unbefristet");
     expect(result).not.toMatch(/nach \d+ Tag/);
   });
 });
@@ -179,8 +181,8 @@ describe("phrasing overrides", () => {
     });
     expect(result.startsWith("Kurz vorab: Ich schreibe mit,")).toBe(true);
     // The blank override falls back to the deterministic promise.
-    expect(result).toContain("Die Audioaufnahme lösche ich nach 30 Tagen");
-    expect(result).not.toContain("Ich möchte dieses Gespräch aufzeichnen");
+    expect(result).toContain("Die Aufnahme lösche ich nach 30 Tagen");
+    expect(result).not.toContain("Ich zeichne das Gespräch auf");
   });
 });
 
@@ -224,7 +226,7 @@ describe("validateConsentRecord", () => {
     const built = record();
     const truncated = built.text.slice(
       0,
-      built.text.indexOf("Die Audioaufnahme"),
+      built.text.indexOf("Die Aufnahme lösche"),
     );
     expect(() =>
       validateConsentRecord({ ...built, text: truncated }),
@@ -240,7 +242,7 @@ describe("acceptConsentParts", () => {
       opening: "Kurz vorab:",
       purpose: "Ich schreibe mit, damit ich dir zuhören kann.",
       means: `Mikro und Call-Ton, verarbeitet von AssemblyAI und Google Gemini.`,
-      recipients: `Alles landet in meinem Drive-Ordner „${FOLDER}“.`,
+      recipients: "Alles landet in meinem Google Drive.",
       retention: "Die Aufnahme lösche ich nach 30 Tagen, den Text behalte ich.",
     });
 
@@ -298,7 +300,7 @@ describe("acceptConsentParts", () => {
 
     expect(record.parts).toBeNull();
     // The deterministic promise is spoken instead.
-    expect(record.text).toContain("Die Audioaufnahme lösche ich nach 30 Tagen");
+    expect(record.text).toContain("Die Aufnahme lösche ich nach 30 Tagen");
     expect(() => validateConsentRecord(record)).not.toThrow();
   });
 });

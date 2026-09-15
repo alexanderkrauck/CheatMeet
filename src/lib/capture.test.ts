@@ -431,7 +431,7 @@ describe("the consent gate", () => {
     // The share was declined, so the notice must not claim the other
     // participants' voices are being recorded.
     expect(draft?.report.consent?.facts.sources).toEqual(["mic"]);
-    expect(draft?.report.consent?.text).not.toContain("Stimmen der anderen");
+    expect(draft?.report.consent?.text).toContain("nur mein Mikrofon");
     expect(draft?.report.consent?.text).toBe(
       assembleConsentText(decisionFacts(DECISION, ["mic"])),
     );

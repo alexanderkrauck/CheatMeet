@@ -52,7 +52,7 @@ export const CONSENT_REQUIRED: readonly ConsentElement[] = [
  * Bump whenever a sentence literal below changes. Every record stores the
  * version it was spoken under, so an old meeting keeps its own wording.
  */
-export const CONSENT_TEMPLATE_VERSION = "1";
+export const CONSENT_TEMPLATE_VERSION = "2";
 
 export interface ConsentProcessor {
   name: string;
@@ -183,40 +183,45 @@ function germanSentences(facts: ConsentFacts): Record<ConsentElement, string> {
   const processors = facts.processors.map(
     (p) =>
       `${p.name} (${GERMAN_ROLE[p.role]}, ${
-        p.region === "eu"
-          ? "Server in der EU"
-          : "Server außerhalb der EU möglich"
+        p.region === "eu" ? "EU" : "ggf. außerhalb der EU"
       })`,
   );
-  const audio =
-    facts.retention.audioDays === null
-      ? "Die Audioaufnahme bewahre ich unbefristet auf."
-      : `Die Audioaufnahme lösche ich nach ${germanDays(facts.retention.audioDays)}; sie liegt danach noch kurz im Papierkorb meines Drive.`;
-  const text =
-    facts.retention.textDays === null
-      ? "Transkript und Zusammenfassung bewahre ich unbefristet auf."
-      : `Transkript und Zusammenfassung lösche ich nach ${germanDays(facts.retention.textDays)}; sie liegen danach noch kurz im Papierkorb meines Drive.`;
+  // One sentence when nothing is deleted: saying "unbefristet" twice is the
+  // kind of padding that makes people stop listening halfway through.
+  const { audioDays, textDays } = facts.retention;
+  const retention =
+    audioDays === null && textDays === null
+      ? "Aufnahme, Transkript und Zusammenfassung behalte ich unbefristet."
+      : [
+          audioDays === null
+            ? "Die Aufnahme behalte ich unbefristet."
+            : `Die Aufnahme lösche ich nach ${germanDays(audioDays)}.`,
+          textDays === null
+            ? "Transkript und Zusammenfassung behalte ich unbefristet."
+            : `Transkript und Zusammenfassung lösche ich nach ${germanDays(textDays)}.`,
+        ].join(" ");
   return {
     opening: "",
     purpose:
-      "Ich möchte dieses Gespräch aufzeichnen, damit ich mitschreiben kann und nichts Wichtiges verloren geht. Aus der Aufnahme erstelle ich anschließend ein Transkript und eine Zusammenfassung mit den offenen Aufgaben.",
+      "Ich zeichne das Gespräch auf, um mitzuschreiben; daraus mache ich ein Transkript und eine Zusammenfassung mit den offenen Aufgaben.",
     means:
       (facts.sources.includes("system")
-        ? "Aufgenommen wird der Ton meines Mikrofons und der Ton dieses Calls, also auch die Stimmen der anderen Teilnehmenden."
-        : "Aufgenommen wird der Ton meines Mikrofons.") +
+        ? "Aufgenommen wird mein Mikrofon und der Ton dieses Calls, also auch deine Stimme."
+        : "Aufgenommen wird nur mein Mikrofon.") +
       (processors.length
-        ? ` Verarbeitet wird die Aufnahme von ${joinList(processors, "und")}.`
-        : " Die Aufnahme wird von keinem externen Dienst verarbeitet."),
-    // No "nur für mich zugänglich": the root folder is user-chosen and its
-    // sharing state is never read, so exclusivity cannot honestly be claimed.
+        ? ` Verarbeitet von ${joinList(processors, "und")}.`
+        : " Kein externer Dienst verarbeitet die Aufnahme."),
+    // No folder name — that is noise to a listener. No "nur für mich
+    // zugänglich" either: the root folder is user-chosen and its sharing
+    // state is never read, so exclusivity cannot honestly be claimed.
     recipients:
-      `Die Dateien liegen in meinem Google Drive im Ordner „${facts.storage.folder}“.` +
+      "Gespeichert wird das in meinem Google Drive." +
       (facts.recipients.length
-        ? ` Die Zusammenfassung gebe ich an ${joinList(facts.recipients, "und")} weiter.`
-        : " Wenn ich die Zusammenfassung weitergeben möchte, sage ich vorher Bescheid."),
+        ? ` Die Zusammenfassung geht an ${joinList(facts.recipients, "und")}.`
+        : " Die Zusammenfassung gebe ich nur mit Ansage weiter."),
     // "lösche ich", never "wird automatisch gelöscht": the sweep only runs
     // while the app is open, and Drive trashes rather than purges.
-    retention: `${audio} ${text}`,
+    retention,
     ask:
       facts.address === "sie"
         ? "Sind Sie damit einverstanden, dass ich ab jetzt aufzeichne?"
@@ -228,36 +233,38 @@ function englishSentences(facts: ConsentFacts): Record<ConsentElement, string> {
   const processors = facts.processors.map(
     (p) =>
       `${p.name} (${ENGLISH_ROLE[p.role]}, ${
-        p.region === "eu"
-          ? "servers in the EU"
-          : "servers possibly outside the EU"
+        p.region === "eu" ? "EU" : "possibly outside the EU"
       })`,
   );
-  const audio =
-    facts.retention.audioDays === null
-      ? "I keep the audio recording indefinitely."
-      : `I delete the audio recording after ${englishDays(facts.retention.audioDays)}; it stays in my Drive trash for a short while after that.`;
-  const text =
-    facts.retention.textDays === null
-      ? "I keep the transcript and the summary indefinitely."
-      : `I delete the transcript and the summary after ${englishDays(facts.retention.textDays)}; they stay in my Drive trash for a short while after that.`;
+  const { audioDays, textDays } = facts.retention;
+  const retention =
+    audioDays === null && textDays === null
+      ? "I keep the recording, the transcript and the summary indefinitely."
+      : [
+          audioDays === null
+            ? "I keep the recording indefinitely."
+            : `I delete the recording after ${englishDays(audioDays)}.`,
+          textDays === null
+            ? "I keep the transcript and the summary indefinitely."
+            : `I delete the transcript and the summary after ${englishDays(textDays)}.`,
+        ].join(" ");
   return {
     opening: "",
     purpose:
-      "I'd like to record this conversation so I can take notes and nothing important gets lost. Afterwards I turn the recording into a transcript and a summary with the open action items.",
+      "I'm recording this so I can take notes; it becomes a transcript and a summary with the open action items.",
     means:
       (facts.sources.includes("system")
-        ? "This records my microphone and the audio of this call, which includes the other participants' voices."
-        : "This records my microphone.") +
+        ? "That records my microphone and this call's audio, so your voice too."
+        : "That records my microphone only.") +
       (processors.length
-        ? ` The recording is processed by ${joinList(processors, "and")}.`
-        : " The recording is not processed by any external service."),
+        ? ` Processed by ${joinList(processors, "and")}.`
+        : " No external service processes the recording."),
     recipients:
-      `The files are stored in my Google Drive, in the folder “${facts.storage.folder}”.` +
+      "It's stored in my Google Drive." +
       (facts.recipients.length
-        ? ` I pass the summary on to ${joinList(facts.recipients, "and")}.`
-        : " If I want to pass the summary on, I'll say so first."),
-    retention: `${audio} ${text}`,
+        ? ` The summary goes to ${joinList(facts.recipients, "and")}.`
+        : " I'd only pass the summary on after saying so."),
+    retention,
     ask: "Are you okay with me recording from now on?",
   };
 }
@@ -368,12 +375,8 @@ export function acceptConsentParts(
       )
         continue;
     }
-    if (
-      key === "recipients" &&
-      facts.storage.folder &&
-      !lower.includes(facts.storage.folder.toLowerCase())
-    )
-      continue;
+    // Where it is stored is the fact; the folder name is not spoken.
+    if (key === "recipients" && !lower.includes("drive")) continue;
     kept[key] = text;
   }
   return kept;

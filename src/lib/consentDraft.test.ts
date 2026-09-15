@@ -48,7 +48,7 @@ describe("draftConsentNotice", () => {
     expect(parts).toEqual({ opening: "Kurz vorab:" });
     // The assembled notice still carries every required element.
     expect(assembleConsentText(facts, parts)).toContain(
-      "Die Audioaufnahme lösche ich nach 30 Tagen",
+      "Die Aufnahme lösche ich nach 30 Tagen",
     );
   });
 
