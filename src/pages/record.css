@@ -90,13 +90,6 @@
   display: block;
   flex-shrink: 0;
 }
-.walk-project > span {
-  display: block;
-  font-size: 9px;
-  letter-spacing: 1.4px;
-  color: #3b82f6;
-  margin-bottom: 8px;
-}
 .walk-project input {
   width: 100%;
   padding: 13px 14px;
@@ -106,24 +99,12 @@
   font-size: 16px;
   color: #2563eb;
 }
-.walk-ready-intro {
-  min-height: 0;
-  text-align: center;
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-  justify-content: center;
-  gap: 16px;
-  flex: 1;
-}
-.walk-ready-intro h1,
 .walk-review-intro h1 {
   font-size: 34px;
   line-height: 1.17;
   letter-spacing: -1.3px;
   font-weight: 600;
 }
-.walk-ready-intro p,
 .walk-review-intro p {
   font-size: 13px;
   color: #737b88;
@@ -568,11 +549,12 @@
   .walk-dock {
     padding: 20px 38px;
   }
-  .walk-ready-intro h1,
   .walk-review-intro h1 {
     font-size: 40px;
   }}
 @media (max-height: 740px) {
+  /* A phone at 100dvh can legitimately need this. A monitor cannot. */
+  .walk-content.is-ready { overflow-y: auto; justify-content: flex-start; }
   .walk-header {
     padding: 7px 16px;
   }
@@ -584,15 +566,12 @@
     padding: 10px 20px;
     gap: 7px;
   }
-  .walk-ready-intro,
   .walk-review-intro {
     gap: 10px;
   }
-  .walk-ready-intro h1,
   .walk-review-intro h1 {
     font-size: 28px;
   }
-  .walk-ready-intro p,
   .walk-review-intro p {
     font-size: 12px;
   }
@@ -616,11 +595,9 @@
   .walk-header {
     padding: 4px 14px;
   }
-  .walk-ready-intro h1,
   .walk-review-intro h1 {
     font-size: 24px;
   }
-  .walk-ready-intro p,
   .walk-review-intro p {
     font-size: 11px;
     line-height: 1.4;
@@ -660,6 +637,7 @@
     font-size: 9px;
   }}
 @media (max-height: 470px) and (orientation: landscape) {
+  .walk-content.is-ready { overflow-y: auto; justify-content: flex-start; }
   .walk-frame {
     width: 100%;
     display: grid;
@@ -681,9 +659,6 @@
     padding: 15px;
     border-top: 0;
     border-left: 1px solid #d5dae2;
-  }
-  .walk-ready-intro p {
-    display: none;
   }
   .walk-review-intro h1 {
     font-size: 21px;
@@ -1104,9 +1079,10 @@
 .walk-speaker-assumptions p { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
 
 /* The setup can grow with meeting options; scroll instead of overlapping. */
-.walk-content.is-ready { overflow-y: auto; justify-content: flex-start; }
+/* The deleted hero used to absorb the slack with flex:1. Centring the stack
+   does the same without a paragraph of copy to justify it. */
+.walk-content.is-ready { justify-content: center; }
 .walk-content.is-ready > * { flex-shrink: 0; }
-.walk-content.is-ready .walk-ready-intro { flex: 0 0 auto; padding: 12px 0; }
 /* The sheet lost its rhythm when .drive-settings' own margins were retired in
    favour of the settings page's grid gap; this restores it where that grid
    does not reach. */
@@ -1118,4 +1094,70 @@
 .walk-sheet .drive-settings {
   display: grid;
   gap: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   The ready step, composed.
+   Everything here hangs off .walk-ready or .walk-content.is-ready: the
+   recording and review states share these class names and must not move.
+   --------------------------------------------------------------------------- */
+
+/* The event and the title are one object — picking the event fills the title,
+   so two labelled rows were describing one decision twice. An opaque card also
+   gives every string inside a background whose contrast can be stated, which
+   the page's gradient never could. */
+.walk-meeting-card {
+  flex-shrink: 0;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid #c8d6ef;
+  background: #fff;
+  box-shadow: 0 10px 30px -22px #1e293b6b;
+}
+.walk-meeting-card .calendar-match {
+  margin-top: 0;
+}
+/* A quiet calendar fits; a busy one must not put the page scroll back. Two
+   rows, then the list scrolls inside itself. */
+.walk-content.is-ready .walk-meeting-card .calendar-match {
+  max-height: 124px;
+  overflow-y: auto;
+}
+.walk-content.is-ready .walk-project input {
+  border-color: #c8d6ef;
+  font-size: 16px;
+}
+
+/* Three settings, three values, one row. */
+.walk-content.is-ready .walk-settings-row {
+  flex-wrap: wrap;
+}
+.walk-content.is-ready .walk-settings-row > .walk-folder {
+  flex: 1 1 210px;
+  background: #fff;
+  border-color: #c8d6ef;
+}
+/* 8px at 3.44:1 was the worst type on the screen. */
+.walk-content.is-ready .walk-folder small {
+  font-size: 12px;
+  letter-spacing: 0.6px;
+  color: #475569;
+}
+.walk-content.is-ready .walk-folder strong {
+  font-size: 13.5px;
+  color: #0f172a;
+}
+
+/* The dock's own text failed AA: 3.00:1 for the status line and 3.45:1 for the
+   import link. Scoped to .walk-ready — the recording dock is not this
+   change's business. */
+.walk-ready .walk-local-status {
+  font-size: 12px;
+  color: #475569;
+}
+.walk-ready .walk-secondary {
+  color: #1d4ed8;
+  font-size: 13px;
 }

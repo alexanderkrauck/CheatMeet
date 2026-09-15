@@ -10,6 +10,7 @@ import {
   ArrowRight,
   FolderOpen,
   MoreHorizontal,
+  Languages,
   Loader2,
   Trash2,
   Upload,
@@ -43,7 +44,7 @@ import {
 } from "../lib/session";
 import { startProcessing } from "../lib/pipeline";
 import { audioExtension } from "../../shared/analysis";
-import MeetingLanguages from "../components/MeetingLanguages";
+import MeetingLanguages, { languageLabel } from "../components/MeetingLanguages";
 import DriveSettings from "../components/DriveSettings";
 import {
   captureQueue,
@@ -102,7 +103,13 @@ export default function RecordPage() {
 
   const [loading, setLoading] = useState(true);
   const [sheet, setSheet] = useState<
-    "settings" | "options" | "leave" | "sources" | "share-explainer" | null
+    | "settings"
+    | "options"
+    | "leave"
+    | "sources"
+    | "languages"
+    | "share-explainer"
+    | null
   >(null);
   const [online, setOnline] = useState(navigator.onLine);
   const [folder, setFolder] = useState(savedDriveFolder);
@@ -110,6 +117,18 @@ export default function RecordPage() {
   const [audioSources, setAudioSources] = useState<AudioSourcePreference>(() =>
     systemAudioAvailable ? audioSourcePreference() : "mic",
   );
+  // The pill shows its value, including the speaker assumption that moved into
+  // its sheet — a setting you cannot see is a setting you forget you set.
+  const solo = draft.report.singleSpeakerSources;
+  const sourceSummary =
+    (audioSources === "mic" ? "Nur Mikrofon" : "Mikrofon + System") +
+    (solo?.mic && solo?.system && audioSources === "mic+system"
+      ? " · je 1 Person"
+      : solo?.mic
+        ? " · 1 Person am Mikro"
+        : solo?.system && audioSources === "mic+system"
+          ? " · 1 Person im System"
+          : "");
   const [, refreshDriveSession] = useState(0);
   const operation = useRef(false);
   const pendingLocalOnly = useRef(false);
@@ -366,33 +385,25 @@ export default function RecordPage() {
             <main className={`walk-content${state === "ready" ? " is-ready" : ""}`}>
               {state === "ready" ? (
                 <>
-                  {/* Above the title on purpose: picking an event fills the
-                      field below it, so the field cannot come first. */}
-                  <CalendarMatch
-                    atMs={Date.parse(draft.report.date) || Date.now()}
-                    selectedId={draft.report.calendarEventId}
-                    label="TERMIN"
-                    onPick={(event) => setCaptureEvent(event)}
-                  />
-                  <label className="walk-project">
-                    <span>PROJEKT / MEETING</span>
-                    <input
-                      id="title"
-                      placeholder="z. B. Weekly Sync · Q3 Planning"
-                      value={draft.report.title}
-                      onChange={(e) => setCaptureTitle(e.target.value)}
+                  {/* One object, not two labelled rows: picking the event
+                      fills the title, so they are the same thing. Neither
+                      eyebrow survives — the placeholder names the field, and
+                      the marketing hero that used to sit under them is what
+                      pushed the actual controls below the fold. */}
+                  <div className="walk-meeting-card">
+                    <CalendarMatch
+                      atMs={Date.parse(draft.report.date) || Date.now()}
+                      selectedId={draft.report.calendarEventId}
+                      onPick={(event) => setCaptureEvent(event)}
                     />
-                  </label>
-                  <div className="walk-ready-intro">
-                    <h1>
-                      Ein Meeting.
-                      <br />
-                      Alles festgehalten.
-                    </h1>
-                    <p>
-                      Sprich und diskutiere frei, CheatMeet protokolliert im
-                      Hintergrund.
-                    </p>
+                    <label className="walk-project">
+                      <input
+                        id="title"
+                        placeholder="Titel des Meetings"
+                        value={draft.report.title}
+                        onChange={(e) => setCaptureTitle(e.target.value)}
+                      />
+                    </label>
                   </div>
                   <div className="walk-settings-row">
                     <button
@@ -417,29 +428,23 @@ export default function RecordPage() {
                       )}
                       <span>
                         <small>AUDIOQUELLEN</small>
+                        <strong>{sourceSummary}</strong>
+                      </span>
+                    </button>
+                    <button
+                      className="walk-folder"
+                      aria-haspopup="dialog"
+                      onClick={() => setSheet("languages")}
+                    >
+                      <Languages size={18} />
+                      <span>
+                        <small>SPRACHEN</small>
                         <strong>
-                          {audioSources === "mic"
-                            ? "Nur Mikrofon"
-                            : "Mikrofon + System"}
+                          {languageLabel(draft.report.speech?.languages)}
                         </strong>
                       </span>
                     </button>
                   </div>
-                  <MeetingLanguages value={draft.report.speech?.languages} onChange={setCaptureLanguages} />
-                  <fieldset className="walk-speaker-assumptions">
-                    <legend>Personen pro Audioquelle</legend>
-                    <label>
-                      <input type="checkbox" checked={!!draft.report.singleSpeakerSources?.mic}
-                        onChange={event => setCaptureSingleSpeaker("mic", event.target.checked)} />
-                      Nur eine Person am Mikrofon
-                    </label>
-                    {audioSources === "mic+system" && <label>
-                      <input type="checkbox" checked={!!draft.report.singleSpeakerSources?.system}
-                        onChange={event => setCaptureSingleSpeaker("system", event.target.checked)} />
-                      Nur eine Person im Systemaudio
-                    </label>}
-                    <p>Für dieses Meeting: Alle Beiträge der gewählten Quelle gehören zu einer Person, auch nach einer Pause. Namen kannst du direkt im Transkript ändern. Ohne Häkchen werden Stimmen automatisch unterschieden.</p>
-                  </fieldset>
                 </>
               ) : recording ? (
                 <LiveMeeting
@@ -666,6 +671,8 @@ export default function RecordPage() {
                 ? "Dein Bericht ist noch nicht gesichert"
                 : sheet === "sources"
                   ? "Audioquellen"
+                  : sheet === "languages"
+                    ? "Sprachen"
                   : sheet === "share-explainer"
                     ? "Gleich fragt der Browser"
                     : "Weitere Optionen"
@@ -722,7 +729,29 @@ export default function RecordPage() {
                 </span>
                 {audioSources === "mic" && <Check size={18} />}
               </button>
+              {/* Who is on each source is a property of the sources, so it
+                  lives with them rather than as a fieldset in the main flow. */}
+              <fieldset className="walk-speaker-assumptions">
+                <legend>Personen pro Audioquelle</legend>
+                <label>
+                  <input type="checkbox" checked={!!draft.report.singleSpeakerSources?.mic}
+                    onChange={event => setCaptureSingleSpeaker("mic", event.target.checked)} />
+                  Nur eine Person am Mikrofon
+                </label>
+                {audioSources === "mic+system" && <label>
+                  <input type="checkbox" checked={!!draft.report.singleSpeakerSources?.system}
+                    onChange={event => setCaptureSingleSpeaker("system", event.target.checked)} />
+                  Nur eine Person im Systemaudio
+                </label>}
+                <p>Für dieses Meeting: Alle Beiträge der gewählten Quelle gehören zu einer Person, auch nach einer Pause. Namen kannst du direkt im Transkript ändern. Ohne Häkchen werden Stimmen automatisch unterschieden.</p>
+              </fieldset>
             </div>
+          ) : sheet === "languages" ? (
+            <MeetingLanguages
+              value={draft.report.speech?.languages}
+              onChange={setCaptureLanguages}
+              bare
+            />
           ) : sheet === "share-explainer" ? (
             <div className="walk-explainer">
               <p>
