@@ -2380,6 +2380,14 @@ body {
   gap: 6px;
   margin-top: 12px;
 }
+/* The loading, error and empty branches are one-line sentences, and the empty
+   one leads with an icon — which Tailwind's preflight would otherwise put on a
+   line of its own, the same way it broke the remove control. */
+.calendar-match > p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .calendar-match-label {
   font-size: 9px;
   font-weight: 700;

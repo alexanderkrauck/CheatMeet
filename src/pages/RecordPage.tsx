@@ -474,6 +474,7 @@ export default function RecordPage() {
                   <CalendarMatch
                     atMs={Date.parse(draft.report.date) || Date.now()}
                     selectedId={draft.report.calendarEventId}
+                    label="TERMIN"
                     onPick={(event) => setCaptureEvent(event)}
                   />
                   <div className="walk-review-media">
