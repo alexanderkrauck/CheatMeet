@@ -6,7 +6,8 @@ vi.mock("idb-keyval", () => ({
   get: async (k: string) => db.get(k),
   set: async (k: string, v: unknown) => void db.set(k, v),
   del: async (k: string) => void db.delete(k),
-  update: async () => {},
+  update: async (k: string, fn: (v: unknown) => unknown) =>
+    void db.set(k, fn(db.get(k))),
   setMany: async (entries: [string, unknown][]) =>
     entries.forEach(([k, v]) => db.set(k, v)),
   delMany: async (ks: string[]) => ks.forEach((k) => db.delete(k)),

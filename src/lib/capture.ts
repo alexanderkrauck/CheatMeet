@@ -11,6 +11,7 @@ import {
 import { errorMessage } from "./session";
 import { auth } from "./firebase";
 import type { AudioSourcePreference } from "./audioSources";
+import { describeAudioSources } from "./audioSourceState";
 import { startAssemblyLive } from "./assemblyLive";
 import { renderTranscript, validLanguages, renameSpeaker } from "../../shared/transcription";
 import { defaultLanguages } from "./meetingDefaults";
@@ -379,17 +380,22 @@ export async function startCapture(
     // getDisplayMedia and discarding the result would still interrupt them
     // with a dialog for something they already said they did not want.
     let system: MediaStream | undefined;
-    if (audioSources === "mic+system" && navigator.mediaDevices.getDisplayMedia) {
+    const displayMediaSupported = !!navigator.mediaDevices.getDisplayMedia;
+    if (audioSources === "mic+system" && displayMediaSupported) {
       emit({
         busy: "Systemaudio freigeben … Teile den Tab oder Bildschirm und aktiviere „Audio teilen“.",
       });
       system = await share;
       if (ownerChanged()) { releaseCapture(); return; }
-      if (!system) emit({ warning: "Systemaudio wurde nicht freigegeben. Es wird nur das Mikrofon aufgenommen." });
-      else if (!system.getAudioTracks().length) emit({ warning: "Die Freigabe enthält kein Systemaudio. Es wird nur das Mikrofon aufgenommen. Prüfe beim nächsten Mal „Audio teilen“ und ob dein Browser Audio für den gewählten Tab oder Bildschirm unterstützt." });
-    } else if (audioSources === "mic+system") {
-      emit({ warning: "Dieser Browser unterstützt keine Bildschirmfreigabe. Es wird nur das Mikrofon aufgenommen." });
     }
+    // One resolution feeds the warning, the stored source list and the consent
+    // notice, so the notice cannot claim a source the recorder never got.
+    const resolved = describeAudioSources({
+      requested: audioSources,
+      displayMediaSupported,
+      system,
+    });
+    if (resolved.warning) emit({ warning: resolved.warning });
 
     // The mixed stream is the durable recording; transcription reads each
     // source separately so speech is never lost under what is playing.
@@ -413,7 +419,7 @@ export async function startCapture(
     clock.reset();
     await persist({
       ...snapshot.draft,
-      report: { ...snapshot.draft.report, date: new Date().toISOString(), captureState: "recording", transcriptionOrigin: "live", captureSources: system?.getAudioTracks().length ? ["mic", "system"] : ["mic"] },
+      report: { ...snapshot.draft.report, date: new Date().toISOString(), captureState: "recording", transcriptionOrigin: "live", captureSources: resolved.sources },
     });
     void navigator.storage?.persist?.().catch(() => {});
 
@@ -672,10 +678,15 @@ export async function importAudio(file: File) {
     // job from the previous file under the same report ID.
     // An import is a new meeting: without this it inherits whenever this draft
       // slot was first opened, which the calendar and the list both show.
-      report: { ...snapshot.draft.report, id: crypto.randomUUID(), date: new Date().toISOString(), rawAudioUrl: undefined,
+      report: { ...snapshot.draft.report, id: crypto.randomUUID(), date: new Date().toISOString(), updatedAt: undefined, error: "", rawAudioUrl: undefined,
       transcriptionOrigin: "import", captureState: undefined, captureSources: undefined, singleSpeakerSources: undefined,
       driveFolderId: undefined, driveReportId: undefined, driveMarkdownId: undefined,
-      driveTranscriptId: undefined, driveSyncedAt: undefined,
+      driveTranscriptId: undefined, driveConsentId: undefined, driveSyncedAt: undefined,
+      // An inherited consent record would attach one meeting's permission —
+      // and one meeting's deletion deadline — to a different recording.
+      consent: undefined, audioDeletedAt: undefined, audioDeleteAttempts: undefined,
+      audioDeleteError: undefined, transcriptChars: undefined, participants: undefined,
+      speakerReviewPending: undefined,
       calendarEventId: undefined, calendarId: undefined, calendarLink: undefined,
       calendarSyncedAt: undefined, calendarError: undefined, transcription: "", summary: "", todos: [], takeaways: [], status: "pending", durationMs: 0,
       speech: { provider: "assemblyai", phase: "pending", languages: snapshot.draft.report.speech?.languages || defaultLanguages(), turns: [], speakerNames: {} } },

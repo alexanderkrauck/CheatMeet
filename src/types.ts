@@ -1,4 +1,5 @@
 import type { Todo } from "../shared/analysis";
+import type { ConsentRecord } from "../shared/consent";
 import type { MeetingTranscript } from "../shared/transcription";
 export interface ReportData {
   id: string;
@@ -27,7 +28,23 @@ export interface ReportData {
   driveReportId?: string;
   driveMarkdownId?: string;
   driveTranscriptId?: string;
+  driveConsentId?: string;
   driveSyncedAt?: string;
+  /**
+   * What the participants were actually told, frozen at the moment they were
+   * told it. The retention promised here is the retention the sweep enforces,
+   * so the two can never drift apart.
+   */
+  consent?: ConsentRecord;
+  /** Set only after Drive confirmed the audio was moved to the trash. */
+  audioDeletedAt?: string;
+  audioDeleteAttempts?: number;
+  audioDeleteError?: string;
+  /** >0 means a transcript exists, but not on this device. */
+  transcriptChars?: number;
+  /** Resolved speaker display names, so the index can answer "who was there". */
+  participants?: string[];
+  speakerReviewPending?: boolean;
   /** The calendar event this meeting belongs to, once matched or created. */
   calendarEventId?: string;
   calendarId?: string;

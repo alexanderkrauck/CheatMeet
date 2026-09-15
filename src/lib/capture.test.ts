@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildConsentRecord, consentFacts } from "../../shared/consent";
 
 vi.mock("./firebase", () => ({ auth: { currentUser: { uid: "capture-test" } } }));
 vi.mock("./local", () => ({
@@ -209,14 +210,63 @@ it("retains a live speaker name through partials and final live updates", async 
 it("treats a replacement import as new audio and clears old recording provenance", async () => {
   await capture.startCapture(true, async () => {}, "mic");
   capture.stopCapture(); await capture.finishTranscription();
-  const previous = capture.captureSnapshot().draft.report.id;
+  const draft = capture.captureSnapshot().draft;
+  const previous = draft.report.id;
+  // Every optional field carries a recognisable value, so a field added to
+  // ReportData later fails this test until it is deliberately classified as
+  // minted, surviving, or cleared. An inherited value would attach one
+  // meeting's consent, deletion deadline or Drive file to another recording.
+  const populated = {
+    id: previous, date: "2020-01-01T00:00:00.000Z", updatedAt: "2020-01-02T00:00:00.000Z",
+    projectName: "Projekt", title: "Titel", suggestedTitle: "Vorschlag",
+    summary: "Alte Zusammenfassung", transcription: "Alter Text",
+    todos: [{ text: "alt", done: false }], takeaways: ["alt"],
+    status: "completed" as const, error: "Alter Fehler", durationMs: 4321,
+    captureState: "stopped" as const, transcriptionOrigin: "live" as const,
+    captureSources: ["mic", "system"] as ("mic" | "system")[],
+    singleSpeakerSources: { mic: true },
+    rawAudioUrl: "alte-audio-id", driveFolderId: "ordner", driveReportId: "json",
+    driveMarkdownId: "md", driveTranscriptId: "transkript", driveConsentId: "einwilligung",
+    driveSyncedAt: "2020-01-02T00:00:00.000Z",
+    consent: buildConsentRecord(
+      consentFacts({ sources: ["mic"], folderName: "Ordner", retention: { audioDays: 30, textDays: null } }),
+      { obtainedAt: "2020-01-01T00:00:00.000Z", method: "spoken", allInformed: true },
+    ),
+    audioDeletedAt: "2020-02-01T00:00:00.000Z", audioDeleteAttempts: 2,
+    audioDeleteError: "alter Fehler", transcriptChars: 99,
+    participants: ["Alex"], speakerReviewPending: true,
+    calendarEventId: "ev", calendarId: "cal", calendarLink: "https://example.test",
+    calendarSyncedAt: "2020-01-02T00:00:00.000Z", calendarError: "alter Kalenderfehler",
+  };
+  Object.assign(draft.report, populated);
   await capture.importAudio(new File(["audio"], "import.webm", {type:"audio/webm"}));
   const next = capture.captureSnapshot().draft;
+  const report = next.report as unknown as Record<string, unknown>;
+
+  // Freshly minted for the new meeting.
   expect(next.report.id).not.toBe(previous);
+  expect(next.report.date).not.toBe(populated.date);
   expect(next.report.transcriptionOrigin).toBe("import");
-  expect(next.report.captureState).toBeUndefined();
-  expect(next.report.captureSources).toBeUndefined();
+  expect(next.report.status).toBe("pending");
+  expect(next.report.transcription).toBe("");
+  expect(next.report.summary).toBe("");
+  expect(next.report.error).toBe("");
+  expect(next.report.todos).toEqual([]);
+  expect(next.report.takeaways).toEqual([]);
+  expect(next.report.durationMs).toBe(0);
+  expect(next.report.speech?.phase).toBe("pending");
+  expect(next.report.speech?.turns).toEqual([]);
   expect(next.speakerReference).toBeUndefined();
+
+  const minted = new Set(["id", "date", "transcriptionOrigin", "status", "transcription",
+    "summary", "error", "todos", "takeaways", "durationMs", "speech"]);
+  // A name the user typed is theirs, not the previous recording's provenance.
+  const survives = new Set(["title", "projectName", "suggestedTitle"]);
+  for (const key of Object.keys(populated))
+    if (!minted.has(key) && !survives.has(key))
+      expect(report[key], `${key} must not survive an import`).toBeUndefined();
+  for (const key of survives)
+    expect(report[key], `${key} must survive an import`).toBeDefined();
 });
 
 it("persists independent single-person choices, passes them to streaming and locks them during capture", async () => {
