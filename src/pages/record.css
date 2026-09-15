@@ -1292,3 +1292,8 @@
   font-size: 0.88rem;
   line-height: 1.5;
 }
+.consent-objection {
+  border-left: 3px solid #b91c1c;
+  padding-left: 10px;
+  color: #b91c1c;
+}

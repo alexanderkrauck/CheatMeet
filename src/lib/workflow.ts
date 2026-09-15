@@ -9,7 +9,13 @@ import {
   downloadDriveFile,
 } from "./drive";
 import { audioExtension, validateAnalysis } from "../../shared/analysis";
-import { consentToMarkdown, reportToMarkdown } from "./markdown";
+import { toArchive } from "./archive";
+import {
+  consentToMarkdown,
+  reportToMarkdown,
+  transcriptToMarkdown,
+} from "./markdown";
+import { refreshArchiveIndex } from "./archiveDrive";
 import { withWebmDuration } from "./webmDuration";
 import type { Draft, ReportData } from "../types";
 import { prepareTranscript } from "./prepareTranscript";
@@ -239,7 +245,7 @@ export async function syncReport(report: ReportData, token: string) {
   if (next.transcription) {
     next.driveTranscriptId = await run(() =>
       uploadFileToFolder(
-        new Blob([next.transcription], {
+        new Blob([transcriptToMarkdown(next)], {
           type: "text/markdown;charset=utf-8",
         }),
         "transkript.md",
@@ -257,7 +263,13 @@ export async function syncReport(report: ReportData, token: string) {
   next.driveReportId = await run(() =>
     uploadFileToFolder(
       new Blob(
-        [JSON.stringify({ ...next, driveSyncedAt: syncedAt }, null, 2)],
+        [
+          JSON.stringify(
+            toArchive({ ...next, driveSyncedAt: syncedAt }, syncedAt),
+            null,
+            2,
+          ),
+        ],
         { type: "application/json" },
       ),
       "bericht_daten.json",
@@ -269,7 +281,15 @@ export async function syncReport(report: ReportData, token: string) {
   );
   next.driveSyncedAt = syncedAt;
   await checkpoint();
-  return { report: next, warning: await run(() => saveReport(next)) };
+  const warning = await run(() => saveReport(next));
+  // Best effort: the overview is a convenience for whoever reads the folder
+  // later, and a saved meeting must never fail because it could not refresh.
+  try {
+    await run(() => refreshArchiveIndex(owner, token, syncedAt));
+  } catch {
+    // The per-meeting files are the source of truth and are already written.
+  }
+  return { report: next, warning };
 }
 export async function restoreDraft(
   report: ReportData,
@@ -278,7 +298,9 @@ export async function restoreDraft(
   const { run } = ownedOperation();
   if (!report.rawAudioUrl)
     throw new Error(
-      "Keine Audioaufnahme in Drive vorhanden. Bitte den lokalen Entwurf öffnen.",
+      report.audioDeletedAt
+        ? "Die Originalaufnahme wurde nach der zugesagten Aufbewahrungsfrist gelöscht. Transkript und Zusammenfassung bleiben erhalten."
+        : "Keine Audioaufnahme in Drive vorhanden. Bitte den lokalen Entwurf öffnen.",
     );
   const audio = await run(() => downloadDriveFile(report.rawAudioUrl!, token));
   return { report, audio };

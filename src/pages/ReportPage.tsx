@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { ConsentRecordPanel } from "../components/ConsentRecordPanel";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -311,7 +312,12 @@ export default function ReportPage({
         blob = await downloadDriveFile(view.rawAudioUrl, token);
       }
       if (uid() !== owner || request !== audioRequest.current) return;
-      if (!blob) throw new Error("Die Originalaufnahme ist hier nicht verfügbar.");
+      if (!blob)
+        throw new Error(
+          view.audioDeletedAt
+            ? "Die Originalaufnahme wurde nach der zugesagten Aufbewahrungsfrist gelöscht. Transkript und Zusammenfassung bleiben erhalten."
+            : "Die Originalaufnahme ist hier nicht verfügbar.",
+        );
       blob = await withWebmDuration(blob, view.durationMs || 0);
       if (uid() !== owner || request !== audioRequest.current) return;
       setAudioUrl(URL.createObjectURL(blob));
@@ -578,6 +584,7 @@ export default function ReportPage({
                 <p className="muted">Keine Erkenntnisse erkannt.</p>
               )}
           </section>
+          <ConsentRecordPanel report={view} />
         </div>
       </fieldset>
 

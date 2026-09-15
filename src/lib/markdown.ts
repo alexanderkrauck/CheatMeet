@@ -38,10 +38,42 @@ function verbatim(text: string): string {
   return `${fence}text\n${text}\n${fence}`;
 }
 
+/**
+ * Identifies the file on its own, so a transcript or summary lifted out of the
+ * archive can still be attributed to a meeting without the folder around it.
+ */
+export function meetingFrontmatter(report: ReportData): string {
+  const entries: [string, unknown][] = [
+    ["schema", "cheatmeet.meeting/1"],
+    ["id", report.id],
+    ["date", report.date],
+    ["title", report.title],
+    ["duration_ms", report.durationMs ?? null],
+    ["participants", report.participants ?? []],
+    ["sources", report.captureSources ?? []],
+    ["consent_obtained_at", report.consent?.obtainedAt ?? null],
+    ["retention_audio_days", report.consent?.facts.retention.audioDays ?? null],
+    ["audio_deleted_at", report.audioDeletedAt ?? null],
+  ];
+  return [
+    "---",
+    ...entries.map(([key, value]) => `${key}: ${yamlValue(value)}`),
+    "---",
+    "",
+  ].join("\n");
+}
+
+/** The transcript as its own attributable document. */
+export function transcriptToMarkdown(report: ReportData): string {
+  return `${meetingFrontmatter(report)}${report.transcription}`;
+}
+
 /** Portable human-readable export. Drive links retain the files' existing private permissions. */
 export function reportToMarkdown(report: ReportData): string {
   const when = new Date(report.date);
   const lines = [
+    meetingFrontmatter(report).trimEnd(),
+    "",
     `# ${heading(report.title)}`,
     "",
     `Datum: ${heading(

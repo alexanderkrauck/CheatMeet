@@ -61,6 +61,66 @@ describe("Drive storage", () => {
     );
     expect(rememberToken).toHaveBeenCalledWith(undefined);
   });
+  const folderWith = (document: unknown) =>
+    vi
+      .fn()
+      .mockResolvedValueOnce(
+        response({ files: [{ id: "folder", name: "Meeting 2026-09-15" }] }),
+      )
+      .mockResolvedValueOnce(
+        response({ files: [{ id: "json", name: "bericht_daten.json" }] }),
+      )
+      .mockResolvedValueOnce(response(document));
+
+  it("reads a document written under the current archive contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      folderWith({
+        archive: { version: 1, generator: "cheatmeet", generatedAt: "2026-09-15T12:00:00.000Z" },
+        id: "r1",
+        title: "Weekly Sync",
+        date: "2026-09-15T12:00:00.000Z",
+        summary: "Roadmap besprochen.",
+        transcription: "Gesagtes",
+        todos: [],
+        takeaways: [],
+        driveConsentId: "einwilligung-id",
+      }),
+    );
+
+    const { reports, warnings } = await listDriveReports("token", "root");
+
+    expect(warnings).toEqual([]);
+    expect(reports).toHaveLength(1);
+    // The ids always come from where the file was found.
+    expect(reports[0].driveFolderId).toBe("folder");
+    expect(reports[0].driveReportId).toBe("json");
+    // A v1 file carries no status; a summarised meeting is a finished one.
+    expect(reports[0].status).toBe("completed");
+    expect(reports[0].driveConsentId).toBe("einwilligung-id");
+  });
+
+  it("restores a meeting whose consent record is unreadable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      folderWith({
+        id: "r1",
+        title: "Weekly Sync",
+        date: "2026-09-15T12:00:00.000Z",
+        todos: [],
+        takeaways: [],
+        consent: "ja klar",
+      }),
+    );
+
+    const { reports, warnings } = await listDriveReports("token", "root");
+
+    // Losing the evidence must not cost the user the meeting.
+    expect(warnings).toEqual([]);
+    expect(reports[0].title).toBe("Weekly Sync");
+    expect(reports[0].consent).toBeUndefined();
+  });
+
   it.each([
     { field: "todos", value: "not-an-array" },
     { field: "takeaways", value: [{ text: "object instead of string" }] },

@@ -1,4 +1,4 @@
-import { asTodos } from "../../shared/analysis";
+import { fromArchive } from "./archive";
 import { ensureDriveToken, rememberToken } from "./session";
 // A cached token alone does not prove the Drive scope was granted. Check it
 // before capture without creating folders or reading filenames/media.
@@ -183,6 +183,21 @@ export async function getDriveFolder(
     );
   return { id: data.id, name: data.name };
 }
+/** One file by exact name inside a folder, or undefined. */
+export async function findFileInFolder(
+  name: string,
+  parentId: string,
+  token: string,
+): Promise<string | undefined> {
+  const escape = (value: string) =>
+    value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const files = await listFiles(
+    token,
+    `'${escape(parentId)}' in parents and name = '${escape(name)}' and trashed = false`,
+  );
+  return files[0]?.id;
+}
+
 async function listFiles(
   token: string,
   query: string,
@@ -229,67 +244,17 @@ export async function listDriveReports(
     );
     for (const file of files) {
       try {
-        const report = JSON.parse(
+        const parsed = JSON.parse(
           await (await downloadDriveFile(file.id, token)).text(),
         );
-        if (
-          !report ||
-          typeof report.id !== "string" ||
-          typeof report.title !== "string" ||
-          typeof report.date !== "string" ||
-          !Number.isFinite(Date.parse(report.date))
-        )
-          throw new Error("Ungültige Berichtsdaten");
-        // Validate fields rendered by report views before admitting external JSON.
-        if (
-          report.takeaways !== undefined &&
-          (!Array.isArray(report.takeaways) ||
-            !report.takeaways.every((item: unknown) => typeof item === "string"))
-        )
-          throw new Error("Ungültige Berichtsinhalte");
-        if (report.todos !== undefined && !Array.isArray(report.todos))
-          throw new Error("Ungültige Berichtsinhalte");
-        // Accepts both the legacy string form and the structured one, and drops
-        // anything that is neither.
-        report.todos = asTodos(report.todos);
-        if (
-          report.rawAudioUrl !== undefined &&
-          typeof report.rawAudioUrl !== "string"
-        )
-          throw new Error("Ungültige Audioreferenz");
-        // Calendar references go straight into a Google API path; a non-string
-        // here would reach it as "[object Object]".
-        for (const field of [
-          "calendarEventId",
-          "calendarId",
-          "calendarLink",
-          "calendarSyncedAt",
-        ])
-          if (report[field] !== undefined && typeof report[field] !== "string")
-            delete report[field];
-        if (
-          report.updatedAt !== undefined &&
-          (typeof report.updatedAt !== "string" ||
-            !Number.isFinite(Date.parse(report.updatedAt)))
-        )
-          delete report.updatedAt;
-        if (
-          !["pending", "analyzing", "completed", "error"].includes(
-            report.status,
-          )
-        )
-          report.status = "pending";
-        if (typeof report.error !== "string") delete report.error;
-        report.summary =
-          typeof report.summary === "string" ? report.summary : "";
-        report.transcription =
-          typeof report.transcription === "string" ? report.transcription : "";
-        report.takeaways = report.takeaways || [];
-        reports.push({
-          ...report,
-          driveFolderId: folder.id,
-          driveReportId: file.id,
-        });
+        // One boundary owns what a stored meeting may contain, so an
+        // externally edited file cannot inject keys into the local store.
+        reports.push(
+          fromArchive(parsed, {
+            driveFolderId: folder.id,
+            driveReportId: file.id,
+          }),
+        );
       } catch (error) {
         if (!driveConnectionValid(error)) throw error;
         warnings.push(
