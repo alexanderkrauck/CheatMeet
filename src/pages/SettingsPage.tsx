@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { signOut } from "firebase/auth";
 import { LogOut, Mic, ShieldOff, UserRound } from "lucide-react";
 import DriveSettings from "../components/DriveSettings";
@@ -47,18 +47,6 @@ export default function SettingsPage() {
     hasCalendarGrant,
     () => false,
   );
-  // Distinguishes "this installation has no calendar" from "your grant has none".
-  const [calendarConfigured, setCalendarConfigured] = useState<boolean | null>(null);
-  useEffect(() => {
-    let active = true;
-    fetch("/api/auth/config")
-      .then((response) => response.json())
-      .then((data) => active && setCalendarConfigured(data.calendar === true))
-      .catch(() => active && setCalendarConfigured(null));
-    return () => {
-      active = false;
-    };
-  }, []);
   const [revoking, setRevoking] = useState(false);
   const [error, setError] = useState("");
 
@@ -233,9 +221,8 @@ export default function SettingsPage() {
             </>
           ) : (
             <p className="muted">
-              {calendarConfigured === false
-                ? "Die Kalender-Anbindung ist für diese Installation nicht aktiviert."
-                : "Für dieses Konto ist der Kalender noch nicht freigegeben. Melde dich ab und erneut an — Google fragt dann nach dem Kalenderzugriff."}
+              Für dieses Konto ist der Kalender noch nicht freigegeben. Melde
+              dich ab und erneut an — Google fragt dann nach dem Kalenderzugriff.
             </p>
           )}
         </section>

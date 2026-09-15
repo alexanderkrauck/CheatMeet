@@ -33,10 +33,7 @@ export const grantsCalendar = (scope = "") => {
   const granted = scope.split(/\s+/);
   return granted.includes(CALENDAR_SCOPE) || granted.includes(CALENDAR_SUPERSET);
 };
-export const calendarEnabled = () =>
-  String(process.env.GOOGLE_CALENDAR || "").toLowerCase() === "true";
-const scopes = () =>
-  `openid email profile ${DRIVE_SCOPE}${calendarEnabled() ? ` ${CALENDAR_SCOPE}` : ""}`;
+const SCOPES = `openid email profile ${DRIVE_SCOPE} ${CALENDAR_SCOPE}`;
 const STATE_COOKIE = "cheatmeet_oauth_state";
 
 export interface GoogleTokens {
@@ -67,7 +64,7 @@ export function buildAuthUrl({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: scopes(),
+    scope: SCOPES,
     // Required to be issued a refresh token at all, and to be issued a new one
     // rather than silently reusing a grant we may not have stored.
     access_type: "offline",
@@ -107,8 +104,8 @@ async function tokenRequest(
     accessToken: String(data.access_token || ""),
     expiresInSeconds: Number(data.expires_in || 3600),
     // What the grant actually covers. A refresh token's scope set is fixed at
-    // grant time, so a user who consented before calendar was enabled keeps a
-    // Drive-only token however the server is configured now.
+    // grant time, so a user who consented before the calendar scope was
+    // added keeps a Drive-only token however new the server is.
     scope: typeof data.scope === "string" ? data.scope : undefined,
     refreshToken:
       typeof data.refresh_token === "string" ? data.refresh_token : undefined,
@@ -275,7 +272,6 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
   router.get("/auth/config", (_req, res) =>
     res.json({
       serverAuth: configured(),
-      calendar: calendarEnabled(),
       clientId: Boolean(clientId),
       clientSecret: Boolean(clientSecret),
     }),
@@ -388,8 +384,9 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
       res.json({
         accessToken: tokens.accessToken,
         expiresInSeconds: tokens.expiresInSeconds,
-        // The client needs the real scope set, not the server's intent: these
-        // differ for every user who granted before calendar was turned on.
+        // The client needs the real scope set, not what this request asked
+        // for: they differ for everyone who granted before the calendar
+        // scope was added, until they consent again.
         calendar: grantsCalendar(tokens.scope),
       });
     } catch (error) {
