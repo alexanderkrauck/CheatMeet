@@ -1,3 +1,4 @@
+import { dayKeyLabel, localDayKey } from "./meetingMeta";
 import type { CalendarEvent } from "./calendar";
 
 /**
@@ -142,6 +143,32 @@ export function countdownLabel(
     return event.allDay ? "morgen" : `morgen ${clock(event.startMs)}`;
   const weekday = start.toLocaleDateString("de-AT", { weekday: "short" });
   return event.allDay ? weekday : `${weekday} ${clock(event.startMs)}`;
+}
+
+/**
+ * One event on one line: when it runs, and who is in it.
+ *
+ * Three screens were composing this by hand and disagreeing — the recording
+ * picker showed a bare start time where the rest of the app shows a range and
+ * a guest list, which is why a picked event read as less than it was.
+ *
+ * `withDate` is for the places where the event may not be on the day the
+ * surrounding screen is about, such as assigning a recording across days.
+ */
+export function eventLine(event: CalendarEvent, withDate = false): string {
+  const day = withDate
+    ? dayKeyLabel(localDayKey(new Date(event.startMs).toISOString()), {
+        weekday: "short",
+        day: "numeric",
+        month: "long",
+      })
+    : "";
+  // A 1:1 is usually titled after the person in it, so the guest list would
+  // print the same name twice in a row.
+  const guests = guestLabel(event);
+  return [day, timeLabel(event), guests === event.title ? "" : guests]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** At most three names, then a count — a guest list is context, not content. */

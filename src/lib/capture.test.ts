@@ -84,6 +84,23 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+describe("discardCapture", () => {
+  it("resets to an empty capture and hands back nothing to navigate to", async () => {
+    // It used to return the id of the fresh blank draft, and the only caller
+    // read that as a destination — so asking to discard left the user standing
+    // on the recorder looking at the take they had just thrown away.
+    await capture.startCapture(true, async () => {}, "mic");
+    const discarded = capture.captureSnapshot().draft.report.id;
+    capture.stopCapture();
+    await capture.finishTranscription();
+    expect(await capture.discardCapture()).toBeUndefined();
+    const after = capture.captureSnapshot();
+    expect(after.state).toBe("ready");
+    expect(after.draft.report.id).not.toBe(discarded);
+    expect(after.draft.audio).toBeUndefined();
+  });
+});
+
 describe("recording audio-source selection", () => {
   it("opens sharing in the click before asynchronous Drive verification", async () => {
     Object.defineProperty(navigator, "onLine", { value: true });

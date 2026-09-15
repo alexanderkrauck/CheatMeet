@@ -4,22 +4,27 @@ import { eventsAround, type CalendarEvent } from "../lib/calendar";
 import { hasCalendarGrant, subscribeDriveSession } from "../lib/session";
 import { rememberPeople } from "../lib/people";
 import { uid } from "../lib/reports";
-
-const clock = (ms: number) =>
-  new Date(ms).toLocaleTimeString("de-AT", { hour: "2-digit", minute: "2-digit" });
+import { eventLine } from "../lib/upcoming";
 
 /**
  * Which planned meeting this recording belongs to. Picking one names the
  * recording and, more usefully, tells the speaker editor who is in the room —
  * attendees are the only outside source of real names this app has.
+ *
+ * Once something is picked it becomes one card that owns its own removal
+ * control. The remove action used to be a bare ✕ and an underlined link
+ * dangling below the list, bound to nothing the eye could connect it to.
  */
 export default function CalendarMatch({
   atMs,
   selectedId,
+  label,
   onPick,
 }: {
   atMs: number;
   selectedId?: string;
+  /** An eyebrow above the control. Omitted where a heading already says it. */
+  label?: string;
   onPick: (event: CalendarEvent | null) => void;
 }) {
   const [events, setEvents] = useState<CalendarEvent[] | null>(null);
@@ -50,45 +55,76 @@ export default function CalendarMatch({
   }, [atMs, granted]);
 
   if (!granted) return null;
-  if (error) return <p className="muted small">{error}</p>;
-  if (!events) return <p className="muted small">Kalender wird geladen …</p>;
-  if (!events.length)
-    return (
-      <p className="muted small">
-        <CalendarDays size={14} /> Kein Termin in der Nähe dieser Uhrzeit.
-      </p>
+
+  const picked = events?.find((event) => event.id === selectedId);
+  const frame = (children: React.ReactNode) => (
+    <div className="calendar-match" role="group" aria-label="Zugehöriger Termin">
+      {label && <span className="calendar-match-label">{label}</span>}
+      {children}
+    </div>
+  );
+
+  // An assignment made days ago, or to an event since moved, falls outside the
+  // window this fetches. Rendering nothing would claim the recording belongs
+  // to nothing while it still carries the link — and would take away the only
+  // control that can clear it.
+  if (selectedId && !picked && events)
+    return frame(
+      <div className="calendar-picked is-unknown">
+        <CalendarDays size={16} aria-hidden="true" />
+        <span>
+          <strong>Zugeordneter Termin</strong>
+          <small>Liegt außerhalb dieses Zeitraums.</small>
+        </span>
+        <button type="button" className="calendar-clear" onClick={() => onPick(null)}>
+          <X size={15} /> Zuordnung aufheben
+        </button>
+      </div>,
     );
 
-  return (
-    <div className="calendar-match" role="group" aria-label="Zugehöriger Termin">
-      {events.map((event) => {
-        const picked = event.id === selectedId;
-        return (
-          <button
-            key={event.id}
-            type="button"
-            className={picked ? "choice active" : "choice"}
-            aria-pressed={picked}
-            onClick={() => onPick(picked ? null : event)}
-          >
-            {picked ? <Check size={16} /> : <CalendarDays size={16} />}
-            <span>
-              <strong>{event.title}</strong>
-              <small>
-                {clock(event.startMs)}
-                {event.attendees.length
-                  ? ` · ${event.attendees.slice(0, 3).join(", ")}${event.attendees.length > 3 ? " …" : ""}`
-                  : ""}
-              </small>
-            </span>
-          </button>
-        );
-      })}
-      {selectedId && (
-        <button type="button" className="text-button" onClick={() => onPick(null)}>
-          <X size={14} /> Zuordnung aufheben
+  if (picked)
+    return frame(
+      <div className="calendar-picked">
+        <Check size={16} aria-hidden="true" />
+        <span>
+          <strong title={picked.title}>{picked.title}</strong>
+          <small>{eventLine(picked)}</small>
+        </span>
+        {/* Inside the card, on the thing it removes. */}
+        <button
+          type="button"
+          className="calendar-clear"
+          aria-label={`Zuordnung zu „${picked.title}“ aufheben`}
+          onClick={() => onPick(null)}
+        >
+          <X size={15} /> Zuordnung aufheben
         </button>
-      )}
-    </div>
+      </div>,
+    );
+
+  if (error) return frame(<p className="muted small">{error}</p>);
+  if (!events) return frame(<p className="muted small">Kalender wird geladen …</p>);
+  if (!events.length)
+    return frame(
+      <p className="muted small">
+        <CalendarDays size={14} /> Kein Termin in der Nähe dieser Uhrzeit.
+      </p>,
+    );
+
+  return frame(
+    events.map((event) => (
+      <button
+        key={event.id}
+        type="button"
+        className="choice"
+        onClick={() => onPick(event)}
+      >
+        <CalendarDays size={16} />
+        <span>
+          <strong>{event.title}</strong>
+          <small>{eventLine(event)}</small>
+        </span>
+      </button>
+    )),
   );
 }

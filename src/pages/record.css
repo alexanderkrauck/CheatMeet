@@ -130,16 +130,6 @@
   max-width: 340px;
   line-height: 1.6;
 }
-.walk-mic-symbol {
-  display: grid;
-  place-items: center;
-  border-radius: 24px;
-  width: 84px;
-  height: 84px;
-  background: #dbeafe;
-  color: #2563eb;
-  margin-bottom: 4px;
-}
 .walk-folder {
   display: flex;
   align-items: center;
@@ -602,11 +592,6 @@
   .walk-review-intro h1 {
     font-size: 28px;
   }
-  .walk-mic-symbol {
-    width: 58px;
-    height: 58px;
-    border-radius: 16px;
-  }
   .walk-ready-intro p,
   .walk-review-intro p {
     font-size: 12px;
@@ -639,9 +624,6 @@
   .walk-review-intro p {
     font-size: 11px;
     line-height: 1.4;
-  }
-  .walk-mic-symbol {
-    display: none;
   }
   .walk-review-intro {
     gap: 7px;

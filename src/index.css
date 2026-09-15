@@ -190,6 +190,12 @@ textarea {
   color: #a44336;
 }
 .text-button {
+  /* Tailwind's preflight makes every svg display:block, so an icon inside a
+     non-flex button lands on its own line — which is exactly how "Zuordnung
+     aufheben" rendered as a bare glyph above an underlined phrase. */
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   text-decoration: underline;
   background: none;
@@ -688,11 +694,6 @@ textarea {
   margin-bottom: 16px;
   font-size: 13px;
   color: var(--muted);
-}
-.search-summary .text-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
 }
 .filters {
   display: inline-flex;
@@ -2379,14 +2380,106 @@ body {
   gap: 6px;
   margin-top: 12px;
 }
+.calendar-match-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: var(--brand);
+}
 .calendar-match .choice {
   padding: 10px 12px;
 }
 .calendar-match .choice strong {
+  display: block;
   font-size: 13px;
 }
-.calendar-match .text-button {
-  justify-self: start;
+.calendar-match .choice small {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* The chosen event, carrying the control that undoes it. White rather than
+   brand-wash: this screen's own background is already a blue gradient, and a
+   pale blue card on it read as a disabled field rather than a selection. */
+.calendar-picked {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 11px 11px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--brand);
+  background: #fff;
+  box-shadow: 0 0 0 3px #2563eb1f;
+  color: var(--brand-ink);
+}
+.calendar-picked > svg {
+  flex-shrink: 0;
+  box-sizing: content-box;
+  width: 16px;
+  height: 16px;
+  padding: 6px;
+  border-radius: 100%;
+  background: var(--brand);
+  color: #fff;
+}
+.calendar-picked > span {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.calendar-picked strong {
+  font-size: 13.5px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-picked small {
+  font-size: 11.5px;
+  color: #3b5e93;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A link the user still holds but cannot see here: honest about what it is,
+   and still clearable. */
+.calendar-picked.is-unknown {
+  border-color: var(--line);
+  box-shadow: none;
+  color: var(--ink-soft);
+}
+.calendar-picked.is-unknown > svg {
+  background: var(--hover);
+  color: var(--muted);
+}
+.calendar-clear {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: #fff;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.calendar-clear:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* Narrow: the button drops under the event rather than crushing its title. */
+@media (max-width: 520px) {
+  .calendar-picked {
+    flex-wrap: wrap;
+  }
+  .calendar-clear {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 /* --- What is coming up ------------------------------------------------------ */

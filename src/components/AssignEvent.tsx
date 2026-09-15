@@ -4,8 +4,7 @@ import CalendarMatch from "./CalendarMatch";
 import { assignReportToEvent } from "../lib/assignEvent";
 import { uid } from "../lib/reports";
 import { errorMessage } from "../lib/session";
-import { timeLabel } from "../lib/upcoming";
-import { dayKeyLabel, localDayKey } from "../lib/meetingMeta";
+import { eventLine } from "../lib/upcoming";
 import type { CalendarEvent } from "../lib/calendar";
 import type { ReportSummary } from "../lib/meetingMeta";
 
@@ -91,18 +90,9 @@ export default function AssignEvent({
       {event ? (
         <p className="assign-target">
           <strong>{event.title}</strong>
-          <small>
-            {/* The date, not only the clock: a recording can be dropped onto an
-                event on another day, and that has to be checkable here. */}
-            {dayKeyLabel(localDayKey(new Date(event.startMs).toISOString()), {
-              weekday: "short",
-              day: "numeric",
-              month: "long",
-            })}
-            {" · "}
-            {timeLabel(event)}
-            {event.attendees.length ? ` · ${event.attendees.join(", ")}` : ""}
-          </small>
+          {/* With the date: a recording can be dropped onto an event on
+              another day, and that has to be checkable here. */}
+          <small>{eventLine(event, true)}</small>
         </p>
       ) : (
         <CalendarMatch

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   countdownLabel,
+  eventLine,
   guestLabel,
   hasGuests,
   imminentMeeting,
@@ -120,6 +121,30 @@ describe("imminentMeeting", () => {
     expect(imminentMeeting([solo, call], now)?.id).toBe("c");
     const sooner = event({ id: "x", attendees: [], startMs: at(8, 5), endMs: at(9) });
     expect(imminentMeeting([sooner, call], now)?.id).toBe("x");
+  });
+});
+
+describe("eventLine", () => {
+  it("gives the range and the guests, where the picker used to show a bare start", () => {
+    expect(eventLine(event())).toBe("09:30–10:30 · Maik Retzlaff");
+  });
+
+  it("drops what an event does not have, rather than leaving separators", () => {
+    expect(eventLine(event({ attendees: [] }))).toBe("09:30–10:30");
+    expect(eventLine(event({ attendees: [], allDay: true }))).toBe("Ganztägig");
+  });
+
+  it("does not print the guest twice when the meeting is named after them", () => {
+    // A 1:1 in a real calendar is titled "Andreas Radler" with Andreas Radler
+    // as its only attendee.
+    expect(eventLine(event({ title: "Maik Retzlaff" }))).toBe("09:30–10:30");
+  });
+
+  it("names the day only where the event may not be on the day in view", () => {
+    const line = eventLine(event(), true);
+    expect(line).toContain("09:30–10:30");
+    expect(line).toContain("16");
+    expect(eventLine(event())).not.toContain("16");
   });
 });
 
