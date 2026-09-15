@@ -1427,3 +1427,21 @@
 .consent-side {
   overflow-y: auto;
 }
+.consent-hint {
+  color: #6b7280;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.consent-all {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid #86efac;
+  border-radius: 10px;
+  background: #dcfce7;
+  padding: 10px 12px;
+  color: #166534;
+  font: inherit;
+  font-weight: 600;
+}

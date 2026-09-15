@@ -242,9 +242,9 @@ export function consentToMarkdown(consent: ConsentRecord): string {
     lines.push(
       `- ${escapeText(person.name)}: ${
         person.stance === "agreed"
-          ? "hat zugestimmt"
+          ? "zugestimmt"
           : person.stance === "objected"
-            ? "hat widersprochen"
+            ? "widersprochen"
             : "informiert, keine ausdrückliche Zustimmung"
       }`,
     );

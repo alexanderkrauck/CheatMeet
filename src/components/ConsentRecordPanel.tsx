@@ -46,11 +46,11 @@ export function ConsentRecordPanel({ report }: { report: ReportData }) {
           <ul className="consent-people">
             {(consent.participants || []).map((person) => (
               <li key={person.name}>
-                {person.name} —{" "}
+                {person.name}:{" "}
                 {person.stance === "agreed"
-                  ? "hat zugestimmt"
+                  ? "zugestimmt"
                   : person.stance === "objected"
-                    ? "hat widersprochen"
+                    ? "widersprochen"
                     : "informiert, keine ausdrückliche Zustimmung"}
               </li>
             ))}

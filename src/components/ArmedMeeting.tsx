@@ -1,4 +1,5 @@
 import {
+  Check,
   Loader2,
   Mic,
   MonitorSpeaker,
@@ -70,6 +71,10 @@ export function ArmedMeeting({
       participants: decision.participants.filter((p) => p.name !== name),
     });
   const refused = objectors(decision.participants);
+  const allAgreed = (participants = decision.participants) =>
+    onDecision({
+      participants: participants.map((p) => ({ ...p, stance: "agreed" as const })),
+    });
   const submit = () => {
     const asked = instruction.trim();
     if (!asked || drafting) return;
@@ -173,6 +178,12 @@ export function ArmedMeeting({
 
         <div className="consent-roster">
           <small>Wer ist dabei — und hat zugestimmt?</small>
+          {!decision.participants.length && (
+            <p className="consent-hint">
+              Ordne das Meeting einem Kalendertermin zu, dann stehen die
+              Eingeladenen hier automatisch.
+            </p>
+          )}
           {decision.participants.map((entry) => (
             <div className="consent-person" key={entry.name}>
               <strong>{entry.name}</strong>
@@ -203,6 +214,25 @@ export function ArmedMeeting({
               </button>
             </div>
           ))}
+          {decision.participants.length === 0 ? (
+            // No calendar match, so no guest list to start from. One tap
+            // beats typing, and it is still an affirmative statement rather
+            // than the absence of an objection.
+            <button
+              className="consent-all"
+              onClick={() =>
+                allAgreed([{ name: "Alle Anwesenden", stance: "silent" }])
+              }
+            >
+              <Check size={15} /> Alle Anwesenden haben zugestimmt
+            </button>
+          ) : (
+            !decision.participants.every((p) => p.stance === "agreed") && (
+              <button className="consent-all" onClick={() => allAgreed()}>
+                <Check size={15} /> Alle haben zugestimmt
+              </button>
+            )
+          )}
           <div className="consent-add">
             <input
               value={person}

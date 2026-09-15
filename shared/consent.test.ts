@@ -358,3 +358,30 @@ describe("who actually agreed", () => {
     expect(() => validateConsentRecord(empty)).toThrow(/wer zugestimmt hat/);
   });
 });
+
+describe("the roster a calendar meeting starts from", () => {
+  it("records a collective agreement as an agreement, not as silence", () => {
+    // One tap for a meeting with no calendar match: still an affirmative
+    // statement by the person recording, which silence never is.
+    const built = buildConsentRecord(facts(), {
+      ...meta,
+      participants: [{ name: "Alle Anwesenden", stance: "agreed" }],
+    });
+
+    expect(everyoneAgreed(built.participants)).toBe(true);
+    expect(built.participants[0].name).toBe("Alle Anwesenden");
+  });
+
+  it("does not start a guest list off as agreed", () => {
+    // Seeded from the calendar, nobody has answered yet.
+    const seeded = buildConsentRecord(facts(), {
+      ...meta,
+      participants: [
+        { name: "Sergio", stance: "silent" },
+        { name: "Anna", stance: "silent" },
+      ],
+    });
+
+    expect(everyoneAgreed(seeded.participants)).toBe(false);
+  });
+});

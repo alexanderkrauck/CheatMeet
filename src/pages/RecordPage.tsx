@@ -125,6 +125,9 @@ export default function RecordPage() {
     address: "du",
     retention: savedRetention(),
   }));
+  // Who the calendar says is in this meeting. The consent roster starts from
+  // this, so the normal case costs no typing at all.
+  const [invited, setInvited] = useState<string[]>([]);
   const [consentParts, setConsentParts] = useState<ConsentParts | null>(null);
   const [consentChat, setConsentChat] = useState<string[]>([]);
   const [drafting, setDrafting] = useState(false);
@@ -225,7 +228,10 @@ export default function RecordPage() {
           // A failed lookup must not block the recording; the picker on this
           // screen is still there to link it by hand.
           const event = await getEvent("primary", requestedEvent).catch(() => null);
-          if (!cancelled && event && !isCapturing()) setCaptureEvent(event);
+          if (!cancelled && event && !isCapturing()) {
+            setCaptureEvent(event);
+            setInvited(event.attendees);
+          }
         }
         if (!cancelled) navigate(`/record?draft=${id}`, { replace: true });
       })
@@ -321,6 +327,7 @@ export default function RecordPage() {
         if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
         await verifyDriveAccess(token);
       }, sources);
+      seedRoster();
       await skipConsentStep();
       return;
     }
@@ -351,7 +358,23 @@ export default function RecordPage() {
       },
       sources,
     );
+    seedRoster();
     await skipConsentStep();
+  }
+
+  /** The guest list is the roster; nobody should have to retype it. */
+  function seedRoster() {
+    setDecision((current) =>
+      current.participants.length
+        ? current
+        : {
+            ...current,
+            participants: invited.map((name) => ({
+              name,
+              stance: "silent" as const,
+            })),
+          },
+    );
   }
 
   /** No notice means no record: the meeting documents no consent at all. */
@@ -498,7 +521,10 @@ export default function RecordPage() {
                     <CalendarMatch
                       atMs={Date.parse(draft.report.date) || Date.now()}
                       selectedId={draft.report.calendarEventId}
-                      onPick={(event) => setCaptureEvent(event)}
+                      onPick={(event) => {
+                        setCaptureEvent(event);
+                        setInvited(event?.attendees || []);
+                      }}
                     />
                     <label className="walk-project">
                       <input
