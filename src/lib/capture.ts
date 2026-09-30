@@ -10,6 +10,7 @@ import { appendRecordingChunk, deleteDraft, getDraft, putDraft } from "./local";
 import { mergeAudioStreams, type MergedAudio } from "./audioMerge";
 import { RecordingClock, preferredRecordingMimeType } from "./recording";
 import type { LiveTranscription } from "./liveTranscription";
+import { startLiveShare, type LiveShare } from "./liveShare";
 import {
   observeRecordingLifecycle,
   type RecordingWakeLockState,
@@ -19,7 +20,7 @@ import { auth } from "./firebase";
 import type { AudioSourcePreference } from "./audioSources";
 import { describeAudioSources } from "./audioSourceState";
 import { startAssemblyLive } from "./assemblyLive";
-import { renderTranscript, validLanguages, renameSpeaker } from "../../shared/transcription";
+import { renderTranscript, validLanguages, renameSpeaker, type LiveConnection } from "../../shared/transcription";
 import { defaultLanguages } from "./meetingDefaults";
 
 export type CaptureState = "ready" | "armed" | "recording" | "paused" | "review";
@@ -42,6 +43,10 @@ export interface CaptureSnapshot {
   wakeLock: RecordingWakeLockState;
   /** The sources actually live, so the notice can name what is captured. */
   sources: ConsentSource[];
+  /** Health of the live transcription connection; not stored with the report. */
+  liveConnection?: LiveConnection;
+  /** Whether an AI assistant is reading the live transcript right now. */
+  liveShare?: "waiting" | "listening" | "off";
 }
 
 const freshDraft = (): Draft => ({
@@ -117,6 +122,33 @@ let sources: { mic?: MediaStream; system?: MediaStream; merged?: MergedAudio } =
 let captureTracks: MediaStreamTrack[] = [];
 let stopSystemWatch: (() => void) | null = null;
 let live: LiveTranscription | null = null;
+/** Lets an assistant with a live grant read along; null when there is no running session. */
+let share: LiveShare | null = null;
+/** Ends the share exactly once. Every place that drops `live` calls this, so none can forget it. */
+function endShare(): Promise<void> {
+  const current = share;
+  share = null;
+  if (!current) return Promise.resolve();
+  return current.end().catch(() => {}).finally(() => {
+    // Only clear the indicator if no newer session has taken over.
+    if (!share && snapshot.liveShare) emit({ liveShare: undefined });
+  });
+}
+/** Nothing here may ever reach the recording: a failing share is silent. */
+function feedShare(speech: Parameters<LiveShare["update"]>[0]) {
+  try {
+    share?.update(speech);
+  } catch {
+    /* the recording matters more */
+  }
+}
+function shareState(state: Parameters<LiveShare["setState"]>[0]) {
+  try {
+    share?.setState(state);
+  } catch {
+    /* as above */
+  }
+}
 let stopLifecycle: (() => void) | null = null;
 let wakeLock: WakeLockSentinel | null = null;
 let ticker: number | undefined;
@@ -537,16 +569,36 @@ export async function beginRecording(decision: ConsentDecision | null) {
       system && system.getAudioTracks().length
         ? new MediaStream(system.getAudioTracks())
         : undefined;
+    void endShare();
+    try {
+      share = startLiveShare({
+        reportId: snapshot.draft.report.id,
+        startedAt: new Date().toISOString(),
+        languages: snapshot.draft.report.speech?.languages || defaultLanguages(),
+        getToken: async () => auth.currentUser?.getIdToken(),
+        onStatus: (liveShare) => emit({ liveShare }),
+      });
+    } catch {
+      share = null;
+    }
     live = startAssemblyLive(
       { mic: new MediaStream(mic.getAudioTracks()), system: systemAudio },
       elapsed,
       (speech) => {
-        if (ownerChanged()) return;
+        if (ownerChanged()) {
+          void endShare();
+          return;
+        }
         const aliases = snapshot.draft.report.speech?.speakerAliases;
         speech = { ...speech, speakerAliases: aliases,
           speakerNames: { ...speech.speakerNames, ...aliases } };
+        // Connection health is shown, not saved: it describes this tab right now.
+        const { liveConnection, ...saved } = speech;
+        speech = saved;
+        feedShare(speech);
         const transcription = renderTranscript(speech);
         emit({
+          liveConnection,
           ...(speech.liveWarning ? { warning: speech.liveWarning } : {}),
           draft: {
             ...snapshot.draft,
@@ -652,7 +704,7 @@ export async function beginRecording(decision: ConsentDecision | null) {
       // recorder's own data events.
       live?.tick();
     }, 500);
-    emit({ state: "recording", durationMs: 0, sources: resolved.sources });
+    emit({ state: "recording", durationMs: 0, sources: resolved.sources, liveConnection: undefined });
   } catch (e) {
     releaseCapture();
     recorder = null;
@@ -668,7 +720,14 @@ export function disarmCapture() {
   releaseCapture();
   recorder = null;
   live = null;
+  void endShare();
   emit({ state: "ready", busy: "", warning: "" });
+}
+
+/** Rebuilds the live transcription connections; the recording itself is untouched. */
+export function restartLive() {
+  if (recorder?.state !== "recording") return;
+  void live?.restart?.();
 }
 
 export function pauseCapture() {
@@ -679,6 +738,7 @@ export function pauseCapture() {
     rec.pause();
     rec.requestData();
     void live?.pause();
+    shareState("paused");
     emit({ state: "paused", durationMs: time });
     void persist({
       ...snapshot.draft,
@@ -699,6 +759,7 @@ export function pauseCapture() {
       return;
     }
     void live?.resume();
+    shareState("recording");
     clock.resume();
     rec.resume();
     emit({ state: "recording", warning: "" });
@@ -723,6 +784,9 @@ export function finishTranscription(): Promise<string> {
   transcriptionDone ||= pipeline.finish().then((transcription) => {
     if (snapshot.owner !== captureOwner || snapshot.draft.report.id !== reportId) return transcription;
     live = null;
+    // The provider has drained, so the share now holds the final words. Not awaited:
+    // ending is bounded but must never hold up the review screen.
+    void endShare();
     if (snapshot.draft.report.speech) transcription = renderTranscript(snapshot.draft.report.speech);
     const draft = {
       ...snapshot.draft,
@@ -775,6 +839,7 @@ export async function importAudio(file: File) {
   pendingSnapshot = null;
   chunkSequence = 0;
   live = null;
+  void endShare();
   transcriptionDone = null;
   clock.reset();
   emit({ error: "", durationMs: 0, state: "review" });
@@ -820,6 +885,7 @@ export async function discardCapture() {
   clock.reset();
   recorder = null;
   live = null;
+  void endShare();
   transcriptionDone = null;
   snapshot = blank(snapshot.owner);
   emit({});
@@ -834,6 +900,7 @@ export function releaseAfterHandoff() {
   clock.reset();
   recorder = null;
   live = null;
+  void endShare();
   transcriptionDone = null;
   snapshot = blank(snapshot.owner);
   emit({});

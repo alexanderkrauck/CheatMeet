@@ -1,4 +1,4 @@
-import { CAPTURE_SOURCE_LABELS, speakerLabel, turnSource, type MeetingTranscript } from "../../shared/transcription";
+import { CAPTURE_SOURCE_LABELS, speakerLabeler, turnSource, type MeetingTranscript } from "../../shared/transcription";
 
 export type SpeakerFilter = "all" | "mic" | "system" | `speaker:${string}`;
 export default function LiveSpeakers({ speech, filter, onFilter }: {
@@ -7,6 +7,7 @@ export default function LiveSpeakers({ speech, filter, onFilter }: {
   onFilter: (value: SpeakerFilter) => void;
 }) {
   const speakers = [...new Map(speech.turns.map(t => [t.speaker, t])).values()];
+  const label = speakerLabeler(speech);
   return <div className="live-speakers">
     <div className="speaker-filters" role="group" aria-label="Transkript filtern">
       {([['all', 'Alle'], ['mic', 'Mikrofon'], ['system', 'Systemaudio']] as const).map(([id, label]) =>
@@ -20,7 +21,7 @@ export default function LiveSpeakers({ speech, filter, onFilter }: {
         {speakers.filter(t => !t.speaker.endsWith(':unknown')).map(t => {
           const source = turnSource(t);
           return <option key={t.speaker} value={`speaker:${t.speaker}`}>
-            {source && `${CAPTURE_SOURCE_LABELS[source]} · `}{speakerLabel(speech, t)}
+            {source && `${CAPTURE_SOURCE_LABELS[source]} · `}{label(t)}
           </option>;
         })}
       </select>

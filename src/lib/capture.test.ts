@@ -23,9 +23,19 @@ vi.mock("./useRecordingLifecycle", () => ({ observeRecordingLifecycle: ({ record
 vi.mock("./audioMerge", () => ({
   mergeAudioStreams: (mic: MediaStream) => ({ stream: mic, dispose() {} }),
 }));
+const share = vi.hoisted(() => ({
+  update: vi.fn(),
+  setState: vi.fn(),
+  end: vi.fn(async () => {}),
+  status: vi.fn(() => "waiting" as const),
+}));
+vi.mock("./liveShare", () => ({ startLiveShare: vi.fn(() => share) }));
 vi.mock("./assemblyLive", () => ({
   startAssemblyLive: vi.fn(() => ({
     tick() {}, finish: async () => "", pendingSegments: 0, failedSegments: 0,
+    restart: vi.fn(async () => {}),
+    pause: vi.fn(async () => {}),
+    resume: vi.fn(async () => {}),
   })),
 }));
 
@@ -65,6 +75,9 @@ class FakeRecorder {
   onstop?: () => void;
   ondataavailable?: (event: { data: Blob }) => void;
   start() { this.state = "recording"; }
+  pause() { this.state = "paused"; }
+  resume() { this.state = "recording"; }
+  requestData() {}
   stop() { this.state = "inactive"; this.onstop?.(); }
 }
 
@@ -87,6 +100,7 @@ const startRecording = async (
   await capture.beginRecording(DECISION);
 };
 const { startAssemblyLive } = await import("./assemblyLive");
+const { startLiveShare } = await import("./liveShare");
 let getDisplayMedia: ReturnType<typeof vi.fn>;
 
 beforeEach(async () => {
@@ -238,6 +252,113 @@ it("retains a live speaker name through partials and final live updates", async 
   await capture.finishTranscription();
   expect(capture.captureSnapshot().draft.report.transcription).toContain("Mikrofon · Alex");
   expect(capture.captureSnapshot().draft.report.transcriptionOrigin).toBe("live");
+});
+
+describe("sharing the live transcript with an assistant", () => {
+  const speechOf = (text: string) => ({
+    provider: "assemblyai", phase: "live", languages: ["de"], speakerNames: {},
+    turns: [{ id: "1", speaker: "mic:0:A", text, startMs: 0, endMs: 900, final: true }],
+  }) as any;
+
+  it("starts with the recording, and not before consent", async () => {
+    await capture.armCapture(true, async () => {}, "mic");
+    expect(startLiveShare).not.toHaveBeenCalled();
+    await capture.beginRecording(DECISION);
+    expect(startLiveShare).toHaveBeenCalledOnce();
+    expect(vi.mocked(startLiveShare).mock.calls[0][0]).toMatchObject({ reportId: capture.captureSnapshot().draft.report.id, languages: expect.any(Array) });
+  });
+  it("is fed every transcript change, and the connection state stays out of what it receives", async () => {
+    await startRecording(true, async () => {}, "mic");
+    const changed = vi.mocked(startAssemblyLive).mock.calls[0][2];
+    changed({ ...speechOf("Hallo"), liveConnection: "live" });
+    expect(share.update).toHaveBeenCalledOnce();
+    const passed = share.update.mock.calls[0][0];
+    expect(passed.turns[0].text).toBe("Hallo");
+    expect(passed).not.toHaveProperty("liveConnection");
+  });
+  it("mirrors pause and resume", async () => {
+    await startRecording(true, async () => {}, "mic");
+    capture.pauseCapture();
+    expect(share.setState).toHaveBeenLastCalledWith("paused");
+    capture.pauseCapture();
+    expect(share.setState).toHaveBeenLastCalledWith("recording");
+  });
+  it("sends the last words only after the final transcription has drained", async () => {
+    await startRecording(true, async () => {}, "mic");
+    const order: string[] = [];
+    const live = vi.mocked(startAssemblyLive).mock.results[0].value;
+    live.finish = vi.fn(async () => { order.push("drain"); return ""; });
+    share.end.mockImplementation(async () => { order.push("end"); });
+    capture.stopCapture();
+    await capture.finishTranscription();
+    expect(order).toEqual(["drain", "end"]);
+  });
+  it("ends on every way a session can stop", async () => {
+    await startRecording(true, async () => {}, "mic");
+    capture.disarmCapture();
+    expect(share.end).toHaveBeenCalledTimes(1);
+    share.end.mockClear();
+    await startRecording(true, async () => {}, "mic");
+    await capture.discardCapture();
+    expect(share.end).toHaveBeenCalledTimes(1);
+    share.end.mockClear();
+    await startRecording(true, async () => {}, "mic");
+    capture.stopCapture();
+    await capture.finishTranscription();
+    capture.releaseAfterHandoff();
+    expect(share.end).toHaveBeenCalledTimes(1);
+  });
+  it("stops sharing when the account changes", async () => {
+    await startRecording(true, async () => {}, "mic");
+    const changed = vi.mocked(startAssemblyLive).mock.calls[0][2];
+    account.uid = "someone-else";
+    share.update.mockClear();
+    changed(speechOf("fremd"));
+    expect(share.update).not.toHaveBeenCalled();
+    expect(share.end).toHaveBeenCalled();
+  });
+  it("never lets a failing share break the recording", async () => {
+    share.update.mockImplementationOnce(() => { throw new Error("boom"); });
+    await startRecording(true, async () => {}, "mic");
+    const changed = vi.mocked(startAssemblyLive).mock.calls[0][2];
+    expect(() => changed(speechOf("Hallo"))).not.toThrow();
+    expect(capture.captureSnapshot().draft.report.transcription).toContain("Hallo");
+    expect(FakeRecorder.last?.state).toBe("recording");
+  });
+});
+
+describe("live connection health", () => {
+  const speechWith = (liveConnection?: string) => ({
+    provider: "assemblyai", phase: "live", languages: ["de"], speakerNames: {}, turns: [],
+    ...(liveConnection ? { liveConnection } : {}),
+  }) as any;
+
+  it("shows the connection state in its own field and never stores it in the transcript", async () => {
+    await startRecording(true, async () => {}, "mic");
+    const changed = vi.mocked(startAssemblyLive).mock.calls[0][2];
+    changed(speechWith("reconnecting"));
+    expect(capture.captureSnapshot().liveConnection).toBe("reconnecting");
+    expect(capture.captureSnapshot().draft.report.speech).not.toHaveProperty("liveConnection");
+    changed(speechWith("live"));
+    expect(capture.captureSnapshot().liveConnection).toBe("live");
+    changed(speechWith());
+    expect(capture.captureSnapshot().liveConnection).toBeUndefined();
+  });
+
+  it("restartLive() rebuilds the connections without pausing the recording or the clock", async () => {
+    await startRecording(true, async () => {}, "mic");
+    const live = vi.mocked(startAssemblyLive).mock.results[0].value;
+    const before = capture.captureSnapshot();
+    capture.restartLive();
+    expect(live.restart).toHaveBeenCalledOnce();
+    expect(FakeRecorder.last?.state).toBe("recording");
+    expect(capture.captureSnapshot().state).toBe("recording");
+    expect(capture.captureSnapshot().durationMs).toBeGreaterThanOrEqual(before.durationMs);
+  });
+
+  it("restartLive() does nothing when nothing is recording", () => {
+    expect(() => capture.restartLive()).not.toThrow();
+  });
 });
 
 it("treats a replacement import as new audio and clears old recording provenance", async () => {

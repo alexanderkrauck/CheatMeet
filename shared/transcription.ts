@@ -32,7 +32,10 @@ export interface MeetingTranscript {
   speakerIssues?: SpeakerIssue[];
   liveWarning?: string;
   liveStartDelayed?: boolean;
+  /** Live connection health while recording; absent when paused, finished or not live. */
+  liveConnection?: LiveConnection;
 }
+export type LiveConnection = "connecting" | "live" | "reconnecting" | "stopped";
 export const DEFAULT_LANGUAGES = ["de", "en"];
 export const LANGUAGES: Record<string, string> = {
   de: "Deutsch",
@@ -67,23 +70,41 @@ export function turnSource(turn: SpeechTurn): "mic" | "system" | null {
     || /^(mic|system):/.exec(turn.speaker)?.[1];
   return prefix === "mic" || prefix === "system" ? prefix : null;
 }
+/**
+ * Labels for many turns of one document. The speaker numbering is built once,
+ * so labelling n turns costs O(n) instead of O(n²) - it runs on every live event.
+ */
+export function speakerLabeler(doc: MeetingTranscript): (turn: SpeechTurn) => string {
+  let order: Map<string, number> | undefined;
+  return (turn) => {
+    if (turn.speaker.endsWith(":unknown"))
+      return "Stimme nicht zugeordnet";
+    // Older reports stored conservatively matched live names only as suggestions.
+    // Reuse those when no later user name exists, as with new automatic matching.
+    const named = doc.speakerNames[turn.speaker] || doc.speakerNameSuggestions?.[turn.speaker];
+    if (named) return named;
+    if (!order) {
+      order = new Map();
+      for (const t of doc.turns) if (!order.has(t.speaker)) order.set(t.speaker, order.size + 1);
+    }
+    return `Sprecher ${order.get(turn.speaker) ?? 0}`;
+  };
+}
+/** One-off label; loops should use speakerLabeler(doc). */
 export function speakerLabel(doc: MeetingTranscript, turn: SpeechTurn): string {
-  if (turn.speaker.endsWith(":unknown"))
-    return "Stimme nicht zugeordnet";
-  const speakers = [...new Set(doc.turns.map((t) => t.speaker))];
-  // Older reports stored conservatively matched live names only as suggestions.
-  // Reuse those when no later user name exists, as with new automatic matching.
-  return doc.speakerNames[turn.speaker] || doc.speakerNameSuggestions?.[turn.speaker]
-    || `Sprecher ${speakers.indexOf(turn.speaker) + 1}`;
+  return speakerLabeler(doc)(turn);
+}
+/** One transcript entry. Saved transcripts and the live feed both use it, so they read alike. */
+export function transcriptLine(t: SpeechTurn, label: (turn: SpeechTurn) => string): string {
+  const source = turnSource(t);
+  const name = `${source ? CAPTURE_SOURCE_LABELS[source] + " · " : ""}${label(t)}`;
+  return `[${stamp(t.startMs)}] (${name.replace(/[()\r\n]/g, " ")}) ${t.text}`;
 }
 export function renderTranscript(doc: MeetingTranscript): string {
+  const label = speakerLabeler(doc);
   return [...doc.turns]
     .sort((a, b) => a.startMs - b.startMs)
-    .map((t) => {
-      const source = turnSource(t);
-      const name = `${source ? CAPTURE_SOURCE_LABELS[source] + " · " : ""}${speakerLabel(doc, t)}`;
-      return `[${stamp(t.startMs)}] (${name.replace(/[()\r\n]/g, " ")}) ${t.text}`;
-    })
+    .map((t) => transcriptLine(t, label))
     .join("\n\n");
 }
 export function renameSpeaker(

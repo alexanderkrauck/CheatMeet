@@ -1,9 +1,11 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Mic, Pause, Play, Square } from "lucide-react";
+import { Mic, Pause, Play, RefreshCw, Square } from "lucide-react";
+import { liveStatus, shareNotice } from "../lib/liveStatus";
 import {
   captureSnapshot,
   pauseCapture,
+  restartLive,
   stopCapture,
   subscribeCapture,
 } from "../lib/capture";
@@ -37,6 +39,8 @@ export default function RecordingBar() {
 
   if (!live || location.pathname.startsWith("/record")) return null;
   const paused = snap.state === "paused";
+  const status = liveStatus(snap.liveConnection, snap.state);
+  const reading = shareNotice(snap.liveShare, snap.state);
   return (
     <div className="recording-bar no-print" role="status" aria-live="polite">
       <Link to={`/record?draft=${snap.draft.report.id}`}>
@@ -46,12 +50,19 @@ export default function RecordingBar() {
         <span className="recording-title">
           {paused
             ? "Pausiert"
-            : snap.hint ||
+            : status?.text ||
+              reading ||
+              snap.hint ||
               (snap.transcribing > 0
                 ? `${snap.transcribing} Abschnitt(e) in Arbeit`
                 : snap.draft.report.title || "Meeting läuft")}
         </span>
       </Link>
+      {status?.canRestart && (
+        <button onClick={restartLive} aria-label="Live-Transkript neu starten">
+          <RefreshCw size={15} />
+        </button>
+      )}
       <button
         onClick={pauseCapture}
         aria-label={paused ? "Aufnahme fortsetzen" : "Aufnahme pausieren"}

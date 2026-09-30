@@ -1,6 +1,6 @@
 import {
   needsSpeakerReview,
-  speakerLabel,
+  speakerLabeler,
   type MeetingTranscript,
 } from "../../shared/transcription";
 import type { ReportData } from "../types";
@@ -367,9 +367,10 @@ export function speakerNamesOf(speech?: MeetingTranscript): string[] {
   // throw where the whole list is being built.
   if (!Array.isArray(speech?.turns) || !speech.turns.length) return [];
   const seen = new Map<string, string>();
+  const label = speakerLabeler(speech);
   for (const turn of speech.turns) {
     if (turn.speaker.endsWith(":unknown") || seen.has(turn.speaker)) continue;
-    seen.set(turn.speaker, speakerLabel(speech, turn));
+    seen.set(turn.speaker, label(turn));
   }
   return [...new Set(seen.values())];
 }

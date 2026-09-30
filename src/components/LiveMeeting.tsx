@@ -1,5 +1,5 @@
 import type { MeetingTranscript } from "../../shared/transcription";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CornerDownLeft,
   HelpCircle,
@@ -83,7 +83,9 @@ export default function LiveMeeting({
   const pinned = useRef(true);
   const editingName = useRef(false);
   const latest = useRef(transcript);
-  latest.current = speech ? renderTranscript(speech) : transcript;
+  // Rendering the whole transcript is the expensive part of a live event; do it once per change.
+  const rendered = useMemo(() => (speech ? renderTranscript(speech) : transcript), [speech, transcript]);
+  latest.current = rendered;
 
   // Follow the conversation, unless the user has scrolled back to re-read.
   useEffect(() => {

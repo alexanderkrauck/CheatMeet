@@ -56,6 +56,7 @@ import { startProcessing } from "../lib/pipeline";
 import { audioExtension } from "../../shared/analysis";
 import MeetingLanguages, { languageLabel } from "../components/MeetingLanguages";
 import DriveSettings from "../components/DriveSettings";
+import { liveStatus, shareNotice } from "../lib/liveStatus";
 import {
   captureQueue,
   captureSnapshot,
@@ -64,6 +65,7 @@ import {
   importAudio,
   openDraft,
   pauseCapture,
+  restartLive,
   releaseAfterHandoff,
   setCaptureBusy,
   setCaptureError,
@@ -108,6 +110,8 @@ export default function RecordPage() {
     busy,
     error,
     warning,
+    liveConnection,
+    liveShare,
     localStartOffered,
     wakeLock,
     failed,
@@ -492,6 +496,21 @@ export default function RecordPage() {
             <MoreHorizontal size={23} />
           </button>
         </header>
+        {!error && liveStatus(liveConnection, state) && (
+          <div className="walk-message is-live-status" role="status">
+            {liveStatus(liveConnection, state)!.text}
+            {liveStatus(liveConnection, state)!.canRestart && (
+              <button type="button" onClick={restartLive}>
+                Live neu starten
+              </button>
+            )}
+          </div>
+        )}
+        {!error && shareNotice(liveShare, state) && (
+          <div className="walk-message is-live-status" role="status">
+            {shareNotice(liveShare, state)}
+          </div>
+        )}
         {(error || warning || !online) && (
           <div
             className={`walk-message ${error ? "is-error" : ""}`}

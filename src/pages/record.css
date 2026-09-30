@@ -431,6 +431,22 @@
   max-height: 90px;
   overflow: auto;
 }
+.walk-message.is-live-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.walk-message.is-live-status button {
+  flex-shrink: 0;
+  font: inherit;
+  font-weight: 650;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+}
 .walk-message.is-error {
   background: #ffffff;
   color: #97513d;

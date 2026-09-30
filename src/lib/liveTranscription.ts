@@ -53,6 +53,11 @@ export interface LiveTranscription {
   /** Stops capturing while the recording is paused; queued segments still run. */
   pause(): Promise<void>;
   resume(): Promise<void>;
+  /**
+   * Opens fresh connections without pausing the recording. Optional: the legacy
+   * segment implementation has no long-lived connections to rebuild.
+   */
+  restart?(): Promise<void>;
   /** Stops capture, transcribes the final segment and resolves the full text. */
   finish(): Promise<string>;
 }
