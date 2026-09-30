@@ -3,6 +3,7 @@ import { RetentionSettings } from "../components/RetentionSettings";
 import { signOut } from "firebase/auth";
 import { LogOut, Mic, ShieldOff, UserRound } from "lucide-react";
 import DriveSettings from "../components/DriveSettings";
+import McpClients from "../components/McpClients";
 import MeetingLanguages from "../components/MeetingLanguages";
 import Preferences from "../components/Preferences";
 import StorageSettings from "../components/StorageSettings";
@@ -129,6 +130,8 @@ export default function SettingsPage() {
         </section>
 
         <DriveSettings />
+
+        <McpClients />
 
         <RetentionSettings />
 

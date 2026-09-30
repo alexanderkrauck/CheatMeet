@@ -124,6 +124,8 @@ test("authenticated APIs, Firebase auth helpers, Drive and mutations bypass the 
     ["https://baudoku.test/api/analyze", "cors", "POST"],
     ["https://baudoku.test/api/health", "navigate", "GET"],
     ["https://baudoku.test/__/auth/handler", "navigate", "GET"],
+    ["https://baudoku.test/.well-known/oauth-authorization-server", "navigate", "GET"],
+    ["https://baudoku.test/.well-known/oauth-protected-resource/api/mcp", "cors", "GET"],
     [
       "https://www.googleapis.com/drive/v3/files/private?alt=media",
       "cors",

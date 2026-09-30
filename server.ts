@@ -4,6 +4,7 @@ import path from "node:path";
 import { createAnalysisRouter } from "./server/analysis";
 import { createAuthRouter } from "./server/googleAuth";
 import { createTranscriptionRouter } from "./server/transcription";
+import { createMcpRoutes } from "./server/mcp/routes";
 
 async function startServer() {
   const app = express();
@@ -12,6 +13,11 @@ async function startServer() {
   // always "http", which makes Google reject the OAuth redirect_uri and drops
   // the Secure flag from the CSRF cookie.
   app.set("trust proxy", true);
+  // The OAuth metadata lives under /.well-known, outside /api, and the whole
+  // group has to sit before the SPA fallback below.
+  const mcp = createMcpRoutes();
+  app.use(mcp.root);
+  app.use("/api", mcp.api);
   app.use("/api", createAuthRouter());
   app.use("/api", createTranscriptionRouter());
   app.use("/api", createAnalysisRouter());
@@ -20,6 +26,7 @@ async function startServer() {
       status: "ok",
       analysisConfigured: Boolean(process.env.GEMINI_API_KEY),
       transcriptionConfigured: Boolean(process.env.ASSEMBLYAI_API_KEY),
+      mcpConfigured: mcp.enabled,
     }),
   );
   app.use("/api", (_req, res) =>

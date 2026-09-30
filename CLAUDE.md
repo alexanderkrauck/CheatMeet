@@ -97,6 +97,28 @@ recording path. Existing reports retain their saved transcript. Analysis routes
 still authenticate Firebase identity and clean up Gemini files in `finally`.
 The shared transcription types/helpers remain dependency-free and isomorphic.
 
+**MCP access is a separate, read-only surface** (`server/mcp/`, full description in
+`MCP_IMPLEMENTATION.md`). It is stateless Streamable HTTP at `/api/mcp` with its
+own small OAuth authorization server, because Google can serve neither dynamic
+registration nor client-ID metadata: Google sign-in is only the login on the
+consent page (`/connect`), and no Google or Drive token ever reaches the
+assistant. Grants (`mcpGrants`) and live transcripts (`mcpLive`) are server-only
+Firestore collections behind one `DocStore` with compare-and-set - never
+in-memory in production, for the same reason as `transcriptionJobs`. Tools take
+the account from the verified token, never from an argument. The recording tab
+feeds the live transcript through `src/lib/liveShare.ts`, which sends **no text**
+until the server answers that an assistant holds a `meetings:live` grant. The
+feature is off unless `MCP_PUBLIC_URL` and `MCP_TOKEN_SECRET` are set.
+
+**Live transcription recovers on its own** (`src/lib/assemblyLive.ts`). Every
+failure - close, error, provider-ended session, silence - goes through one
+`interrupted()` path with capped back-off that resets after a healthy connection;
+a watchdog (driven by `tick()`) rebuilds a source that goes quiet, using the
+provider's `session_heartbeat`. Only a rejected request or a lost login gives
+up, and then the user gets a "Live neu starten" button (`restartLive()`).
+`src/lib/assemblyLive.stall.test.ts` holds the regression tests; keep the GUARD
+cases green.
+
 **Save/analyse/export runs in `src/lib/pipeline.ts`, not in a component.** It is a module-level job store, so navigating away no longer cancels the work; `JobProgress` renders running jobs from any screen and guards `beforeunload`. Recording hands off to it and navigates straight to the report. The job still belongs to the tab — closing it abandons the upload.
 
 **PWA**: `vite.config.ts` emits `sw.js` at build time with a content-hashed cache name. Only the public app shell is cached; `/api/`, `/__/` (Firebase auth helpers), cross-origin requests, and all user media are excluded by design. `tests/pwa.integration.mjs` runs the emitted worker in a `vm` sandbox and asserts these exclusions, so changing the caching rules requires updating that test.

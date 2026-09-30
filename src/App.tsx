@@ -17,6 +17,7 @@ import AppLayout from "./components/AppLayout";
 import Dashboard from "./pages/Dashboard";
 import CalendarPage from "./pages/CalendarPage";
 import SettingsPage from "./pages/SettingsPage";
+import ConnectPage from "./pages/ConnectPage";
 import RecordPage from "./pages/RecordPage";
 import ReportPage from "./pages/ReportPage";
 import InstallApp from "./components/InstallApp";
@@ -82,6 +83,8 @@ export default function App() {
               user ? <Navigate to="/dashboard" replace /> : <Login notice={revoked} />
             }
           />
+          {/* Reachable signed out: signing in re-renders this page, keeping the signed request in the address. */}
+          <Route path="/connect" element={<ConnectPage signedIn={Boolean(user)} />} />
           {/* One gate for every screen that wears the app frame. */}
           <Route
             element={user ? <AppLayout /> : <Navigate to="/" replace />}
