@@ -180,6 +180,16 @@ it('does not rerun a completed job when Drive now contains its exported revision
   expect((await h.call('/processing/meeting-1',{report,analyze:true})).body.job.state).toBe('done');
   expect(h.queue).toHaveBeenCalledTimes(before);
 });
+it('regenerates an edited report only when explicitly requested, otherwise preserves its summary',async()=>{
+  for(const regenerate of [false,true]){
+    const h=await setup();
+    h.io.load.mockResolvedValue({report:{...report,summary:'Bestehende Zusammenfassung'},revision:'edited-v2',indexRevision:'index-v2'});
+    await h.call('/processing/meeting-1',{report,analyze:true,regenerate});
+    for(let n=0;n<4;n++)await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
+    expect(h.analyze).toHaveBeenCalledTimes(regenerate?1:0);
+    expect((await h.call('/processing/meeting-1')).body.report.summary).toBe(regenerate?'Zusammenfassung':'Bestehende Zusammenfassung');
+  }
+});
 it('defaults omitted preferences from the server, but respects an explicit empty override',async()=>{
   const preferences=vi.fn(async()=> 'Server-Präferenz');
   const h=await setup({preferences});

@@ -37,7 +37,7 @@ async function request<T>(path: string, body?: object): Promise<T> {
   return data as T;
 }
 
-export type ProcessingOptions = { analyze: boolean; retranscribe?: boolean; calendarSync?: boolean; preferences?: string };
+export type ProcessingOptions = { analyze: boolean; regenerate?: boolean; retranscribe?: boolean; calendarSync?: boolean; preferences?: string };
 export type ProcessingResult = { job: ProcessingJobView; report?: ReportData };
 
 export const submitServerProcessing = (report: ReportData, options: ProcessingOptions) =>

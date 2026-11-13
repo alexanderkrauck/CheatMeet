@@ -251,7 +251,7 @@ export default function ReportPage({
           source = (await syncReport(source, t)).report;
           checkOwner();
         }
-        await handoffServerProcessing(owner, source, { analyze: true });
+        await handoffServerProcessing(owner, source, { analyze: true, regenerate: !!edited && !!source.summary.trim() });
         checkOwner();
         setNotice("Vom Server übernommen. Du kannst diesen Tab schließen; der Auftrag läuft weiter.");
         return;
@@ -494,7 +494,9 @@ export default function ReportPage({
             <RefreshCw size={18} className="spin" />
             <div>
               <h2>{job!.message}</h2>
-              <p className="muted">Du kannst weiterlesen und navigieren. Der Vorgang läuft in diesem Tab weiter.</p>
+              <p className="muted">{job!.serverOwned
+                ? "Vom Server übernommen. Du kannst diesen Tab schließen; die Verarbeitung läuft weiter."
+                : "Du kannst weiterlesen und navigieren. Bitte diesen Tab bis zur Server-Übernahme geöffnet lassen."}</p>
             </div>
           </div>
         ) : (

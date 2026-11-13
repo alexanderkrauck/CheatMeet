@@ -15,7 +15,7 @@ export interface Task { key: string; run: string; seq: number }
 export interface ProcessingJob extends ProcessingJobView {
   owner: string; googleSub: string; key: string; run: string; seq: number;
   refs: { id:string; driveFolderId:string; driveReportId:string };
-  revision:string; indexRevision:string; analyze:boolean; retranscribe:boolean; calendarSync:boolean;
+  revision:string; indexRevision:string; analyze:boolean; retranscribe:boolean; calendarSync:boolean; regenerate?:boolean;
   preferences:string; step:'prepare'|'analyze'|'export'|'publish'; failures:number; polls:number;
   lease?:string; leaseUntil?:number;
 }
@@ -98,7 +98,7 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
               await o.io.checkpoint(j,'prepared',report);
             }
           }
-          if(!delay)patch={step:needsSpeakerReview(report.speech)?'export':j.analyze&&!report.summary.trim()?'analyze':'export',state:needsSpeakerReview(report.speech)?'exporting':j.analyze&&!report.summary.trim()?'analyzing':'exporting'};
+          if(!delay)patch={step:needsSpeakerReview(report.speech)?'export':j.analyze&&(j.regenerate||!report.summary.trim())?'analyze':'export',state:needsSpeakerReview(report.speech)?'exporting':j.analyze&&(j.regenerate||!report.summary.trim())?'analyzing':'exporting'};
         }else if(j.step==='analyze'){
           let result=await o.io.readCheckpoint(j,'analyzed');
           if(!result){
@@ -156,7 +156,7 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
     const a=await auth(req);
     if(!o.enabled())throw new ProcessingError(503,'Serververarbeitung ist nicht eingerichtet.');
     const b=req.body;const r=b?.report;
-    if(!r||!validId(req.params.id)||r.id!==req.params.id||!validId(r.driveFolderId)||!validId(r.driveReportId)||typeof b.analyze!=='boolean'||['retranscribe','calendarSync'].some(k=>b[k]!==undefined&&typeof b[k]!=='boolean')||b.preferences!==undefined&&(typeof b.preferences!=='string'||b.preferences.length>20000))throw new ProcessingError(400,'Gesicherte Berichtsreferenzen fehlen.');
+    if(!r||!validId(req.params.id)||r.id!==req.params.id||!validId(r.driveFolderId)||!validId(r.driveReportId)||typeof b.analyze!=='boolean'||['retranscribe','calendarSync','regenerate'].some(k=>b[k]!==undefined&&typeof b[k]!=='boolean')||b.preferences!==undefined&&(typeof b.preferences!=='string'||b.preferences.length>20000))throw new ProcessingError(400,'Gesicherte Berichtsreferenzen fehlen.');
     const key=jobKey(a.uid,r.id);const existing=await o.store.get(key);
     if(existing&&processingActive(existing)){await send(existing);res.status(202).json({job:publicJob(existing)});return;}
     const refs={id:r.id,driveFolderId:r.driveFolderId,driveReportId:r.driveReportId};
@@ -170,7 +170,7 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
     }
     const preferences=typeof b.preferences==='string'?b.preferences:await o.preferences?.(a.uid)||'';
     const same=existing&&['blocked','error','review'].includes(existing.state)&&existing.revision===source.revision&&existing.indexRevision===source.indexRevision;
-    const fresh:ProcessingJob={reportId:r.id,key,owner:a.uid,googleSub:a.googleSub,refs,revision:source.revision,indexRevision:source.indexRevision,run:randomUUID(),seq:0,state:'queued',message:messages.queued,attempts:0,failures:0,polls:0,step:'prepare',analyze:b.analyze,retranscribe:b.retranscribe===true,calendarSync:b.calendarSync===true,preferences,updatedAt:stamp()};
+    const fresh:ProcessingJob={reportId:r.id,key,owner:a.uid,googleSub:a.googleSub,refs,revision:source.revision,indexRevision:source.indexRevision,run:randomUUID(),seq:0,state:'queued',message:messages.queued,attempts:0,failures:0,polls:0,step:'prepare',analyze:b.analyze,retranscribe:b.retranscribe===true,calendarSync:b.calendarSync===true,regenerate:b.regenerate===true,preferences,updatedAt:stamp()};
     const next=await o.store.mutate(key,c=>{
       if(c&&processingActive(c))return undefined;
       // Same-revision retries retain paid/result checkpoints and immutable run.
