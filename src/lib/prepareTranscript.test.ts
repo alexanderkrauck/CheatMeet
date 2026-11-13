@@ -369,6 +369,65 @@ it("shares a locally finalized live transcript with concurrent callers without a
   expect(mocks.fetch).not.toHaveBeenCalled();
 });
 
+it("optionally retranscribes a finished live recording once, preserving matched names", async () => {
+  const d = draft();
+  d.report.transcriptionOrigin = "live";
+  d.report.rawAudioUrl = "saved-recording";
+  d.report.speech!.phase = "final";
+  const text = "Wir haben heute den gesamten Vertrag gemeinsam im Detail geprüft und noch keine verbindliche Zusage erteilt";
+  d.report.speech!.turns = [{ id: "mic:0:0", speaker: "mic:0:A", startMs: 0, endMs: 1000, text, final: true }];
+  d.report.speech!.speakerNames = { "mic:0:A": "Alex" };
+  d.report.speech!.speakerAliases = { "mic:0:A": "Alex" };
+  Object.assign(d, { retranscribe: true });
+  const response = final();
+  response.speech.turns[0].text = text;
+  mocks.fetch
+    .mockResolvedValueOnce(Response.json({ state: "missing" }, { status: 404 }))
+    .mockResolvedValueOnce(Response.json({ state: "processing" }, { status: 202 }))
+    .mockResolvedValueOnce(Response.json(response));
+  const running = prepareTranscript(d, "drive-token");
+  await vi.runAllTimersAsync();
+  await running;
+  expect(mocks.fetch.mock.calls.map(([url, init]) => [url, init.method || "GET"])).toEqual([
+    ["/api/transcription/import/meeting", "GET"],
+    ["/api/transcription/import/meeting", "POST"],
+    ["/api/transcription/import/meeting", "GET"],
+  ]);
+  expect(d.report.speech?.turns[0].id).toBe("batch:0");
+  expect(d.report.transcription).toContain("Alex");
+  expect(d.report.transcriptionOrigin).toBe("live");
+  expect(d).toMatchObject({ retranscribe: false });
+  await prepareTranscript(d, "drive-token");
+  expect(mocks.fetch).toHaveBeenCalledTimes(3);
+});
+
+it("keeps the live text and opt-in on an uncertain batch failure, then resumes the existing job", async () => {
+  const d = draft();
+  d.report.transcriptionOrigin = "live";
+  d.report.transcription = "Vorhandener Live-Text";
+  d.report.speech!.phase = "final";
+  d.retranscribe = true;
+  mocks.fetch.mockResolvedValueOnce(Response.json({ error: "Auftrag unbestätigt" }, { status: 409 }));
+  await expect(prepareTranscript(d, "token")).rejects.toThrow("unbestätigt");
+  expect(d.report.transcription).toBe("Vorhandener Live-Text");
+  expect(d.retranscribe).toBe(true);
+  mocks.fetch.mockResolvedValueOnce(Response.json(final()));
+  await prepareTranscript(d, "token");
+  expect(mocks.fetch.mock.calls.every(([, init]) => !init.method)).toBe(true);
+  expect(d.report.transcription).toContain("Keine Zusage.");
+  expect(d.report.speech?.speakerReview).toBe("pending");
+  expect(d.retranscribe).toBe(false);
+});
+
+it("only-backing-up a live recording never spends a batch pass despite the opt-in", async () => {
+  const d = draft();
+  d.report.transcriptionOrigin = "live";
+  d.retranscribe = true;
+  await prepareTranscript(d, "token", { batch: false });
+  expect(mocks.fetch).not.toHaveBeenCalled();
+  expect(d.report.speech?.phase).toBe("final");
+});
+
 describe("declining the analysis", () => {
   it("does not submit a paid transcription for an import", async () => {
     const fetchMock = vi.fn();

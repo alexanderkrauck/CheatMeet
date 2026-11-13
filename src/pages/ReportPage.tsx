@@ -247,6 +247,7 @@ export default function ReportPage({
         : canUseSavedTranscript || canUseDriveStream ? { report } : await restoreDraft(report, t);
       checkOwner();
       if (local?.speakerReference) d.speakerReference = local.speakerReference;
+      if (local?.retranscribe) d.retranscribe = true;
       if (local?.report.id === report.id) await backupDraft(d, t, setBusy);
       checkOwner();
       setBusy("Transkript vorbereiten …");

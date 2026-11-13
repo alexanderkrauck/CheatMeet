@@ -104,7 +104,9 @@ export function startProcessing({
       await putLocal(owner, current.report);
       assertOwner();
 
-      update("analyzing", "Transkript wird für die Zusammenfassung vorbereitet …", { warning });
+      update("analyzing", analyze && current.retranscribe
+        ? "Gesamte Aufnahme wird erneut transkribiert …"
+        : "Transkript wird für die Zusammenfassung vorbereitet …", { warning });
       if (analyze) {
         await prepareTranscript(current, token);
       } else {

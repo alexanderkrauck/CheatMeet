@@ -84,12 +84,18 @@ collection; local development uses private `.transcription-jobs/` files. Never
 replace these with an in-memory production store or delete reservations to retry
 an uncertain submission: this guards the two-transcription limit across restarts.
 
-After Drive backup, the server streams the saved audio from Drive to AssemblyAI
-without passing the Drive credential to the provider. Browser requests carry a
-small reference, avoiding Cloud Run's HTTP/1 upload cap. `finalTranscription.ts`
-polls the same job and checkpoints final structured turns plus plain text before
-analysis. Only final text goes to Gemini for new recordings; empty final text is
-silence, not an audio fallback. Report speaker edits do not trigger ASR again.
+Recordings use their live transcript by default. On the finished-recording screen,
+users can opt into one additional paid full-audio transcription before analysis.
+`Draft.retranscribe` persists this choice locally until success; failed/uncertain
+requests retain the live transcript and resume the existing server job. After
+Drive backup, the server streams the saved audio to AssemblyAI without passing
+the Drive credential to the provider. `prepareTranscript.ts` polls the reserved
+job and checkpoints the batch text before analysis. `speakerMatches.ts` carries
+over unambiguous live speaker names and sends ambiguous matches to the existing
+review screen. Imports also use this batch path. "Only save in Drive" never starts
+paid ASR, even when the option is checked. Report speaker edits do not trigger ASR.
+Only transcript text goes to Gemini for new recordings; there is no automatic
+audio fallback when live transcription is empty.
 
 The old `liveTranscription.ts`/`segmentCapture.ts`/`transcriptAssembler.ts` and
 `/api/transcribe-segment` remain for compatibility/tests. They are not the default

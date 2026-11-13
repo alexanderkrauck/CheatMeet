@@ -132,6 +132,23 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+it("keeps retranscription opt-in on the finished draft and clears it on a replacement import", async () => {
+  expect(capture.captureSnapshot().draft.retranscribe).not.toBe(true);
+  await startRecording(true, async () => {}, "mic");
+  capture.setCaptureRetranscribe(true);
+  expect(capture.captureSnapshot().draft.retranscribe).not.toBe(true);
+  FakeRecorder.last!.ondataavailable?.({ data: new Blob(["audio"], { type: "audio/webm" }) });
+  capture.stopCapture();
+  await capture.finishTranscription();
+  capture.setCaptureRetranscribe(true);
+  await capture.captureQueue();
+  expect(capture.captureSnapshot().draft.retranscribe).toBe(true);
+  const { putDraft } = await import("./local");
+  expect(vi.mocked(putDraft).mock.calls.at(-1)?.[1].retranscribe).toBe(true);
+  await capture.importAudio(new File(["other"], "other.webm", { type: "audio/webm" }));
+  expect(capture.captureSnapshot().draft.retranscribe).not.toBe(true);
+});
+
 describe("discardCapture", () => {
   it("resets to an empty capture and hands back nothing to navigate to", async () => {
     // It used to return the id of the fresh blank draft, and the only caller

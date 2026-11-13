@@ -9,9 +9,10 @@ import {
 import { withWebmDuration } from "./webmDuration";
 import type { Draft } from "../types";
 import { ensureDriveToken } from "./session";
+import { reconcileSpeakers } from "./speakerMatches";
 
 const active = new Map<string, Promise<void>>();
-/** Captured meetings keep their live text. Only imported audio needs batch ASR.
+/** Captured meetings keep their live text unless the user opts into batch ASR.
  * The ready transcript is checkpointed before summary generation. */
 export function prepareTranscript(
   draft: Draft,
@@ -23,13 +24,14 @@ export function prepareTranscript(
    */
   { batch = true }: { batch?: boolean } = {},
 ): Promise<void> {
+  const retranscribe = batch && draft.retranscribe === true;
   if (
     !draft.report.speech &&
     // A projected report has all three markers but its transcript is simply
     // on another device: re-submitting would pay for the same audio twice and
     // burn one of the two transcriptions this meeting is allowed.
     !transcriptIsElsewhere(draft.report) &&
-    (draft.report.transcriptionOrigin === "live" ||
+    (retranscribe || draft.report.transcriptionOrigin === "live" ||
       draft.report.captureState ||
       draft.report.captureSources?.length)
   ) {
@@ -44,7 +46,7 @@ export function prepareTranscript(
       },
     };
   }
-  if (!draft.report.speech || draft.report.speech.phase === "final")
+  if (!draft.report.speech || (draft.report.speech.phase === "final" && !retranscribe))
     return Promise.resolve();
   const owner = auth.currentUser?.uid;
   if (!owner) return Promise.reject(new Error("Bitte erneut anmelden."));
@@ -63,6 +65,7 @@ export function prepareTranscript(
       assertOwner();
       if (stored?.report.speech?.phase !== "final")
         throw new Error("Transkript fehlt.");
+      draft.retranscribe = stored.retranscribe;
       draft.report = {
         ...draft.report,
         speech: stored.report.speech,
@@ -83,7 +86,7 @@ export function prepareTranscript(
               /^(mic|system):/.test(t.speaker) || /^(mic|system):/.test(t.id),
           ) ||
           !!report.transcription.trim()));
-    if (recorded) {
+    if (recorded && !retranscribe) {
       const speech = {
         ...(draft.speakerReference || report.speech!),
         phase: "final" as const,
@@ -180,13 +183,16 @@ export function prepareTranscript(
       speech.turns.some((t) => !t.final || typeof t.text !== "string")
     )
       throw new Error("Kein Transkript erhalten.");
-    speech = { ...speech, speakerReview: "skipped" };
+    speech = recorded
+      ? reconcileSpeakers(draft.speakerReference || report.speech!, speech)
+      : { ...speech, speakerReview: "skipped" };
     draft.report = {
       ...draft.report,
       speech,
-      transcriptionOrigin: "import",
+      transcriptionOrigin: recorded ? "live" : "import",
       transcription: renderTranscript(speech),
     };
+    draft.retranscribe = false;
     assertOwner();
     await putDraft(owner, draft);
     assertOwner();

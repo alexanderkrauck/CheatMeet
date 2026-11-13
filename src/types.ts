@@ -56,7 +56,9 @@ export interface ReportData {
 
 export interface Draft {
   report: ReportData;
-  /** Legacy live snapshot from versions that performed a second transcription. */
+  /** Explicit opt-in, kept in the local draft until the batch result is saved. */
+  retranscribe?: boolean;
+  /** Live identity evidence used to match names after a second transcription. */
   speakerReference?: MeetingTranscript;
   audio?: Blob;
 }

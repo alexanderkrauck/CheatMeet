@@ -73,6 +73,7 @@ import {
   isCapturing,
   setCaptureEvent,
   setCaptureLanguages,
+  setCaptureRetranscribe,
   setCaptureSingleSpeaker,
   armCapture,
   beginRecording,
@@ -636,6 +637,17 @@ export default function RecordPage() {
                         : "Audio sichern und das Live-Transkript zusammenfassen. Deine Namen und Audioquellen bleiben erhalten."}
                     </p>
                   </div>
+                  {draft.report.transcriptionOrigin !== "import" && (
+                    <fieldset className="walk-speaker-assumptions">
+                      <legend>Transkript für die Zusammenfassung</legend>
+                      <label>
+                        <input type="checkbox" checked={!!draft.retranscribe} disabled={!!busy}
+                          onChange={(event) => setCaptureRetranscribe(event.target.checked)} />
+                        Gesamte Aufnahme am Ende erneut transkribieren
+                      </label>
+                      <p>Optionaler zusätzlicher, kostenpflichtiger AssemblyAI-Durchlauf. Kann Lücken im Live-Transkript schließen, dauert länger und ersetzt nach Erfolg dessen Text. Namen werden soweit eindeutig zugeordnet übernommen; unklare Sprecher kannst du prüfen. Ohne Häkchen wird das Live-Transkript verwendet.</p>
+                    </fieldset>
+                  )}
                   {draft.report.transcriptionOrigin === "import" && draft.report.speech?.phase !== "final" && <MeetingLanguages value={draft.report.speech?.languages} onChange={setCaptureLanguages} />}
                   {/* The link can still be made after the fact: before this the
                       picker existed only on the pre-recording screen, so a
@@ -659,7 +671,7 @@ export default function RecordPage() {
                     {failed > 0 && (
                       <p className="walk-gap">
                         Das Live-Transkript kann Lücken enthalten. Es wird ohne
-                        erneute Transkription verwendet. Die Originalaufnahme wird gesichert.
+                        automatische erneute Transkription verwendet. Du kannst oben einen zusätzlichen Durchlauf wählen. Die Originalaufnahme wird gesichert.
                       </p>
                     )}
                   </div>

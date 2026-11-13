@@ -389,6 +389,10 @@ export const setCaptureSingleSpeaker = (source: "mic" | "system", enabled: boole
     singleSpeakerSources: { ...snapshot.draft.report.singleSpeakerSources, [source]: enabled },
   } }).catch(() => {});
 };
+export const setCaptureRetranscribe = (enabled: boolean) => {
+  if (ownerChanged() || busyOperation || snapshot.state !== "review") return;
+  void persist({ ...snapshot.draft, retranscribe: enabled }).catch(() => {});
+};
 export const setCaptureLanguages = (languages: string[]) => {
   if (isCapturing() || !validLanguages(languages)) return;
   void persist({ ...snapshot.draft, report: { ...snapshot.draft.report,
@@ -847,6 +851,7 @@ export async function importAudio(file: File) {
     ...snapshot.draft,
     audio: file,
     speakerReference: undefined,
+    retranscribe: undefined,
     // Replacing audio starts a NEW submission identity; never reuse a provider
     // job from the previous file under the same report ID.
     // An import is a new meeting: without this it inherits whenever this draft
