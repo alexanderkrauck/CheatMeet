@@ -109,7 +109,11 @@ export async function analyzeTranscript(transcription: string, preferences = "",
     try {
       const response = await client.models.generateContent({
         model: analysisModel(), contents: [{ role: "user", parts: [{ text: transcription }] }],
-        config: { systemInstruction: analysisInstruction(preferences), responseMimeType: "application/json", responseJsonSchema: reportSchema },
+        config: {
+          systemInstruction: analysisInstruction(preferences) + "\nGib das Transkript nicht zurück. Es ist bereits vollständig gespeichert. Erzeuge ausschließlich Titel, Zusammenfassung, Aufgaben und Erkenntnisse.",
+          responseMimeType: "application/json",
+          responseJsonSchema: { ...reportSchema, properties: Object.fromEntries(Object.entries(reportSchema.properties).filter(([key]) => key !== "transcription")), additionalProperties: false },
+        },
       });
       try { return { ...validateAnalysis(JSON.parse(response.text || "")), transcription }; }
       catch { throw new RequestError(502, "Die KI hat keinen vollständigen Bericht geliefert."); }
