@@ -1,10 +1,35 @@
 """Prepare a no-traffic container revision without exposing service env values."""
 import copy
 import json
+import os
+import re
 import sys
 
+NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+SECRET = re.compile(r"^[A-Za-z0-9_-]{1,255}$")
+# Settings the deploy never overrides: the runtime mode is set separately below.
+RESERVED = {"NODE_ENV"}
 
-def prepare(service, image, revision):
+
+def managed_from_environment(environ):
+    """The MCP settings a deploy owns, taken from the workflow's environment.
+
+    Both are optional together: the feature is off unless the app has a public
+    URL AND a token secret, so a secret on its own is a misconfiguration.
+    """
+    plain, secrets = {}, {}
+    url = (environ.get("MCP_PUBLIC_URL") or "").strip()
+    secret = (environ.get("MCP_TOKEN_SECRET_NAME") or "").strip()
+    if url:
+        plain["MCP_PUBLIC_URL"] = url
+    if secret:
+        if not url:
+            raise ValueError("MCP_TOKEN_SECRET_NAME needs MCP_PUBLIC_URL; refusing a half-enabled feature.")
+        secrets["MCP_TOKEN_SECRET"] = secret
+    return plain, secrets
+
+
+def prepare(service, image, revision, plain=None, secrets=None):
     result = {
         "apiVersion": service["apiVersion"],
         "kind": "Service",
@@ -35,8 +60,21 @@ def prepare(service, image, revision):
     container["command"] = ["node"]
     container["args"] = ["dist/server.cjs"]
     env = container.setdefault("env", [])
-    env[:] = [item for item in env if item["name"] != "NODE_ENV"]
+    plain, secrets = plain or {}, secrets or {}
+    for name, value in plain.items():
+        if not NAME.match(name) or name in RESERVED or not isinstance(value, str):
+            raise ValueError(f"Unsafe managed setting {name!r}.")
+    for name, secret in secrets.items():
+        if not NAME.match(name) or name in RESERVED or not isinstance(secret, str) or not SECRET.match(secret):
+            raise ValueError(f"Unsafe managed secret {name!r}.")
+    managed = set(plain) | set(secrets)
+    env[:] = [item for item in env if item["name"] != "NODE_ENV" and item["name"] not in managed]
     env.append({"name": "NODE_ENV", "value": "production"})
+    # Secrets are referenced by name; the value never passes through this script.
+    for name, value in plain.items():
+        env.append({"name": name, "value": value})
+    for name, secret in secrets.items():
+        env.append({"name": name, "valueFrom": {"secretKeyRef": {"name": secret, "key": "latest"}}})
     # Freeze every currently serving revision; never route live traffic to
     # latestRevision while the candidate is being validated.
     traffic = []
@@ -62,4 +100,7 @@ def prepare(service, image, revision):
 
 
 if __name__ == "__main__":
-    json.dump(prepare(json.load(sys.stdin), sys.argv[1], sys.argv[2]), sys.stdout)
+    json.dump(
+        prepare(json.load(sys.stdin), sys.argv[1], sys.argv[2], *managed_from_environment(os.environ)),
+        sys.stdout,
+    )

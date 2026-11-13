@@ -19,11 +19,29 @@ for (let attempt = 0; attempt < 20; attempt++) {
       const response = await probe(path);
       if (!response.ok) throw new Error(path + " returned " + response.status);
     }
+    // When MCP is switched on, a deploy is only good if assistants can actually
+    // discover and authenticate against it; an unconfigured server skips this.
+    if (data.mcpConfigured) {
+      const meta = await probe("/.well-known/oauth-authorization-server");
+      const issuer = meta.ok && (await meta.json().catch(() => ({}))).issuer;
+      if (typeof issuer !== "string" || !issuer.startsWith("http"))
+        throw new Error("MCP is configured but the authorization metadata is missing.");
+      const resource = await probe("/.well-known/oauth-protected-resource/api/mcp");
+      if (!resource.ok) throw new Error("MCP protected resource metadata returned " + resource.status);
+      const unauthenticated = await fetch(base + "/api/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        signal: AbortSignal.any([deadline, AbortSignal.timeout(10000)]),
+      });
+      if (unauthenticated.status !== 401 || !unauthenticated.headers.get("www-authenticate")?.includes("resource_metadata"))
+        throw new Error("MCP endpoint must answer 401 with a pointer to its metadata, got " + unauthenticated.status);
+    }
     const privateBundle = await probe("/server.cjs");
     if (privateBundle.status !== 404)
       throw new Error("Server bundle is publicly accessible.");
     console.log(
-      "Deployment health, Gemini/AssemblyAI configuration, SPA routes and PWA assets passed.",
+      "Deployment health, Gemini/AssemblyAI configuration, SPA routes, PWA assets and (when enabled) MCP discovery passed.",
     );
     process.exit(0);
   } catch (error) {

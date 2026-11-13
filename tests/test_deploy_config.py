@@ -160,5 +160,58 @@ class DeploymentConfigTests(unittest.TestCase):
                     self.prepare(original)
 
 
+class ManagedSettingsTests(unittest.TestCase):
+    """The deploy owns the MCP settings, so the service cannot drift from the repo."""
+
+    def prepare(self, **managed):
+        return module.prepare(service_fixture(), "repo/image@sha256:abc", "new-revision", **managed)
+
+    def env(self, result):
+        return {item["name"]: item for item in result["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+    def test_adds_plain_values_and_secret_references_without_touching_the_rest(self):
+        env = self.env(self.prepare(
+            plain={"MCP_PUBLIC_URL": "https://cheatmeet.example.com"},
+            secrets={"MCP_TOKEN_SECRET": "cheatmeet-mcp-token-secret"},
+        ))
+        self.assertEqual(env["MCP_PUBLIC_URL"], {"name": "MCP_PUBLIC_URL", "value": "https://cheatmeet.example.com"})
+        self.assertEqual(env["MCP_TOKEN_SECRET"]["valueFrom"]["secretKeyRef"],
+                         {"name": "cheatmeet-mcp-token-secret", "key": "latest"})
+        self.assertNotIn("value", env["MCP_TOKEN_SECRET"])
+        self.assertEqual(env["GEMINI_API_KEY"]["valueFrom"]["secretKeyRef"]["name"], "gemini-key")
+        self.assertEqual(env["FIREBASE_PROJECT_ID"]["value"], "project")
+
+    def test_replaces_a_stale_value_instead_of_duplicating_it(self):
+        service = service_fixture()
+        service["spec"]["template"]["spec"]["containers"][0]["env"].append({"name": "MCP_PUBLIC_URL", "value": "https://old"})
+        result = module.prepare(service, "i", "r", plain={"MCP_PUBLIC_URL": "https://new"})
+        names = [item["name"] for item in result["spec"]["template"]["spec"]["containers"][0]["env"]]
+        self.assertEqual(names.count("MCP_PUBLIC_URL"), 1)
+        self.assertEqual(self.env(result)["MCP_PUBLIC_URL"]["value"], "https://new")
+
+    def test_without_settings_the_environment_is_exactly_as_before(self):
+        self.assertEqual(self.env(self.prepare()).keys(), {"GEMINI_API_KEY", "FIREBASE_PROJECT_ID", "NODE_ENV"})
+
+    def test_never_puts_a_secret_value_into_the_spec(self):
+        text = repr(self.prepare(secrets={"MCP_TOKEN_SECRET": "name-only"}))
+        self.assertIn("name-only", text)
+        self.assertNotIn("'value': 'name-only'", text)
+
+    def test_rejects_unsafe_names_and_values(self):
+        for bad in ({"plain": {"bad name": "x"}}, {"plain": {"OK": 5}}, {"secrets": {"OK": "has space"}},
+                    {"plain": {"NODE_ENV": "development"}}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                self.prepare(**bad)
+
+    def test_reads_managed_settings_from_the_environment_only_when_complete(self):
+        self.assertEqual(module.managed_from_environment({}), ({}, {}))
+        self.assertEqual(module.managed_from_environment({"MCP_PUBLIC_URL": "https://x.example"}), ({"MCP_PUBLIC_URL": "https://x.example"}, {}))
+        self.assertEqual(module.managed_from_environment({"MCP_PUBLIC_URL": "https://x.example", "MCP_TOKEN_SECRET_NAME": "s"}),
+                         ({"MCP_PUBLIC_URL": "https://x.example"}, {"MCP_TOKEN_SECRET": "s"}))
+        # A secret without a public URL would half-enable the feature: refuse.
+        with self.assertRaises(ValueError):
+            module.managed_from_environment({"MCP_TOKEN_SECRET_NAME": "s"})
+
+
 if __name__ == "__main__":
     unittest.main()

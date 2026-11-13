@@ -6,7 +6,7 @@ permissions:
   actions: read
   id-token: write
 concurrency:
-  group: baudoku-production
+  group: cheatmeet-production
   cancel-in-progress: false
 jobs:
   cloud-run:
@@ -15,11 +15,15 @@ jobs:
     timeout-minutes: 20
     environment:
       name: production
-      url: https://drive-sync-notes-gma5yake7q-nw.a.run.app
+      url: ${{ vars.MCP_PUBLIC_URL }}
     env:
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_REGION: ${{ vars.GCP_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      # The MCP feature is owned by the deploy, so the service cannot drift from
+      # the repo. The secret itself lives in Secret Manager; only its name is here.
+      MCP_PUBLIC_URL: ${{ vars.MCP_PUBLIC_URL }}
+      MCP_TOKEN_SECRET_NAME: ${{ vars.MCP_TOKEN_SECRET_NAME }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +43,7 @@ jobs:
           REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
         run: |
           gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
-          image="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$REPOSITORY/baudoku:$GITHUB_SHA"
+          image="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$REPOSITORY/cheatmeet:$GITHUB_SHA"
           docker build --tag "$image" .
           docker push "$image"
           digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$image")
