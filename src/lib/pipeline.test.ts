@@ -47,7 +47,7 @@ vi.mock("./session", () => ({
     error instanceof Error ? error.message : "Fehler",
 }));
 
-const { startProcessing, jobFor, activeJobs, clearJob, subscribeJobs, pollServerProcessing } =
+const { startProcessing, jobFor, activeJobs, clearJob, subscribeJobs, pollServerProcessing, observeServerProcessing, handoffServerProcessing } =
   await import("./pipeline");
 
 const report = {
@@ -97,6 +97,71 @@ describe("processing pipeline", () => {
     deleteDraft.mockResolvedValue(undefined);
   });
   afterEach(() => clearJob(report.id));
+
+  it("observes idle every five minutes and wakes on accepted work without publish recursion", async () => {
+    vi.useFakeTimers();
+    const doc=Object.assign(new EventTarget(),{hidden:false,hasFocus:()=>true});
+    vi.stubGlobal('document',doc);vi.stubGlobal('window',new EventTarget());
+    remote.available.mockResolvedValue(true);
+    const stop=observeServerProcessing('user-1');
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(remote.list).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(299999);
+      expect(remote.list).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(remote.list).toHaveBeenCalledTimes(2);
+      // Another router instance may still serve an idle snapshot after acceptance.
+      await handoffServerProcessing('user-1',report,{analyze:true});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(remote.list).toHaveBeenCalledTimes(3);
+      remote.list.mockResolvedValue({jobs:[{reportId:report.id,state:'queued',message:'Server',updatedAt:'observer-active'}]});
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(remote.list).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(remote.list).toHaveBeenCalledTimes(4);
+      const done={reportId:report.id,state:'done',message:'Fertig',updatedAt:'observer-done'};
+      remote.list.mockResolvedValue({jobs:[done]});remote.get.mockResolvedValue({job:done});
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(remote.list).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(299999);
+      expect(remote.list).toHaveBeenCalledTimes(5);
+    } finally {stop();vi.useRealTimers();vi.unstubAllGlobals();}
+  });
+
+  it("pauses background observation, resumes explicit drafts after authority, and backs off failures", async () => {
+    vi.useFakeTimers();
+    const doc=Object.assign(new EventTarget(),{hidden:true,hasFocus:()=>true});
+    const win=new EventTarget();vi.stubGlobal('document',doc);vi.stubGlobal('window',win);
+    remote.available.mockResolvedValue(true);
+    const stop=observeServerProcessing('user-1');
+    try {
+      await vi.advanceTimersByTimeAsync(300000);
+      expect(remote.list).not.toHaveBeenCalled();
+      doc.hidden=false;doc.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(remote.list).toHaveBeenCalledTimes(1);
+      win.dispatchEvent(new Event('blur'));
+      await vi.advanceTimersByTimeAsync(300000);
+      expect(remote.list).toHaveBeenCalledTimes(1);
+      const pending={...draft,processing:{analyze:false}};
+      listDrafts.mockResolvedValue([pending]);getDraft.mockResolvedValue(pending);
+      remote.list.mockRejectedValueOnce(Error('quota'));
+      win.dispatchEvent(new Event('focus'));await vi.advanceTimersByTimeAsync(0);
+      expect(remote.list).toHaveBeenCalledTimes(2);expect(backupDraft).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(29999);
+      expect(remote.list).toHaveBeenCalledTimes(2);
+      remote.list.mockRejectedValueOnce(Error('quota'));
+      await vi.advanceTimersByTimeAsync(1);expect(remote.list).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(59999);expect(remote.list).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(backupDraft).toHaveBeenCalledOnce();expect(remote.list).toHaveBeenCalledBefore(backupDraft);
+      stop();await vi.advanceTimersByTimeAsync(300000);
+      const count=remote.list.mock.calls.length;
+      win.dispatchEvent(new Event('focus'));doc.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);expect(remote.list).toHaveBeenCalledTimes(count);
+    } finally {stop();vi.useRealTimers();vi.unstubAllGlobals();}
+  });
 
   it("pins the Microsoft source and never asks Google for its credential", async () => {
     remote.available.mockResolvedValue(true);

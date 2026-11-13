@@ -57,7 +57,30 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
     try{return await o.identify(token);}catch{throw new ProcessingError(401,'Bitte erneut anmelden.');}
   };
   const fail=(res:express.Response,e:unknown)=>res.status(e instanceof ProcessingError?e.status:503).json({error:e instanceof ProcessingError?e.message:'Verarbeitung derzeit nicht verfügbar. Bitte später erneut versuchen.'});
-  const send=async(j:ProcessingJob,delay=0)=>{if(processingActive(j))await o.enqueue({key:j.key,run:j.run,seq:j.seq},delay);};
+  // Per-instance, nonauthoritative list snapshots only. Never cache identity,
+  // grants, or hydrated report/transcript results; Firestore still owns jobs.
+  type ListItem = { job: ProcessingJobView; microsoft: boolean };
+  const lists = new Map<string, { expires: number; pending: Promise<ListItem[]> }>();
+  const ownerList = (owner: string) => {
+    const cached = lists.get(owner);
+    if (cached && cached.expires > now()) return cached.pending;
+    lists.delete(owner);
+    if (lists.size >= 128) lists.delete(lists.keys().next().value!);
+    const entry = { expires: Infinity, pending: undefined as unknown as Promise<ListItem[]> };
+    entry.pending = o.store.listByOwner(owner).then(jobs => {
+      entry.expires = now() + (jobs.some(processingActive) ? 5000 : 60000);
+      return jobs.map(j => ({ job: publicJob(j), microsoft: !!j.refs.home }));
+    }).catch(error => {
+      if (lists.get(owner) === entry) lists.delete(owner);
+      throw error;
+    });
+    lists.set(owner, entry);
+    return entry.pending;
+  };
+  const send=async(j:ProcessingJob,delay=0)=>{
+    lists.delete(j.owner); // Also invalidate terminal transitions (no enqueue).
+    if(processingActive(j))await o.enqueue({key:j.key,run:j.run,seq:j.seq},delay);
+  };
   router.get('/processing/config',(_req,res)=>res.json({enabled:o.enabled()}));
   // Worker route MUST precede the report-id route; browser Firebase tokens never authenticate here.
   router.post('/processing/worker',express.json({limit:'4kb'}),async(req,res)=>{
@@ -71,6 +94,7 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
       const lease=randomUUID();
       j=await o.store.mutate(task.key,c=>c&&c.run===task.run&&c.seq===task.seq&&processingActive(c)&&(!c.leaseUntil||c.leaseUntil<=now())?{...c,lease,leaseUntil:now()+240000,attempts:c.attempts+1,updatedAt:stamp()}:undefined,meta);
       if(!j||j.lease!==lease){throw new ProcessingError(503,'Auftrag wird bereits verarbeitet.');}
+      lists.delete(j.owner);
       const claimed=j;
       let patch:Partial<ProcessingJob>;
       let delay=0;
@@ -147,7 +171,7 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
       res.json({ok:true});
     }catch(e){fail(res,e);}
   });
-  router.get('/processing',async(req,res)=>{try{const a=await auth(req);const jobs=await o.store.listByOwner(a.uid);res.setHeader('Cache-Control','no-store');res.json({jobs:jobs.filter(j=>!j.refs.home||providerAware(req)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)).slice(0,50).map(publicJob)});}catch(e){fail(res,e);}});
+  router.get('/processing',async(req,res)=>{try{const a=await auth(req);const jobs=await ownerList(a.uid);res.setHeader('Cache-Control','no-store');res.json({jobs:jobs.filter(j=>!j.microsoft||providerAware(req)).map(j=>j.job).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)).slice(0,50)});}catch(e){fail(res,e);}});
   router.get('/processing/:id',async(req,res)=>{try{
     const a=await auth(req);const j=await o.store.get(jobKey(a.uid,String(req.params.id)));
     if(!j||j.owner!==a.uid||j.refs.home&&!providerAware(req))throw new ProcessingError(404,'Auftrag nicht gefunden.');

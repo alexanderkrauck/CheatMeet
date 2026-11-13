@@ -4,7 +4,7 @@ import { analyzeDraft, backupDraft, syncReport } from "./workflow";
 import { saveReport } from "./reports";
 import { acceptRemoteReport, deleteDraft, putLocal, putDraft, getDraft, listDrafts, getLocal, type LocalReport } from "./local";
 import { processingAvailable, submitServerProcessing, getServerProcessing, listServerProcessing, type ProcessingOptions } from "./serverProcessing";
-import type { ProcessingJobView } from "../../shared/processing";
+import { processingActive, type ProcessingJobView } from "../../shared/processing";
 import type { ReportData } from "../types";
 import { errorMessage } from "./session";
 import type { Draft } from "../types";
@@ -158,20 +158,68 @@ export async function pollServerProcessing(owner: string) {
     if (typeof navigator === "undefined" || !navigator.locks) continue;
     await startProcessing({ owner, draft, analyze: draft.processing.analyze, resume: true });
   }
+  return remote.some(processingActive);
 }
 
 export function observeServerProcessing(owner: string): () => void {
   let stopped = false;
+  let polling = false;
+  let failures = 0;
+  let focused = typeof document === "undefined" || document.hasFocus();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const visible = () => focused && (typeof document === "undefined" || !document.hidden);
+  const serverIds = () => new Set(activeJobs().filter(job => job.owner === owner && job.serverOwned).map(job => job.reportId));
+  let known = serverIds();
+  const pause = () => { if (timer !== undefined) clearTimeout(timer); timer = undefined; };
   const tick = async () => {
-    try { if (!stopped) await pollServerProcessing(owner); }
-    catch { /* Offline only pauses observation; server retries continue. */ }
-    finally { if (!stopped) timer = setTimeout(tick, 5000); }
+    if (stopped || polling || !visible()) return;
+    pause();
+    polling = true;
+
+    let delay = 300000;
+    try {
+      const busy = await pollServerProcessing(owner);
+      failures = 0;
+      if (busy || serverIds().size > 0) delay = 5000;
+    } catch {
+      // A quota/offline error is not an idle response; do not hammer every 5s.
+      failures++;
+      delay = Math.min(300000, 30000 * 2 ** Math.min(failures - 1, 4));
+    } finally {
+      polling = false;
+      if (!stopped && visible()) timer = setTimeout(tick, delay);
+    }
   };
-  void tick();
+  const resume = () => { if (!stopped && visible()) void tick(); };
+  const focus = () => { focused = true; resume(); };
+  const blur = () => { focused = false; pause(); };
+  const visibility = () => {
+    if (document.hidden) pause();
+    else { focused = true; resume(); }
+  };
+  const unsubscribe = subscribeJobs(() => {
+    const next = serverIds();
+    const added = [...next].some(id => !known.has(id));
+    known = next;
+    if (!added) return;
+    // Observation itself publishes jobs. Never recursively poll from publish.
+    if (!polling) resume();
+  });
+  if (typeof window !== "undefined") {
+    window.addEventListener("focus", focus);
+    window.addEventListener("blur", blur);
+  }
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", visibility);
+  resume();
   return () => {
     stopped = true;
-    if (timer) clearTimeout(timer);
+    pause();
+    unsubscribe();
+    if (typeof window !== "undefined") {
+      window.removeEventListener("focus", focus);
+      window.removeEventListener("blur", blur);
+    }
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", visibility);
     for (const [id, job] of jobs) if (job.owner === owner && job.serverOwned) jobs.delete(id);
     changed();
   };

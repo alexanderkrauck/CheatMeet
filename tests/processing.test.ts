@@ -47,6 +47,53 @@ it('accepts Microsoft-only homes and hides their jobs from legacy Google-only cl
   expect((await h.call('/processing/meeting-1',undefined,'alice',true)).status).toBe(200);
   expect((await h.call('/processing/meeting-1',undefined,'bob',true)).status).toBe(404);
 });
+it('coalesces owner lists while authenticating and filtering every request, with bounded idle caching',async()=>{
+  const start=Date.now();let time=start;
+  const store=memoryDocStore<ProcessingJob>();
+  const query=vi.spyOn(store,'listByOwner');
+  const identify=vi.fn(async(token:string)=>{if(token==='revoked')throw Error('revoked');return {uid:token,googleSub:''};});
+  const h=await setup({store,identify,now:()=>time});
+  const home={provider:'microsoft' as const,connectionId:'c',driveId:'d',rootId:'r',rootName:'Meetings',folderId:'f',reportId:'j'};
+  const ms={...report,driveFolderId:undefined,driveReportId:undefined,home};
+  h.io.load.mockResolvedValue({report:ms,revision:'source-v1',indexRevision:'index-v1'});
+  await h.call('/processing/meeting-1',{report:ms,analyze:false},'alice',true);
+  let release!:()=>void;
+  query.mockImplementationOnce(async owner=>{await new Promise<void>(r=>{release=r;});return store.get((await import('../server/processing')).jobKey(owner,report.id)).then(j=>j?[j]:[]);});
+  const first=h.call('/processing');
+  await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+  const second=h.call('/processing',undefined,'alice',true);
+  await vi.waitFor(()=>expect(identify).toHaveBeenCalledTimes(3));
+  release();
+  expect((await first).body.jobs).toEqual([]);
+  expect((await second).body.jobs).toHaveLength(1);
+  expect(query).toHaveBeenCalledTimes(1);
+  expect((await h.call('/processing',undefined,'revoked')).status).toBe(401);
+  expect((await h.call('/processing',undefined,'bob')).body.jobs).toEqual([]);
+  expect(query).toHaveBeenCalledTimes(2);
+  time=start+4999;await h.call('/processing');expect(query).toHaveBeenCalledTimes(2);
+  time=start+5000;await h.call('/processing');expect(query).toHaveBeenCalledTimes(3);
+  // Idle entries survive 60 seconds, and the map cannot retain unlimited owners.
+  await h.call('/processing',undefined,'idle');
+  time+=59999;await h.call('/processing',undefined,'idle');expect(query).toHaveBeenCalledTimes(4);
+  time++;await h.call('/processing',undefined,'idle');expect(query).toHaveBeenCalledTimes(5);
+  for(let n=0;n<128;n++)await h.call('/processing',undefined,`owner-${n}`);
+  const before=query.mock.calls.length;
+  await h.call('/processing',undefined,'idle');expect(query).toHaveBeenCalledTimes(before+1);
+});
+it('invalidates cached lists on acceptance and every worker transition including done',async()=>{
+  const store=memoryDocStore<ProcessingJob>();const query=vi.spyOn(store,'listByOwner');
+  const h=await setup({store});
+  expect((await h.call('/processing')).body.jobs).toEqual([]);
+  await h.call('/processing/meeting-1',{report,analyze:false});
+  expect((await h.call('/processing')).body.jobs[0].state).toBe('queued');
+  expect(query).toHaveBeenCalledTimes(2);
+  for(const state of ['exporting','exporting','done']){
+    await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
+    expect((await h.call('/processing')).body.jobs[0].state).toBe(state);
+  }
+  expect(query).toHaveBeenCalledTimes(5);
+  await h.call('/processing');expect(query).toHaveBeenCalledTimes(5);
+});
 it('rejects browser tokens at worker and never does work on GET',async()=>{
   const h=await setup();await h.call('/processing/meeting-1',{report,analyze:true});
   const task=h.queue.mock.calls[0][0];

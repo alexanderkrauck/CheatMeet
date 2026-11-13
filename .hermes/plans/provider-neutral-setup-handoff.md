@@ -1,6 +1,10 @@
 # Provider-neutral setup UI handoff
 
 ## Parent release and live acceptance
+**Later live blocker:** after acceptance and deployment, fresh direct settings reads returned429 `RESOURCE_EXHAUSTED / Quota exceeded`, and the actual signed-in runtime connection endpoint returned503. Monitoring confirms the fixed `ReadOperationsPerProjectPerDay` limit. Full Pacific-day read counters:1,471 LOOKUP,81 NOT_FOUND,48,649 PIPELINE. Complete last12h CloudRun logs:4,799 GET processing requests,4,521 list requests;2,462 HTTP304 responses still performed the owner query. The source's unconditional five-second observer reloads terminal job history even while idle/hidden. A bounded cache/adaptive-observer fix is in progress, not yet part of the acceptance release below.
+
+The exact named database is Enterprise, `freeTier:false,freeTierLimited:true`; project billing is already enabled. Firebase Console explicitly labels it `AI SHARED QUOTA` and offers `Upgrade database` to move just this database to pay-as-you-go. A safe attempted100,000/day consumer override was rejected as a fixed limit, with no quota change. Asked Alexander to authorize only this database's pay-as-you-go conversion; the question timed out unanswered. Do not change billing without his answer. The separate DriveSyncNotes database is out of scope. Configuration-only health flags remain true and do not establish database usability during this outage.
+
 - Code release `460250352c0a0dd7c6835cab95f398354c0727ab`; Actions `43483809915` passed npm, Bun, container, build/PWA and deployment. Cloud Run revision `cheatmeet-gh-460250352c0a-43483809915-1` serves 100% of traffic.
 - Final suite: 88 files / 1,142 tests. Live desktop/mobile login has equal provider buttons. Real settings show symmetric identity links and separate storage/calendar setup; Google disconnect belongs to the actual Drive connection, not identity.
 - Walked the deployed four-step setup, skipped calendar changes and finished. Exact Firestore Drive/provider/preferences versions before and after were identical.
