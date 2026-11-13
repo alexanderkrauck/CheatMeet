@@ -203,6 +203,16 @@ class ManagedSettingsTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 self.prepare(**bad)
 
+    def test_processing_configuration_is_owned_by_deploy_and_requires_all_three_fields(self):
+        settings = {
+            "PROCESSING_QUEUE": "projects/p/locations/europe-west2/queues/cheatmeet-processing",
+            "PROCESSING_WORKER_URL": "https://cheatmeet.example.com/api/processing/worker",
+            "PROCESSING_SERVICE_ACCOUNT": "worker@p.iam.gserviceaccount.com",
+        }
+        self.assertEqual(module.managed_from_environment(settings), (settings, {}))
+        with self.assertRaises(ValueError):
+            module.managed_from_environment({"PROCESSING_QUEUE": settings["PROCESSING_QUEUE"]})
+
     def test_reads_managed_settings_from_the_environment_only_when_complete(self):
         self.assertEqual(module.managed_from_environment({}), ({}, {}))
         self.assertEqual(module.managed_from_environment({"MCP_PUBLIC_URL": "https://x.example"}), ({"MCP_PUBLIC_URL": "https://x.example"}, {}))

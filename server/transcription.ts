@@ -15,7 +15,7 @@ import {
   type Submission,
 } from "./transcriptionStore";
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
@@ -30,22 +30,69 @@ class ProviderError extends ApiError {
 }
 // These responses explicitly reject a job; timeouts and 5xx remain uncertain.
 const REJECTED = new Set([400, 401, 403, 404, 413, 415, 422, 429]);
-export function createTranscriptionRouter(
-  options: {
-    verifyToken?: typeof verifyFirebaseToken;
-    fetchImpl?: typeof fetch;
-    store?: SubmissionStore;
-    apiKey?: string;
-    maxFileBytes?: number;
-    uploadRoot?: string;
-  } = {},
-) {
+type TranscriptionOptions = {
+  verifyToken?: typeof verifyFirebaseToken; fetchImpl?: typeof fetch; store?: SubmissionStore;
+  apiKey?: string; maxFileBytes?: number; uploadRoot?: string; timeoutMs?: number;
+};
+
+/** The single final-pass reservation owner, shared by HTTP imports and durable workers. */
+export function createBatchTranscriptionService(options: TranscriptionOptions = {}) {
+  const store = options.store || (process.env.NODE_ENV === 'production' ? firestoreSubmissionStore() : fileSubmissionStore());
+  const fetchImpl = options.fetchImpl || fetch;
+  const api = async (path: string, init: RequestInit = {}) => {
+    const key = options.apiKey ?? process.env.ASSEMBLYAI_API_KEY;
+    if (!key) throw new ApiError(503, 'AssemblyAI ist noch nicht eingerichtet.');
+    const response = await fetchImpl(`https://api.eu.assemblyai.com/v2${path}`, {
+      ...init, headers: {...init.headers, authorization:key}, signal:AbortSignal.timeout(options.timeoutMs ?? 60000),
+    });
+    if (!response.ok) throw new ProviderError(response.status);
+    return response.json();
+  };
+  return {
+    async poll(owner:string,id:string) {
+      const job = await store.get(submissionKey(owner,`${id}:final`));
+      if (!job || job.state === 'retryable') return {state:'retryable' as const};
+      if (!job.providerId) throw new ApiError(409,'Der letzte Auftrag ist unbestätigt. Kein erneutes Senden, damit Audio höchstens zweimal transkribiert wird. Die Originalaufnahme bleibt erhalten.');
+      const data = await api(`/transcript/${encodeURIComponent(job.providerId)}`);
+      if (data.status === 'error') throw new ApiError(422,'Der Transkriptionsauftrag ist fehlgeschlagen. Die Originalaufnahme bleibt erhalten; kein automatischer weiterer Durchlauf.');
+      if (data.status !== 'completed') return {state:'processing' as const};
+      if (data.speech_model_used && data.speech_model_used !== 'universal-3-5-pro') throw new ApiError(502,'Der Transkriptionsanbieter hat ein anderes Modell verwendet.');
+      return {state:'completed' as const,speech:batchTranscript(data,job.languages)};
+    },
+    async start(owner:string,id:string,languages:string[],input:Readable) {
+      if (!validLanguages(languages)) throw new ApiError(400,'Bitte die erwarteten Sprachen auswählen.');
+      const key=submissionKey(owner,`${id}:final`); const existing=await store.get(key);
+      if (existing && existing.state !== 'retryable') return {state:'existing'};
+      const job:Submission={state:'reserved',languages,createdAt:new Date().toISOString()};
+      if (!(await (existing ? store.retry(key,job):store.reserve(key,job)))) return {state:'existing'};
+      let stage:'upload'|'submit'|'checkpoint'='upload'; let stream:Readable|undefined;
+      try {
+        const maxBytes=options.maxFileBytes ?? MAX_FILE_BYTES;
+        stream=Readable.from((async function*(){let bytes=0;for await(const chunk of input){bytes+=chunk.length;if(bytes>maxBytes)throw new ApiError(413,'Die Audiodatei ist zu groß.');yield chunk;}if(!bytes)throw new ApiError(400,'Die Audiodatei ist leer.');})());
+        const upload=await api('/upload',{method:'POST',headers:{'content-type':'application/octet-stream'},body:stream as any,duplex:'half'} as RequestInit);
+        if(typeof upload.upload_url !== 'string')throw new ApiError(502,'Audio-Upload wurde nicht bestätigt.');
+        stage='submit';
+        const submitted=await api('/transcript',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({audio_url:upload.upload_url,speech_models:['universal-3-5-pro'],...(languages.length===1?{language_code:languages[0]}:{language_detection:true}),speaker_labels:true,punctuate:true,format_text:true,remove_audio_tags:'all'})});
+        if(typeof submitted.id !== 'string')throw new ApiError(502,'Transkriptionsauftrag wurde nicht bestätigt.');
+        stage='checkpoint';await store.set(key,{...job,state:'submitted',providerId:submitted.id});
+        return {state:'processing'};
+      }catch(error){
+        if(stage==='upload'||stage==='submit'&&error instanceof ProviderError&&REJECTED.has(error.upstreamStatus))await store.set(key,{...job,state:'retryable',failureStage:stage,...(error instanceof ProviderError?{upstreamStatus:error.upstreamStatus}:{})}).catch(()=>{});
+        if (error && typeof error === 'object') Object.assign(error, { failureStage: stage });
+        throw error;
+      }finally{stream?.destroy();input.destroy();}
+    },
+  };
+}
+
+export function createTranscriptionRouter(options: TranscriptionOptions = {}) {
   const router = express.Router();
   const store =
     options.store ||
     (process.env.NODE_ENV === "production"
       ? firestoreSubmissionStore()
       : fileSubmissionStore());
+  const batch = createBatchTranscriptionService({ ...options, store });
   const providerFetch = options.fetchImpl || fetch;
   const verify = options.verifyToken || verifyFirebaseToken;
   const key = () => options.apiKey ?? process.env.ASSEMBLYAI_API_KEY;
@@ -66,7 +113,6 @@ export function createTranscriptionRouter(
     if (!response.ok) throw new ProviderError(response.status);
     return response.json();
   };
-  const base = "https://api.eu.assemblyai.com/v2";
   const owner = async (req: express.Request) => {
     const token = /^Bearer (\S+)$/i.exec(req.headers.authorization || "")?.[1];
     if (!token) throw new ApiError(401, "Bitte erneut anmelden.");
@@ -156,50 +202,10 @@ export function createTranscriptionRouter(
   router.get(["/transcription/import/:id", "/transcription/final/:id"], async (req, res) => {
     try {
       const uid = await owner(req);
-      const job = await store.get(
-        submissionKey(uid, `${reportId(req.params.id)}:final`),
-      );
-      if (!job) {
-        res.status(404).json({ state: "missing" });
-        return;
-      }
-      if (job.state === "retryable") {
-        res.setHeader("Cache-Control", "no-store");
-        res.json({ state: "retryable" });
-        return;
-      }
-      if (!job.providerId)
-        throw new ApiError(
-          409,
-          "Der letzte Auftrag ist unbestätigt. Kein erneutes Senden, damit Audio höchstens zweimal transkribiert wird. Die Originalaufnahme bleibt erhalten.",
-        );
-      const data = await api(
-        `${base}/transcript/${encodeURIComponent(job.providerId)}`,
-      );
+      const job = await store.get(submissionKey(uid, `${reportId(req.params.id)}:final`));
+      if (!job) { res.status(404).json({ state: "missing" }); return; }
       res.setHeader("Cache-Control", "no-store");
-      if (data.status === "error")
-        throw new ApiError(
-          422,
-          "Der Transkriptionsauftrag ist fehlgeschlagen. Die Originalaufnahme bleibt erhalten; kein automatischer weiterer Durchlauf.",
-        );
-      if (data.status !== "completed") {
-        res.json({ state: "processing" });
-        return;
-      }
-      if (
-        data.speech_model_used &&
-        data.speech_model_used !== "universal-3-5-pro"
-      )
-        throw new ApiError(
-          502,
-          "Der Transkriptionsanbieter hat ein anderes Modell verwendet.",
-        );
-      // Provider job remains readable for restart/cross-device recovery. Retention
-      // is configured at the provider, not silently deleted before durable export.
-      res.json({
-        state: "completed",
-        speech: batchTranscript(data, job.languages),
-      });
+      res.json(await batch.poll(uid, reportId(req.params.id)));
     } catch (error) {
       fail(res, error);
     }
@@ -224,10 +230,8 @@ export function createTranscriptionRouter(
     "/transcription/import/:id",
     express.json({ limit: "8kb" }),
     async (req, res) => {
-      let stream: Readable | undefined;
       let input: Readable | undefined;
-      let reserved: { key: string; job: Submission } | undefined;
-      let stage: "request" | "upload" | "submit" | "checkpoint" = "request";
+      const stage = "request";
       try {
         const uid = await owner(req);
         if (!key())
@@ -281,11 +285,6 @@ export function createTranscriptionRouter(
         }
         if (!validLanguages(languages))
           throw new ApiError(400, "Bitte die erwarteten Sprachen auswählen.");
-        const job: Submission = {
-          state: "reserved",
-          languages,
-          createdAt: new Date().toISOString(),
-        };
         if (fromDrive) {
           // The only credential sent to Google is the caller's short-lived Drive
           // grant. Neither that credential nor a private Drive URL reaches ASR.
@@ -303,79 +302,12 @@ export function createTranscriptionRouter(
             );
           input = Readable.fromWeb(media.body as any);
         } else input = createReadStream(req.file!.path);
-        if (!(await (existing ? store.retry(storageKey, job) : store.reserve(storageKey, job)))) {
-          res.status(202).json({ state: "existing" });
-          return;
-        }
-        reserved = { key: storageKey, job };
-        stage = "upload";
-        const source = input;
-        const maxBytes = options.maxFileBytes ?? MAX_FILE_BYTES;
-        stream = Readable.from(
-          (async function* () {
-            let bytes = 0;
-            for await (const chunk of source) {
-              bytes += chunk.length;
-              if (bytes > maxBytes)
-                throw new ApiError(413, "Die Audiodatei ist zu groß.");
-              yield chunk;
-            }
-            if (!bytes) throw new ApiError(400, "Die Audiodatei ist leer.");
-          })(),
-        );
-        const upload = await api(`${base}/upload`, {
-          method: "POST",
-          headers: { "content-type": "application/octet-stream" },
-          body: stream as any,
-          duplex: "half",
-        } as RequestInit);
-        if (typeof upload.upload_url !== "string")
-          throw new ApiError(502, "Audio-Upload wurde nicht bestätigt.");
-        const languageSettings =
-          languages.length === 1
-            ? { language_code: languages[0] }
-            : { language_detection: true };
-        // Pro handles multilingual speech natively. language_codes selects the
-        // legacy code-switching mode and cannot accompany language_detection.
-        // No retry around this POST. Persist the reservation BEFORE it, including
-        // uncertain transport failure, so another process cannot create pass three.
-        stage = "submit";
-        const submitted = await api(`${base}/transcript`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            audio_url: upload.upload_url,
-            speech_models: ["universal-3-5-pro"],
-            ...languageSettings,
-            speaker_labels: true,
-            punctuate: true,
-            format_text: true,
-            remove_audio_tags: "all",
-          }),
-        });
-        if (typeof submitted.id !== "string")
-          throw new ApiError(
-            502,
-            "Transkriptionsauftrag wurde nicht bestätigt.",
-          );
-        stage = "checkpoint";
-        await store.set(storageKey, {
-          ...job,
-          state: "submitted",
-          providerId: submitted.id,
-        });
+        await batch.start(uid, id, languages, input);
         res.status(202).json({ state: "processing" });
       } catch (error) {
-        if (reserved && (stage === "upload" || (stage === "submit" && error instanceof ProviderError && REJECTED.has(error.upstreamStatus)))) {
-          // Uploading alone never starts ASR. Explicit submission rejection also
-          // leaves the final pass unused. Persist that evidence before retrying.
-          await store.set(reserved.key, { ...reserved.job, state: "retryable", failureStage: stage as "upload" | "submit",
-            ...(error instanceof ProviderError ? { upstreamStatus: error.upstreamStatus } : {}),
-          }).catch(() => {}); // On store failure the old reservation stays closed.
-        }
-        fail(res, error, stage);
+
+        fail(res, error, (error as { failureStage?: string }).failureStage || stage);
       } finally {
-        stream?.destroy();
         input?.destroy();
         if (req.file) await rm(req.file.path, { force: true }).catch(() => {});
       }

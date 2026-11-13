@@ -26,6 +26,13 @@ def managed_from_environment(environ):
         if not url:
             raise ValueError("MCP_TOKEN_SECRET_NAME needs MCP_PUBLIC_URL; refusing a half-enabled feature.")
         secrets["MCP_TOKEN_SECRET"] = secret
+    processing = {name: (environ.get(name) or "").strip() for name in (
+        "PROCESSING_QUEUE", "PROCESSING_WORKER_URL", "PROCESSING_SERVICE_ACCOUNT"
+    )}
+    if any(processing.values()):
+        if not all(processing.values()):
+            raise ValueError("Server processing needs queue, worker URL and service account together.")
+        plain.update(processing)
     return plain, secrets
 
 

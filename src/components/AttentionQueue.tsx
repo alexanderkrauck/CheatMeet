@@ -12,6 +12,7 @@ import { auth } from "../lib/firebase";
 import { plural } from "../lib/meetingMeta";
 import { getLocal } from "../lib/local";
 import { saveReport } from "../lib/reports";
+import { jobFor } from "../lib/pipeline";
 import { errorMessage } from "../lib/session";
 import type { Workspace } from "../lib/useReports";
 
@@ -36,7 +37,7 @@ export default function AttentionQueue({
 }: {
   workspace: Workspace;
 }) {
-  const { reports, dirty, drafts, error, draftsError, reload } = workspace;
+  const { reports, dirty, drafts, error, draftsError, reload, running } = workspace;
   const recording = useSyncExternalStore(subscribeCapture, liveDraftId, () => "");
   const [busy, setBusy] = useState(false);
   const [warning, setWarning] = useState("");
@@ -44,7 +45,7 @@ export default function AttentionQueue({
   // The live meeting already has its own bar; listing it again as an
   // unfinished draft says the opposite of what the bar says.
   const open = drafts.filter((draft) => draft.report.id !== recording);
-  const failed = reports.filter((r) => r.status === "error");
+  const failed = reports.filter((r) => r.status === "error" && !running.has(r.id));
   // A failed report can also be awaiting speaker review; it is one problem to
   // the user, and the failure is the one worth acting on.
   const review = reports.filter(
@@ -133,7 +134,7 @@ export default function AttentionQueue({
       tone: "red",
       icon: <AlertTriangle size={17} />,
       title: report.title || "Unbenanntes Meeting",
-      detail: report.error || "Die Analyse ist fehlgeschlagen.",
+      detail: jobFor(report.id)?.error || report.error || "Die Analyse ist fehlgeschlagen.",
       action: (
         <Link className="btn" to={`/report/${report.id}`}>
           Öffnen

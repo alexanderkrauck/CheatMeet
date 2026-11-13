@@ -1,6 +1,9 @@
 import { analyzeDraft, backupDraft, syncReport } from "./workflow";
 import { saveReport } from "./reports";
-import { deleteDraft, putLocal } from "./local";
+import { acceptRemoteReport, deleteDraft, putLocal } from "./local";
+import { processingAvailable, submitServerProcessing, getServerProcessing, listServerProcessing, type ProcessingOptions } from "./serverProcessing";
+import type { ProcessingJobView } from "../../shared/processing";
+import type { ReportData } from "../types";
 import { errorMessage } from "./session";
 import type { Draft } from "../types";
 import { prepareTranscript } from "./prepareTranscript";
@@ -26,12 +29,15 @@ export interface JobState {
   message: string;
   warning?: string;
   error?: string;
+  /** Once accepted, closing this tab does not stop the server job. */
+  serverOwned?: boolean;
 }
 
 /**
  * Save/analyse/export runs here rather than inside the recording screen, so
  * navigating away no longer cancels it. The work still belongs to this tab:
- * closing it stops the job, which is why callers warn before unload.
+ * closing it stops local work. Configured deployments hand durable Drive input
+ * to the server instead; those jobs continue independently of this tab.
  */
 const jobs = new Map<string, JobState>();
 const listeners = new Set<() => void>();
@@ -64,6 +70,80 @@ export const activeJobs = () => active;
 
 export function clearJob(reportId: string) {
   if (jobs.delete(reportId)) changed();
+}
+
+const remoteRevisions = new Map<string, string>();
+
+function publishServerJob(owner: string, job: ProcessingJobView) {
+  const stage: JobStage = job.state === "done" ? "done"
+    : job.state === "review" ? "review"
+    : job.state === "blocked" || job.state === "error" ? "error"
+    : job.state === "exporting" ? "exporting" : "analyzing";
+  publish({ owner, reportId: job.reportId, stage, message: job.message,
+    error: job.error, warning: job.warning, serverOwned: true });
+}
+
+/** Called only after the complete input exists in Drive. A failed response is
+ * uncertain: never fall back to local AI and risk a duplicate paid run. */
+export async function handoffServerProcessing(owner: string, report: ReportData, options: ProcessingOptions) {
+  const check = () => {
+    if (auth.currentUser?.uid !== owner) throw new Error("Das angemeldete Konto hat sich geändert.");
+  };
+  check();
+  let result = await submitServerProcessing(report, options);
+  check();
+  if (["done", "review"].includes(result.job.state)) {
+    result = await getServerProcessing(report.id);
+    check();
+  }
+  // The acknowledged source is durable, even if its earlier index write timed out.
+  await putLocal(owner, { ...report, status: result.job.state === "done" ? "completed" : options.analyze ? "analyzing" : "pending", error: "" }, false);
+  check();
+  publishServerJob(owner, result.job);
+  if (result.report) await acceptRemoteReport(owner, result.report);
+  return result;
+}
+
+/** Restores progress after reload/on another device. Polling only observes jobs;
+ * work and retries are owned by Cloud Tasks, not this timer. */
+export async function pollServerProcessing(owner: string) {
+  if (auth.currentUser?.uid !== owner || !(await processingAvailable())) return;
+  const { jobs: remote } = await listServerProcessing();
+  if (auth.currentUser?.uid !== owner) return;
+  for (const job of remote) {
+    if (auth.currentUser?.uid !== owner) return;
+    const key = `${owner}:${job.reportId}`;
+    if (remoteRevisions.get(key) === job.updatedAt) continue;
+    if (["done", "review", "blocked", "error"].includes(job.state)) {
+      const result = await getServerProcessing(job.reportId);
+      if (auth.currentUser?.uid !== owner) return;
+      if (result.report) {
+        await acceptRemoteReport(owner, result.report);
+        if (auth.currentUser?.uid !== owner) return;
+      }
+      if (job.state === "done") await deleteDraft(owner, job.reportId);
+    }
+    if (auth.currentUser?.uid !== owner) return;
+    publishServerJob(owner, job);
+    remoteRevisions.set(key, job.updatedAt);
+  }
+}
+
+export function observeServerProcessing(owner: string): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const tick = async () => {
+    try { if (!stopped) await pollServerProcessing(owner); }
+    catch { /* Offline only pauses observation; server retries continue. */ }
+    finally { if (!stopped) timer = setTimeout(tick, 5000); }
+  };
+  void tick();
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    for (const [id, job] of jobs) if (job.owner === owner && job.serverOwned) jobs.delete(id);
+    changed();
+  };
 }
 
 export function startProcessing({
@@ -103,6 +183,25 @@ export function startProcessing({
       assertOwner();
       await putLocal(owner, current.report);
       assertOwner();
+
+      if (await processingAvailable()) {
+        // Finish live text locally without a paid batch pass. The server needs
+        // a durable source before it can promise work survives this tab.
+        await prepareTranscript(current, token, { batch: false }).catch((error) => {
+          if (current.report.transcriptionOrigin !== "import") throw error;
+        });
+        assertOwner();
+        update("exporting", "Aufnahme und Transkript für den Server sichern …", { warning });
+        const source = await syncReport(current.report, token);
+        assertOwner();
+        await handoffServerProcessing(owner, source.report, {
+          analyze, retranscribe: analyze && current.retranscribe === true,
+          calendarSync: analyze && calendarSyncEnabled() && hasCalendarGrant(),
+        });
+        assertOwner();
+        await deleteDraft(owner, reportId);
+        return;
+      }
 
       update("analyzing", analyze && current.retranscribe
         ? "Gesamte Aufnahme wird erneut transkribiert …"

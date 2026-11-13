@@ -64,6 +64,7 @@ type Options = {
   processingAttempts?: number;
   retryAttempts?: number;
   uploadRoot?: string;
+  timeoutMs?: number;
 };
 
 class RequestError extends Error {
@@ -87,6 +88,37 @@ const continuationSchema = {
   required: ["continuation"],
   properties: { continuation: { type: "string" } },
 };
+
+function analysisInstruction(preferences: string) {
+  let instruction = "Du erstellst professionelle Meeting-Zusammenfassungen. Extrahiere einen passenden Titel, ein ausführliches Transkript (falls nicht bereits vorhanden), eine umfassende Zusammenfassung, konkrete Aufgaben (todos) und die wichtigsten Erkenntnisse (takeaways). Gib bei jeder Aufgabe die verantwortliche Person (owner) an, wenn sie im Meeting genannt wurde — benutze dafür den Sprechernamen aus dem Transkript — und ein Fälligkeitsdatum (due) im Format YYYY-MM-DD, wenn eines genannt wurde. Erfinde weder Personen noch Termine: lass die Felder weg, wenn sie nicht im Gespräch vorkommen.";
+  if (preferences) instruction += `\nBeachte diese Nutzer-Präferenzen für die Zusammenfassung: ${preferences}`;
+  return instruction;
+}
+
+/** Same text-only analysis owner as the HTTP route. Worker retries happen in durable tasks,
+ * not three 180s provider calls in one Cloud Run request. */
+export async function analyzeTranscript(transcription: string, preferences = "", options: Options = {}) {
+  if (!transcription.trim()) throw new RequestError(400, "Kein Transkript vorhanden.");
+  if (!options.createClient && !process.env.GEMINI_API_KEY)
+    throw new RequestError(503, "KI ist noch nicht eingerichtet.");
+  const client = options.createClient ? options.createClient() : new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY!, httpOptions: { timeout: options.timeoutMs ?? 120_000, retryOptions: { attempts: 1 } },
+  });
+  const attempts = options.retryAttempts ?? 1;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await client.models.generateContent({
+        model: analysisModel(), contents: [{ role: "user", parts: [{ text: transcription }] }],
+        config: { systemInstruction: analysisInstruction(preferences), responseMimeType: "application/json", responseJsonSchema: reportSchema },
+      });
+      try { return { ...validateAnalysis(JSON.parse(response.text || "")), transcription }; }
+      catch { throw new RequestError(502, "Die KI hat keinen vollständigen Bericht geliefert."); }
+    } catch (error) {
+      if (error instanceof RequestError || attempt >= attempts || ![408,429,500,502,503,504].includes((error as {status?:number}).status || 0)) throw error;
+      await (options.sleep || ((ms:number)=>new Promise<void>(r=>setTimeout(r,ms))))(Math.min(8000,400*2**attempt));
+    }
+  }
+}
 
 export function createAnalysisRouter(options: Options = {}) {
   const router = express.Router();
@@ -532,10 +564,12 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
           "Weder Audio noch Transkription vorhanden.",
         );
 
-      let systemInstruction =
-        "Du erstellst professionelle Meeting-Zusammenfassungen. Extrahiere einen passenden Titel, ein ausführliches Transkript (falls nicht bereits vorhanden), eine umfassende Zusammenfassung, konkrete Aufgaben (todos) und die wichtigsten Erkenntnisse (takeaways). Gib bei jeder Aufgabe die verantwortliche Person (owner) an, wenn sie im Meeting genannt wurde — benutze dafür den Sprechernamen aus dem Transkript — und ein Fälligkeitsdatum (due) im Format YYYY-MM-DD, wenn eines genannt wurde. Erfinde weder Personen noch Termine: lass die Felder weg, wenn sie nicht im Gespräch vorkommen.";
-      if (preferences)
-        systemInstruction += `\nBeachte diese Nutzer-Präferenzen für die Zusammenfassung: ${preferences}`;
+      if (transcription) {
+        const result = await analyzeTranscript(transcription, preferences, { ...options, retryAttempts: options.retryAttempts ?? 3 });
+        res.json(result);
+        return;
+      }
+      const systemInstruction = analysisInstruction(preferences);
 
       const parts: Part[] = [];
       if (transcription) parts.push({ text: transcription });

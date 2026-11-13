@@ -49,7 +49,8 @@ import {
 import { saveReport, uid } from "../lib/reports";
 import { backupDraft, syncReport, analyzeDraft, restoreDraft } from "../lib/workflow";
 import { deleteDraft, getDraft, getLocal, putDraft } from "../lib/local";
-import { clearJob, jobFor, subscribeJobs } from "../lib/pipeline";
+import { clearJob, jobFor, subscribeJobs, handoffServerProcessing } from "../lib/pipeline";
+import { processingAvailable } from "../lib/serverProcessing";
 import { reportToMarkdown } from "../lib/markdown";
 import TranscriptTimeline from "../components/TranscriptTimeline";
 import SpeakerReview from "../components/SpeakerReview";
@@ -241,6 +242,20 @@ export default function ReportPage({
       checkOwner();
       const local = await getDraft(owner, report.id);
       checkOwner();
+      if (await processingAvailable()) {
+        checkOwner();
+        let source = report;
+        if (reviewDecision && needsSpeakerReview(source.speech)) {
+          source = { ...source, speech: { ...source.speech!, speakerReview: reviewDecision },
+            transcription: renderTranscript(source.speech!), error: "" };
+          source = (await syncReport(source, t)).report;
+          checkOwner();
+        }
+        await handoffServerProcessing(owner, source, { analyze: true });
+        checkOwner();
+        setNotice("Vom Server übernommen. Du kannst diesen Tab schließen; der Auftrag läuft weiter.");
+        return;
+      }
       const canUseSavedTranscript = report.speech?.phase === "final" || (!report.speech && !!report.transcription.trim());
       const canUseDriveStream = !!report.speech && !!report.rawAudioUrl;
       const d = local?.report.id === report.id && local.audio ? { ...local, report }

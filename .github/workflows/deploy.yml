@@ -24,6 +24,9 @@ jobs:
       # the repo. The secret itself lives in Secret Manager; only its name is here.
       MCP_PUBLIC_URL: ${{ vars.MCP_PUBLIC_URL }}
       MCP_TOKEN_SECRET_NAME: ${{ vars.MCP_TOKEN_SECRET_NAME }}
+      PROCESSING_QUEUE: ${{ vars.PROCESSING_QUEUE }}
+      PROCESSING_WORKER_URL: ${{ vars.PROCESSING_WORKER_URL }}
+      PROCESSING_SERVICE_ACCOUNT: ${{ vars.PROCESSING_SERVICE_ACCOUNT }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4

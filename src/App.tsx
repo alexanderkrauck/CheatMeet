@@ -5,10 +5,12 @@ import {
   stopRetentionSweep,
 } from "./lib/retentionSweep";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
+import { onAuthStateChanged, type User } from "firebase/auth";
+import { observeServerProcessing } from "./lib/pipeline";
 import { auth } from "./lib/firebase";
 import {
   rememberToken,
+  connectGoogle,
   startDriveTokenRefresh,
   stopDriveTokenRefresh,
 } from "./lib/session";
@@ -28,13 +30,13 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [revoked, setRevoked] = useState("");
-  // Losing the Drive grant means losing the app: sign out rather than leave the
-  // user in a half-working state.
+  // Identity and Drive permission are independent. Keep the user signed in
+  // so a blocked server job remains visible while Drive is reconnected.
   useEffect(() => {
     const onRevoked = (event: Event) => {
       const detail = (event as CustomEvent<{ message?: string }>).detail;
       setRevoked(detail?.message || "");
-      void signOut(auth).catch(() => {});
+      // Do not sign out: only the external Drive grant needs renewal.
     };
     window.addEventListener("cheatmeet:drive-revoked", onRevoked);
     return () => window.removeEventListener("cheatmeet:drive-revoked", onRevoked);
@@ -63,6 +65,7 @@ export default function App() {
       }),
     [],
   );
+  useEffect(() => user ? observeServerProcessing(user.uid) : undefined, [user?.uid]);
   if (loading)
     return (
       <div className="loading-screen">
@@ -74,6 +77,16 @@ export default function App() {
     <>
       <BrowserRouter>
         <InstallApp />
+        {user && revoked && (
+          <div className="notice" role="status">
+            {revoked} Deine Anmeldung bleibt erhalten.
+            <button type="button" className="btn" onClick={() => void connectGoogle()
+              .then(() => setRevoked(""))
+              .catch((error) => setRevoked(error instanceof Error ? error.message : "Drive konnte nicht verbunden werden."))}>
+              Google Drive erneut verbinden
+            </button>
+          </div>
+        )}
         <JobProgress />
         <RecordingBar />
         <Routes key={user?.uid || "signed-out"}>

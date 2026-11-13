@@ -14,15 +14,16 @@ export default function JobProgress() {
   const location = useLocation();
 
   useEffect(() => {
-    if (!jobs.length) return;
-    // The pipeline lives in this tab: closing it would abandon the upload.
+    if (!jobs.some((job) => !job.serverOwned)) return;
+    // Only an unfinished browser upload/local job needs this guard. Server
+    // acceptance explicitly promises that closing the tab is safe.
     const guard = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", guard);
     return () => window.removeEventListener("beforeunload", guard);
-  }, [jobs.length]);
+  }, [jobs]);
 
   // The capture screen owns its bottom edge: the pill sat on top of pause
   // and stop. RecordingBar already stands aside here for the same reason.

@@ -125,7 +125,20 @@ up, and then the user gets a "Live neu starten" button (`restartLive()`).
 `src/lib/assemblyLive.stall.test.ts` holds the regression tests; keep the GUARD
 cases green.
 
-**Save/analyse/export runs in `src/lib/pipeline.ts`, not in a component.** It is a module-level job store, so navigating away no longer cancels the work; `JobProgress` renders running jobs from any screen and guards `beforeunload`. Recording hands off to it and navigates straight to the report. The job still belongs to the tab — closing it abandons the upload.
+**Post-upload processing is server-owned when configured** (`server/processing/`,
+`shared/processing.ts`). Cloud Tasks invokes an OIDC-authenticated worker; a
+Firestore `processingJobs` document holds run identity, lease, retries and stage,
+not audio/transcript content. Drive checkpoints let a restarted task resume the
+existing ASR job or skip a completed summary. Each dispatch has a 200s awaited
+budget, with one <=120s Gemini attempt. Source/index revision checks and a
+conditional Drive update protect later edits. Drive v3 can omit ETag headers;
+the worker checks v2's explicit etag/version and uses conditional v2 media PUT.
+After audio + transcript JSON upload and job acceptance, the tab can close.
+`src/lib/pipeline.ts` retains the local fallback for unconfigured development;
+`JobProgress` guards only unfinished browser-owned work. Polling restores job
+status and final/review reports after reload/on other devices. A revoked Drive
+grant pauses processing without signing the user out of Firebase. See
+`SERVER_PROCESSING.md` for runtime bindings and recovery.
 
 **PWA**: `vite.config.ts` emits `sw.js` at build time with a content-hashed cache name. Only the public app shell is cached; `/api/`, `/__/` (Firebase auth helpers), cross-origin requests, and all user media are excluded by design. `tests/pwa.integration.mjs` runs the emitted worker in a `vm` sandbox and asserts these exclusions, so changing the caching rules requires updating that test.
 

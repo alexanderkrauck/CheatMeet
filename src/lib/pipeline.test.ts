@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const account = vi.hoisted(() => ({ currentUser: { uid: "user-1" } }));
+const remote = vi.hoisted(() => ({ available: vi.fn(), submit: vi.fn(), list: vi.fn(), get: vi.fn() }));
+vi.mock("./serverProcessing", () => ({ processingAvailable: remote.available, submitServerProcessing: remote.submit, listServerProcessing: remote.list, getServerProcessing: remote.get }));
 vi.mock("./firebase", () => ({ auth: account }));
 const finalTranscript = vi.hoisted(() => vi.fn());
 vi.mock("./prepareTranscript", () => ({ prepareTranscript: finalTranscript }));
@@ -10,6 +12,7 @@ const analyzeDraft = vi.fn();
 const saveReport = vi.fn();
 const putLocal = vi.fn();
 const deleteDraft = vi.fn();
+const acceptRemoteReport = vi.fn();
 
 vi.mock("./workflow", () => ({
   backupDraft: (...args: unknown[]) => backupDraft(...args),
@@ -22,13 +25,15 @@ vi.mock("./reports", () => ({
 vi.mock("./local", () => ({
   putLocal: (...args: unknown[]) => putLocal(...args),
   deleteDraft: (...args: unknown[]) => deleteDraft(...args),
+  acceptRemoteReport: (...args: unknown[]) => acceptRemoteReport(...args),
 }));
 vi.mock("./session", () => ({
+  hasCalendarGrant: () => false,
   errorMessage: (error: unknown) =>
     error instanceof Error ? error.message : "Fehler",
 }));
 
-const { startProcessing, jobFor, activeJobs, clearJob, subscribeJobs } =
+const { startProcessing, jobFor, activeJobs, clearJob, subscribeJobs, pollServerProcessing } =
   await import("./pipeline");
 
 const report = {
@@ -47,6 +52,10 @@ const run = (analyze = true) =>
 describe("processing pipeline", () => {
   beforeEach(() => {
     account.currentUser = { uid: "user-1" };
+    remote.available.mockReset().mockResolvedValue(false);
+    remote.submit.mockReset().mockResolvedValue({ job: { reportId: "report-1", state: "queued", attempts: 0, message: "Wartet auf Server", updatedAt: "2026-11-13T10:00:00Z" } });
+    remote.list.mockReset().mockResolvedValue({ jobs: [] });
+    remote.get.mockReset();
     finalTranscript.mockReset().mockResolvedValue(undefined);
     for (const spy of [
       backupDraft,
@@ -55,6 +64,7 @@ describe("processing pipeline", () => {
       saveReport,
       putLocal,
       deleteDraft,
+      acceptRemoteReport,
     ])
       spy.mockReset();
     saveReport.mockResolvedValue(null);
@@ -65,6 +75,54 @@ describe("processing pipeline", () => {
     deleteDraft.mockResolvedValue(undefined);
   });
   afterEach(() => clearJob(report.id));
+
+  it("restores a server-completed report after reopening without starting another AI call", async () => {
+    remote.available.mockResolvedValue(true);
+    const job = { reportId: report.id, state: "done", attempts: 1, message: "Fertig", updatedAt: "2026-11-13T12:00:00Z" };
+    const finished = { ...report, status: "completed", summary: "Vom Server erstellt" };
+    remote.list.mockResolvedValue({ jobs: [job] });
+    remote.get.mockResolvedValue({ job, report: finished });
+    await pollServerProcessing("user-1");
+    expect(acceptRemoteReport).toHaveBeenCalledWith("user-1", finished);
+    expect(jobFor(report.id)).toMatchObject({ stage: "done", serverOwned: true });
+    expect(remote.submit).not.toHaveBeenCalled();
+    expect(analyzeDraft).not.toHaveBeenCalled();
+    await pollServerProcessing("user-1");
+    expect(remote.get).toHaveBeenCalledOnce();
+  });
+
+  it("hydrates an already-finished idempotent handoff instead of leaving a local analyzing stub", async () => {
+    const job = { reportId: report.id, state: "done", attempts: 4, message: "Fertig", updatedAt: "2026-11-13T13:00:00Z" };
+    const finished = { ...report, status: "completed", summary: "Bereits erstellt" };
+    remote.available.mockResolvedValueOnce(true);
+    remote.submit.mockResolvedValueOnce({ job });
+    remote.get.mockResolvedValueOnce({ job, report: finished });
+    await run();
+    expect(remote.get).toHaveBeenCalledWith(report.id);
+    expect(acceptRemoteReport).toHaveBeenCalledWith("user-1", finished);
+    expect(analyzeDraft).not.toHaveBeenCalled();
+  });
+
+  it("hands a durably uploaded meeting to the server without local AI work", async () => {
+    remote.available.mockResolvedValueOnce(true);
+    await run();
+    expect(backupDraft).toHaveBeenCalledBefore(syncReport);
+    expect(syncReport).toHaveBeenCalledBefore(remote.submit);
+    expect(finalTranscript).toHaveBeenCalledWith(draft, "drive-token", { batch: false });
+    expect(analyzeDraft).not.toHaveBeenCalled();
+    expect(remote.submit).toHaveBeenCalledWith(expect.objectContaining({ id: report.id }), expect.objectContaining({ analyze: true }));
+    expect(jobFor(report.id)).toMatchObject({ serverOwned: true, stage: "analyzing" });
+    expect(deleteDraft).toHaveBeenCalledWith("user-1", report.id);
+  });
+
+  it("does not silently switch to browser AI after an uncertain server handoff", async () => {
+    remote.available.mockResolvedValueOnce(true);
+    remote.submit.mockRejectedValueOnce(new Error("Verbindung unterbrochen"));
+    await run();
+    expect(analyzeDraft).not.toHaveBeenCalled();
+    expect(deleteDraft).not.toHaveBeenCalled();
+    expect(jobFor(report.id)?.stage).toBe("error");
+  });
 
   it("runs save, backup, analysis and export in order and finishes", async () => {
     const stages: string[] = [];

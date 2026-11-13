@@ -37,6 +37,19 @@ for (let attempt = 0; attempt < 20; attempt++) {
       if (unauthenticated.status !== 401 || !unauthenticated.headers.get("www-authenticate")?.includes("resource_metadata"))
         throw new Error("MCP endpoint must answer 401 with a pointer to its metadata, got " + unauthenticated.status);
     }
+    if (process.env.PROCESSING_QUEUE && !data.processingConfigured)
+      throw new Error("Deployment must enable durable server processing.");
+    if (data.processingConfigured) {
+      const config = await probe("/api/processing/config");
+      if (!config.ok || !(await config.json()).enabled)
+        throw new Error("Durable processing configuration is unavailable.");
+      const worker = await fetch(base + "/api/processing/worker", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+        signal: AbortSignal.any([deadline, AbortSignal.timeout(10000)]),
+      });
+      if (worker.status !== 401 && worker.status !== 403)
+        throw new Error("Processing worker must reject unauthenticated dispatch, got " + worker.status);
+    }
     const privateBundle = await probe("/server.cjs");
     if (privateBundle.status !== 404)
       throw new Error("Server bundle is publicly accessible.");
