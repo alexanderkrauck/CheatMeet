@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { captureSnapshot, subscribeCapture } from "./capture";
-import { listDrafts } from "./local";
+import { listDrafts, watchDrafts } from "./local";
 import { activeJobs, subscribeJobs } from "./pipeline";
 import { uid, watchReports } from "./reports";
 import { errorMessage } from "./session";
@@ -67,17 +67,25 @@ export function useReports(): Workspace {
 
   useEffect(() => {
     let active = true;
-    listDrafts(uid(), { includeAudio: false })
+    let requested = 0;
+    const owner = uid();
+    const refresh = () => {
+      const request = ++requested;
+      void listDrafts(owner, { includeAudio: false })
       .then((found) => {
-        if (!active) return;
+        if (!active || request !== requested) return;
         setDrafts(found);
         setDraftsError("");
       })
       .catch((cause) => {
-        if (active) setDraftsError(errorMessage(cause));
+        if (active && request === requested) setDraftsError(errorMessage(cause));
       });
+    };
+    const stop = watchDrafts(owner, refresh);
+    refresh();
     return () => {
       active = false;
+      stop();
     };
   }, [epoch, captureState, jobs.length]);
 

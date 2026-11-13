@@ -58,6 +58,8 @@ export interface Draft {
   report: ReportData;
   /** Explicit opt-in, kept in the local draft until the batch result is saved. */
   retranscribe?: boolean;
+  /** Explicit save choice; only these drafts may resume automatically. */
+  processing?: { analyze: boolean; sourceReady?: boolean };
   /** Live identity evidence used to match names after a second transcription. */
   speakerReference?: MeetingTranscript;
   audio?: Blob;

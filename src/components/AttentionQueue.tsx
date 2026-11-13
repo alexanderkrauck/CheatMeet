@@ -44,7 +44,7 @@ export default function AttentionQueue({
 
   // The live meeting already has its own bar; listing it again as an
   // unfinished draft says the opposite of what the bar says.
-  const open = drafts.filter((draft) => draft.report.id !== recording);
+  const open = drafts.filter((draft) => draft.report.id !== recording && !running.has(draft.report.id));
   const failed = reports.filter((r) => r.status === "error" && !running.has(r.id));
   // A failed report can also be awaiting speaker review; it is one problem to
   // the user, and the failure is the one worth acting on.

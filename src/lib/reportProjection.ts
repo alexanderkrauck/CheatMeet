@@ -52,6 +52,28 @@ export function mergeRemoteReport(
   };
 }
 
+/** A failed machine-generated stub is not an unsaved human edit. Completion
+ * may supersede it only when retained user fields and transcript evidence agree. */
+export function isRecoveredProcessingStub(local: ReportData, remote: ReportData): boolean {
+  if (!["error", "analyzing"].includes(local.status || "") || remote.status !== "completed" || !remote.summary?.trim()) return false;
+  if (local.summary?.trim() || local.todos?.length || local.takeaways?.length) return false;
+  if (local.transcription?.trim()) {
+    if (!remote.transcription?.trim() || local.transcription !== remote.transcription) return false;
+  }
+  const same = (a: unknown, b: unknown): boolean => {
+    if (a === b) return true;
+    if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+    const keys = Object.keys(a).sort();
+    return keys.join("\0") === Object.keys(b).sort().join("\0") && keys.every(k => same((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+  };
+  for (const field of ["title", "projectName", "date", "consent", "calendarEventId", "calendarId", "calendarLink", "singleSpeakerSources", "captureSources"] as const) {
+    const value = local[field];
+    if (value !== undefined && value !== "" && !same(value, remote[field])) return false;
+  }
+  if (local.speech && remote.speech && !same(local.speech.speakerAliases || {}, remote.speech.speakerAliases || {})) return false;
+  return true;
+}
+
 /**
  * True when a transcript exists but lives on another device — as opposed to a
  * meeting that genuinely contained no speech, which also has an empty

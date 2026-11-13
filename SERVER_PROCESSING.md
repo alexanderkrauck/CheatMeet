@@ -7,6 +7,14 @@ After `POST /api/processing/:id` acknowledges acceptance, processing/retries bel
 to the server. Closing the tab does not cancel them. App polling only displays
 progress; reopening or another signed-in device can hydrate the finished report.
 
+The explicit save/analyse choice is persisted before token lookup. Interrupted
+pre-acceptance uploads resume while the app is open, after authoritative job
+observation and under a cross-tab Web Lock; they retain backup-only intent and
+never restart an already accepted source. An uncertain POST reuses the saved
+source rather than rewriting it. Empty setup drafts are not recordings. Failed
+local processing stubs may accept a completed report only after full transcript
+and user-field comparison; real edits and alternative versions stay protected.
+
 The default uses saved live text. The explicit final-transcription option and
 imports use the existing one-final-pass AssemblyAI reservation. An uncertain ASR
 submission is never automatically sent again. Speaker ambiguity pauses for review.
@@ -47,6 +55,8 @@ against v3's before-media version, then conditionally PUTs through v2 with If-Ma
 A real disposable-file check verified successful conditional PUT and stale-token
 HTTP412 rejection without changing the content. Firestore publishing also carries
 an update-time precondition. A newer index/archive edit blocks the old job.
+An inconsistent v2/v3 revision read retries without writing; it is not by itself
+proof of a user edit. The canonical revision guard still blocks actual changes.
 
 Gemini has no transactional idempotency key: a generated response lost before its
 Drive checkpoint may require another billable generation. The app does not promise

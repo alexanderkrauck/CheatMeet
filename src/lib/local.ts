@@ -10,7 +10,7 @@ import {
   getMany,
 } from "idb-keyval";
 import { asTodos } from "../../shared/analysis";
-import { mergeRemoteReport } from "./reportProjection";
+import { isRecoveredProcessingStub, mergeRemoteReport } from "./reportProjection";
 import type { Draft, ReportData } from "../types";
 const store = createStore("cheatmeet", "workspace");
 const key = (uid: string, id: string) => `${uid}:report:${id}`;
@@ -19,17 +19,20 @@ export interface LocalReport {
   dirty: boolean;
 }
 const listeners = new Set<(uid: string) => void>();
+const draftListeners = new Set<(uid: string) => void>();
 const channel =
   typeof window !== "undefined" && typeof BroadcastChannel !== "undefined"
     ? new BroadcastChannel("cheatmeet:local-reports")
     : null;
-function emit(uid: string, broadcast = true) {
+function emit(uid: string, broadcast = true, draftsChanged = false) {
   for (const listener of listeners) listener(uid);
-  if (broadcast) channel?.postMessage(uid);
+  if (draftsChanged) for (const listener of draftListeners) listener(uid);
+  if (broadcast) channel?.postMessage(draftsChanged ? { uid, draftsChanged: true } : uid);
 }
 if (channel)
   channel.onmessage = (event) => {
     if (typeof event.data === "string") emit(event.data, false);
+    else if (typeof event.data?.uid === "string" && event.data.draftsChanged === true) emit(event.data.uid, false, true);
   };
 export function watchLocalReports(uid: string, onChange: () => void) {
   const listener = (changedUser: string) => {
@@ -39,6 +42,11 @@ export function watchLocalReports(uid: string, onChange: () => void) {
   return () => {
     listeners.delete(listener);
   };
+}
+export function watchDrafts(uid: string, onChange: () => void) {
+  const listener = (owner: string) => { if (owner === uid) onChange(); };
+  draftListeners.add(listener);
+  return () => { draftListeners.delete(listener); };
 }
 export async function putLocal(uid: string, report: ReportData, dirty = true) {
   await set(key(uid, report.id), { report, dirty }, store);
@@ -53,7 +61,7 @@ export async function acceptRemoteReport(uid: string, report: ReportData) {
     (existing) => {
       const sameRevision =
         !!report.updatedAt && report.updatedAt === existing?.report.updatedAt;
-      if (existing?.dirty && !sameRevision) return existing;
+      if (existing?.dirty && !sameRevision && !isRecoveredProcessingStub(existing.report, report)) return existing;
       const remoteTime = Date.parse(report.updatedAt || report.date) || 0;
       const localTime = existing
         ? Date.parse(existing.report.updatedAt || existing.report.date) || 0
@@ -70,7 +78,7 @@ export async function acceptRemoteReport(uid: string, report: ReportData) {
     },
     store,
   );
-  if (changed) emit(uid);
+  if (changed) emit(uid, true, report.status === "completed");
 }
 /** Documents written before to-dos had structure still hold plain strings. */
 const normalise = (value: LocalReport): LocalReport => ({
@@ -136,7 +144,7 @@ export async function putDraft(uid: string, draft: Draft) {
     ],
     store,
   );
-  emit(uid);
+  emit(uid, true, true);
 }
 
 interface RecordingChunk {
@@ -221,8 +229,15 @@ export async function listDrafts(
       key.startsWith(`${uid}:capture-progress:`) ||
       (options.includeAudio !== false && key.startsWith(`${uid}:audio-chunk:`)),
   );
+  const draftRecords = records.filter(([k]) => k.startsWith(`${uid}:draft:`));
+  const saved = await getMany<LocalReport>(draftRecords.map(([, value]) => key(uid, (value as Draft).report.id)), store);
+  const completed = new Map(saved.filter(value => value && !value.dirty).map(value => [value.report.id, value.report]));
   return records
     .filter(([k]) => k.startsWith(`${uid}:draft:`))
+    .filter(([, value]) => {
+      const draft = value as Draft;
+      return !!(draft.audio?.size || draft.report.captureState || draft.report.durationMs || draft.report.transcription?.trim() || draft.report.speech?.turns?.length || records.some(([key]) => key === progressKey(uid, draft.report.id)));
+    })
     .map(([, value]) => {
       const draft = value as Draft;
       if (options.includeAudio !== false)
@@ -241,6 +256,12 @@ export async function listDrafts(
           ),
         },
       };
+    })
+    .filter((draft) => {
+      const saved = completed.get(draft.report.id);
+      // This is a retained backup, not a new recording. Keep its bytes; a
+      // different audio id or any newer journal progress still needs recovery.
+      return !(saved?.status === "completed" && saved.summary?.trim() && saved.driveSyncedAt && saved.driveReportId && saved.rawAudioUrl && saved.rawAudioUrl === draft.report.rawAudioUrl && saved.date === draft.report.date && (saved.durationMs || 0) >= (draft.report.durationMs || 0));
     })
     .sort((a, b) =>
       (b.report.updatedAt || b.report.date).localeCompare(
@@ -288,7 +309,7 @@ export async function deleteDraft(uid: string, id?: string) {
     (active) => (active === draft.report.id ? undefined : active),
     store,
   );
-  emit(uid);
+  emit(uid, true, true);
 }
 
 export interface StorageReport {

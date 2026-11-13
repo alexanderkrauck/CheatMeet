@@ -103,7 +103,9 @@ export function createDriveIO(options:{fetchImpl?:typeof fetch;grants?:RefreshTo
     if(!etag){
       const revision=await (await call(token,`https://www.googleapis.com/drive/v2/files/${j.refs.driveReportId}?fields=etag,version`)).json();
       if(typeof revision.etag!=='string'||!revision.etag||!sourceMeta.data.version||String(revision.version)!==String(sourceMeta.data.version))
-        throw new ProcessingError(409,'Die Drive-Quelldatei wurde während des Lesens geändert.',true);
+        // An inconsistent read is not evidence of a human edit. Retry from a
+        // fresh snapshot; the job's canonical revision still guards real edits.
+        throw new ProcessingError(503,'Drive-Revisionsprüfung ist vorübergehend inkonsistent. Die Verarbeitung wird automatisch erneut versucht.');
       etag=revision.etag;legacyEtag=true;
     }
     if(report.id!==j.refs.id)throw new ProcessingError(400,'Meeting-ID stimmt nicht mit dem Archiv überein.');

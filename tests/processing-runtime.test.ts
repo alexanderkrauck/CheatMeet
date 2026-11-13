@@ -7,7 +7,7 @@ import { ProcessingError, type ProcessingJob } from '../server/processing';
 import type { ReportData } from '../src/types';
 
 const report:ReportData={id:'meeting',title:'Titel',date:'2026-09-30T10:00:00Z',summary:'',transcription:'Gespeicherter Text',todos:[],takeaways:[],driveFolderId:'folder',driveReportId:'json'};
-function fakeDrive(noV3Etags=false){
+function fakeDrive(noV3Etags=false,laggingV2=false){
   const files=new Map<string,{name:string;mimeType:string;parents:string[];ownedByMe:boolean;body:any;etag:string}>();
   files.set('folder',{name:'Meeting',mimeType:'application/vnd.google-apps.folder',parents:[],ownedByMe:true,body:'',etag:'folder-1'});
   files.set('json',{name:'bericht_daten.json',mimeType:'application/json',parents:['folder'],ownedByMe:true,body:toArchive(report,report.date),etag:'json-1'});
@@ -40,7 +40,7 @@ function fakeDrive(noV3Etags=false){
       if(fid==='json'){sourcePatches++;if(failAfterSourceWrite){failAfterSourceWrite=false;throw Error('connection lost after commit');}}
       return json({id:fid});
     }
-    if(fid){const file=files.get(fid);if(!file)return json({},404);if(url.pathname.startsWith('/drive/v2/'))return json({etag:file.etag,version:file.etag});return url.searchParams.get('alt')==='media'?json(file.body,200,noV3Etags?undefined:file.etag):json({id:fid,...file,version:file.etag},200,noV3Etags?undefined:file.etag);}
+    if(fid){const file=files.get(fid);if(!file)return json({},404);if(url.pathname.startsWith('/drive/v2/'))return json({etag:file.etag,version:file.etag+(laggingV2?'-stale':'')});return url.searchParams.get('alt')==='media'?json(file.body,200,noV3Etags?undefined:file.etag):json({id:fid,...file,version:file.etag},200,noV3Etags?undefined:file.etag);}
     const q=url.searchParams.get('q')||'';const name=/name = '([^']+)'/.exec(q)?.[1];
     return json({files:[...files.entries()].filter(([,v])=>v.name===name&&v.parents.includes('folder')).map(([id])=>({id}))});
   }) as unknown as typeof fetch;
@@ -69,6 +69,11 @@ it('uses a real Drive v2 revision precondition when v3 omits ETag headers',async
   const write=h.calls.find(c=>c.url.includes('/upload/drive/v2/files/json'));
   expect(write?.init.method).toBe('PUT');
   expect((write?.init.headers as any)['If-Match']).toBe('json-1');
+});
+it('retries an inconsistent Drive revision read without classifying it as a human edit or writing bytes',async()=>{
+  const h=fakeDrive(true,true);
+  await expect(h.io.load(h.j)).rejects.toMatchObject({status:503,blocked:false});
+  expect(h.sourcePatches()).toBe(0);
 });
 it('classifies malformed durable archives as permanent validation failures',async()=>{
   const h=fakeDrive();h.files.get('json')!.body={...h.files.get('json')!.body,title:null};

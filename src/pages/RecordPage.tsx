@@ -74,6 +74,7 @@ import {
   setCaptureEvent,
   setCaptureLanguages,
   setCaptureRetranscribe,
+  setCaptureProcessing,
   setCaptureSingleSpeaker,
   armCapture,
   beginRecording,
@@ -404,6 +405,8 @@ export default function RecordPage() {
     setCaptureError("");
     setCaptureBusy("Transkription abschließen …");
     try {
+      await setCaptureProcessing(analyze);
+      if (uid() !== accountId) return;
       // Renewing is a server call, never a popup.
       const token = await ensureDriveToken();
       if (!token) {

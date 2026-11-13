@@ -389,6 +389,14 @@ export const setCaptureSingleSpeaker = (source: "mic" | "system", enabled: boole
     singleSpeakerSources: { ...snapshot.draft.report.singleSpeakerSources, [source]: enabled },
   } }).catch(() => {});
 };
+/** Persist the explicit save choice before any token lookup. */
+export async function setCaptureProcessing(analyze: boolean): Promise<void> {
+  if (ownerChanged() || snapshot.state !== "review")
+    throw new Error("Die Aufnahme ist noch nicht zum Sichern bereit.");
+  await persist({ ...snapshot.draft, processing: { ...snapshot.draft.processing, analyze } });
+  if (ownerChanged()) throw new Error("Das angemeldete Konto hat sich geändert.");
+}
+
 export const setCaptureRetranscribe = (enabled: boolean) => {
   if (ownerChanged() || busyOperation || snapshot.state !== "review") return;
   void persist({ ...snapshot.draft, retranscribe: enabled }).catch(() => {});

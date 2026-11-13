@@ -149,6 +149,27 @@ it("keeps retranscription opt-in on the finished draft and clears it on a replac
   expect(capture.captureSnapshot().draft.retranscribe).not.toBe(true);
 });
 
+it("persists a backup-only choice through trailing transcript writes without changing retranscription", async () => {
+  await startRecording(true, async () => {}, "mic");
+  FakeRecorder.last!.ondataavailable?.({ data: new Blob(["audio"]) });
+  capture.stopCapture();
+  await capture.setCaptureProcessing(false);
+  await capture.finishTranscription();
+  await capture.captureQueue();
+  const { putDraft } = await import("./local");
+  expect(vi.mocked(putDraft).mock.calls.at(-1)?.[1]).toMatchObject({ processing: { analyze: false } });
+  expect(capture.captureSnapshot().draft.retranscribe).not.toBe(true);
+});
+
+it("keeps an uncertain source checkpoint when the save choice is confirmed again", async () => {
+  await startRecording(true, async () => {}, "mic");
+  capture.stopCapture();
+  await capture.finishTranscription();
+  capture.captureSnapshot().draft.processing = { analyze: true, sourceReady: true };
+  await capture.setCaptureProcessing(true);
+  expect(capture.captureSnapshot().draft.processing?.sourceReady).toBe(true);
+});
+
 describe("discardCapture", () => {
   it("resets to an empty capture and hands back nothing to navigate to", async () => {
     // It used to return the id of the fresh blank draft, and the only caller

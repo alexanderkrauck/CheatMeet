@@ -1,6 +1,6 @@
 import { analyzeDraft, backupDraft, syncReport } from "./workflow";
 import { saveReport } from "./reports";
-import { acceptRemoteReport, deleteDraft, putLocal } from "./local";
+import { acceptRemoteReport, deleteDraft, putLocal, putDraft, getDraft, listDrafts, getLocal, type LocalReport } from "./local";
 import { processingAvailable, submitServerProcessing, getServerProcessing, listServerProcessing, type ProcessingOptions } from "./serverProcessing";
 import type { ProcessingJobView } from "../../shared/processing";
 import type { ReportData } from "../types";
@@ -11,7 +11,10 @@ import { auth } from "./firebase";
 import { needsSpeakerReview } from "../../shared/transcription";
 import { syncReportToCalendar } from "./calendarSync";
 import { calendarSyncEnabled } from "./meetingDefaults";
-import { hasCalendarGrant } from "./session";
+import { hasCalendarGrant, ensureDriveToken } from "./session";
+import { isCapturing, captureSnapshot } from "./capture";
+
+const captureBusy = () => isCapturing() || !!captureSnapshot().busy;
 
 export type JobStage =
   | "saving"
@@ -73,6 +76,9 @@ export function clearJob(reportId: string) {
 }
 
 const remoteRevisions = new Map<string, string>();
+const observedRevision = (job: ProcessingJobView, local?: LocalReport) => JSON.stringify([job.updatedAt, local?.dirty, local?.report.status, local?.report.updatedAt]);
+const running = new Set<string>();
+const retries = new Map<string, { attempts: number; after: number }>();
 
 function publishServerJob(owner: string, job: ProcessingJobView) {
   const stage: JobStage = job.state === "done" ? "done"
@@ -100,20 +106,26 @@ export async function handoffServerProcessing(owner: string, report: ReportData,
   await putLocal(owner, { ...report, status: result.job.state === "done" ? "completed" : options.analyze ? "analyzing" : "pending", error: "" }, false);
   check();
   publishServerJob(owner, result.job);
-  if (result.report) await acceptRemoteReport(owner, result.report);
+  if (result.report) {
+    await acceptRemoteReport(owner, result.report);
+    check();
+  }
   return result;
 }
 
-/** Restores progress after reload/on another device. Polling only observes jobs;
- * work and retries are owned by Cloud Tasks, not this timer. */
+/** Restores server progress, then resumes explicitly requested local uploads.
+ * Paid processing and post-acceptance retries remain server-owned. */
 export async function pollServerProcessing(owner: string) {
   if (auth.currentUser?.uid !== owner || !(await processingAvailable())) return;
+  if (auth.currentUser?.uid !== owner) return;
   const { jobs: remote } = await listServerProcessing();
   if (auth.currentUser?.uid !== owner) return;
   for (const job of remote) {
     if (auth.currentUser?.uid !== owner) return;
     const key = `${owner}:${job.reportId}`;
-    if (remoteRevisions.get(key) === job.updatedAt) continue;
+    const local = job.state === "done" ? await getLocal(owner, job.reportId) : undefined;
+    if (auth.currentUser?.uid !== owner) return;
+    if (remoteRevisions.get(key) === observedRevision(job, local)) continue;
     if (["done", "review", "blocked", "error"].includes(job.state)) {
       const result = await getServerProcessing(job.reportId);
       if (auth.currentUser?.uid !== owner) return;
@@ -125,7 +137,24 @@ export async function pollServerProcessing(owner: string) {
     }
     if (auth.currentUser?.uid !== owner) return;
     publishServerJob(owner, job);
-    remoteRevisions.set(key, job.updatedAt);
+    const accepted = job.state === "done" ? await getLocal(owner, job.reportId) : undefined;
+    if (auth.currentUser?.uid !== owner) return;
+    remoteRevisions.set(key, observedRevision(job, accepted));
+  }
+  // A successful authoritative observation is required before retrying uploads.
+  if (auth.currentUser?.uid !== owner || captureBusy()) return;
+  const drafts = await listDrafts(owner, { includeAudio: false });
+  if (auth.currentUser?.uid !== owner) return;
+  for (const draft of drafts) {
+    if (auth.currentUser?.uid !== owner || captureBusy()) return;
+    if (!draft.processing || remote.some(job => job.reportId === draft.report.id)) continue;
+    const known = jobFor(draft.report.id);
+    if (known?.owner === owner && known.serverOwned) continue;
+    const retry = retries.get(`${owner}:${draft.report.id}`);
+    if (retry && Date.now() < retry.after) continue;
+    // No cross-tab lock means no safe automatic upload. Manual saving remains available.
+    if (typeof navigator === "undefined" || !navigator.locks) continue;
+    await startProcessing({ owner, draft, analyze: draft.processing.analyze, resume: true });
   }
 }
 
@@ -151,14 +180,18 @@ export function startProcessing({
   draft,
   token,
   analyze,
+  resume = false,
 }: {
   owner: string;
   draft: Draft;
-  token: string;
+  token?: string;
   analyze: boolean;
+  /** Internal observer path: reload the checkpoint under the cross-tab lock. */
+  resume?: boolean;
 }): Promise<void> {
   const reportId = draft.report.id;
-  let current = draft;
+  let current = { ...draft, processing: { ...draft.processing, analyze } } as Draft;
+  const key = `${owner}:${reportId}`;
   const update = (stage: JobStage, message: string, extra: Partial<JobState> = {}) =>
     publish({ reportId, owner, stage, message, ...extra });
 
@@ -169,7 +202,46 @@ export function startProcessing({
     let warning = "";
     try {
       assertOwner();
+      if (resume) {
+        const stored = await getDraft(owner, reportId);
+        assertOwner();
+        if (!stored?.processing || captureBusy()) return;
+        current = stored;
+        analyze = stored.processing.analyze;
+      }
       update("saving", "Bericht wird gesichert …");
+      await putDraft(owner, current);
+      assertOwner();
+      const configured = await processingAvailable();
+      assertOwner();
+      if (configured) {
+        const { jobs: remote } = await listServerProcessing();
+        assertOwner();
+        const accepted = remote.find(job => job.reportId === reportId);
+        if (accepted) {
+          publishServerJob(owner, accepted);
+          if (accepted.state === "done") {
+            await deleteDraft(owner, reportId);
+            assertOwner();
+          }
+          return;
+        }
+      } else if (resume || current.processing?.sourceReady) {
+        throw new Error("Server-Verarbeitung derzeit nicht erreichbar. Der Entwurf bleibt erhalten.");
+      }
+      token ||= await ensureDriveToken();
+      assertOwner();
+      if (!token) throw new Error("Bitte Google Drive erneut verbinden. Der Entwurf bleibt erhalten.");
+      if (current.processing?.sourceReady) {
+        await handoffServerProcessing(owner, current.report, {
+          analyze, retranscribe: analyze && current.retranscribe === true,
+          calendarSync: analyze && calendarSyncEnabled() && hasCalendarGrant(),
+        });
+        assertOwner();
+        await deleteDraft(owner, reportId);
+        assertOwner();
+        return;
+      }
       const saveWarning = await saveReport(current.report);
       assertOwner();
       if (saveWarning) warning = saveWarning;
@@ -184,7 +256,7 @@ export function startProcessing({
       await putLocal(owner, current.report);
       assertOwner();
 
-      if (await processingAvailable()) {
+      if (configured) {
         // Finish live text locally without a paid batch pass. The server needs
         // a durable source before it can promise work survives this tab.
         await prepareTranscript(current, token, { batch: false }).catch((error) => {
@@ -194,12 +266,16 @@ export function startProcessing({
         update("exporting", "Aufnahme und Transkript für den Server sichern …", { warning });
         const source = await syncReport(current.report, token);
         assertOwner();
+        current = { ...current, report: source.report, processing: { analyze, sourceReady: true } };
+        await putDraft(owner, current);
+        assertOwner();
         await handoffServerProcessing(owner, source.report, {
           analyze, retranscribe: analyze && current.retranscribe === true,
           calendarSync: analyze && calendarSyncEnabled() && hasCalendarGrant(),
         });
         assertOwner();
         await deleteDraft(owner, reportId);
+        assertOwner();
         return;
       }
 
@@ -237,6 +313,7 @@ export function startProcessing({
           assertOwner();
           await putLocal(owner, current.report);
         } catch (error) {
+          assertOwner();
           // Keep the failure on the report so it can be retried from its page.
           current = {
             ...current,
@@ -247,6 +324,7 @@ export function startProcessing({
             },
           };
           await putLocal(owner, current.report);
+          assertOwner();
           if (auth.currentUser?.uid === owner) await saveReport(current.report).catch(() => {});
           if (auth.currentUser?.uid === owner) await syncReport(current.report, token).catch(() => {});
           throw error;
@@ -274,6 +352,7 @@ export function startProcessing({
               : patch.calendarError;
           await putLocal(owner, current.report);
         } catch (error) {
+          assertOwner();
           warning = warning
             ? `${warning} ${errorMessage(error)}`
             : errorMessage(error);
@@ -288,14 +367,19 @@ export function startProcessing({
       assertOwner();
 
       await deleteDraft(owner, result.report.id);
+      assertOwner();
       update("done", "Fertig.", {
         warning: result.warning || warning || undefined,
       });
     } catch (error) {
+      const previous = retries.get(key)?.attempts || 0;
+      retries.set(key, { attempts: previous + 1, after: Date.now() + Math.min(300_000, 30_000 * 2 ** previous) });
+      if (auth.currentUser?.uid !== owner) return;
       current.report = { ...current.report, status: "error", error: errorMessage(error) };
       // Preparing an imported transcript may fail before the summary block. Keep its recovery
       // state on the report as well as the transient job notification.
       await putLocal(owner, current.report).catch(() => {});
+      if (auth.currentUser?.uid !== owner) return;
       update("error", "Fehlgeschlagen.", {
         error: errorMessage(error),
         warning: warning || undefined,
@@ -303,5 +387,11 @@ export function startProcessing({
     }
   };
 
-  return run();
+  if (running.has(key)) return Promise.resolve();
+  running.add(key);
+  // ifAvailable avoids queueing a stale draft behind another tab’s upload.
+  const work = typeof navigator !== "undefined" && navigator.locks
+    ? navigator.locks.request(`cheatmeet:processing:${key}`, { ifAvailable: true }, lock => lock ? run() : undefined)
+    : run();
+  return work.finally(() => { running.delete(key); });
 }

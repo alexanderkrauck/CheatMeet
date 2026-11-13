@@ -4,6 +4,8 @@ const account = vi.hoisted(() => ({ currentUser: { uid: "user-1" } }));
 const remote = vi.hoisted(() => ({ available: vi.fn(), submit: vi.fn(), list: vi.fn(), get: vi.fn() }));
 vi.mock("./serverProcessing", () => ({ processingAvailable: remote.available, submitServerProcessing: remote.submit, listServerProcessing: remote.list, getServerProcessing: remote.get }));
 vi.mock("./firebase", () => ({ auth: account }));
+const captureState = vi.hoisted(() => ({ active: false, busy: "" }));
+vi.mock("./capture", () => ({ isCapturing: () => captureState.active, captureSnapshot: () => ({ busy: captureState.busy }) }));
 const finalTranscript = vi.hoisted(() => vi.fn());
 vi.mock("./prepareTranscript", () => ({ prepareTranscript: finalTranscript }));
 const backupDraft = vi.fn();
@@ -13,6 +15,11 @@ const saveReport = vi.fn();
 const putLocal = vi.fn();
 const deleteDraft = vi.fn();
 const acceptRemoteReport = vi.fn();
+const putDraft = vi.fn();
+const getDraft = vi.fn();
+const listDrafts = vi.fn();
+const getLocal = vi.fn();
+const ensureDriveToken = vi.fn();
 
 vi.mock("./workflow", () => ({
   backupDraft: (...args: unknown[]) => backupDraft(...args),
@@ -23,12 +30,17 @@ vi.mock("./reports", () => ({
   saveReport: (...args: unknown[]) => saveReport(...args),
 }));
 vi.mock("./local", () => ({
+  putDraft: (...args: unknown[]) => putDraft(...args),
+  getDraft: (...args: unknown[]) => getDraft(...args),
+  listDrafts: (...args: unknown[]) => listDrafts(...args),
+  getLocal: (...args: unknown[]) => getLocal(...args),
   putLocal: (...args: unknown[]) => putLocal(...args),
   deleteDraft: (...args: unknown[]) => deleteDraft(...args),
   acceptRemoteReport: (...args: unknown[]) => acceptRemoteReport(...args),
 }));
 vi.mock("./session", () => ({
   hasCalendarGrant: () => false,
+  ensureDriveToken: (...args: unknown[]) => ensureDriveToken(...args),
   errorMessage: (error: unknown) =>
     error instanceof Error ? error.message : "Fehler",
 }));
@@ -51,6 +63,14 @@ const run = (analyze = true) =>
 
 describe("processing pipeline", () => {
   beforeEach(() => {
+    vi.stubGlobal("navigator", { locks: { request: async (_key: string, _options: unknown, callback: (lock: object) => unknown) => callback({}) } });
+    captureState.active = false;
+    captureState.busy = "";
+    putDraft.mockReset().mockResolvedValue(undefined);
+    getDraft.mockReset().mockResolvedValue(undefined);
+    listDrafts.mockReset().mockResolvedValue([]);
+    getLocal.mockReset().mockResolvedValue(undefined);
+    ensureDriveToken.mockReset().mockResolvedValue("drive-token");
     account.currentUser = { uid: "user-1" };
     remote.available.mockReset().mockResolvedValue(false);
     remote.submit.mockReset().mockResolvedValue({ job: { reportId: "report-1", state: "queued", attempts: 0, message: "Wartet auf Server", updatedAt: "2026-11-13T10:00:00Z" } });
@@ -75,6 +95,145 @@ describe("processing pipeline", () => {
     deleteDraft.mockResolvedValue(undefined);
   });
   afterEach(() => clearJob(report.id));
+
+  it("persists explicit intent before any network work", async () => {
+    saveReport.mockImplementationOnce(async () => {
+      expect(putDraft).toHaveBeenCalledWith("user-1", expect.objectContaining({ processing: { analyze: false } }));
+      return null;
+    });
+    await run(false);
+    expect(putDraft).toHaveBeenCalledBefore(saveReport);
+  });
+
+  it("resumes only an explicit backup-only choice after observing server jobs", async () => {
+    remote.available.mockResolvedValue(true);
+    const pending = { ...draft, processing: { analyze: false } };
+    listDrafts.mockResolvedValue([pending, { report: { ...report, id: "undecided" } }]);
+    getDraft.mockResolvedValue(pending);
+    await pollServerProcessing("user-1");
+    expect(remote.list).toHaveBeenCalledBefore(backupDraft);
+    expect(ensureDriveToken).toHaveBeenCalledOnce();
+    expect(remote.submit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ analyze: false, retranscribe: false }));
+    expect(backupDraft).toHaveBeenCalledOnce();
+    expect(analyzeDraft).not.toHaveBeenCalled();
+  });
+
+  it("does not automatically process an undecided draft", async () => {
+    remote.available.mockResolvedValue(true);
+    listDrafts.mockResolvedValue([draft]);
+    await pollServerProcessing("user-1");
+    expect(getDraft).not.toHaveBeenCalled();
+    expect(ensureDriveToken).not.toHaveBeenCalled();
+    expect(backupDraft).not.toHaveBeenCalled();
+  });
+
+  it("repairs a late local failure even when the final server revision was already observed", async () => {
+    remote.available.mockResolvedValue(true);
+    const job = { reportId: "late-shadow", state: "done", attempts: 4, message: "Fertig", updatedAt: "2026-11-13T16:00:00Z" };
+    const completed = { ...report, id: job.reportId, status: "completed", summary: "Fertig" };
+    remote.list.mockResolvedValue({ jobs: [job] });
+    remote.get.mockResolvedValue({ job, report: completed });
+    await pollServerProcessing("user-1");
+    getLocal.mockResolvedValue({ dirty: true, report: { ...report, id: job.reportId, status: "error" } });
+    await pollServerProcessing("user-1");
+    expect(remote.get).toHaveBeenCalledTimes(2);
+    expect(acceptRemoteReport).toHaveBeenLastCalledWith("user-1", completed);
+    clearJob(job.reportId);
+  });
+
+  it("does not retry uploads when authoritative job observation fails", async () => {
+    remote.available.mockResolvedValue(true);
+    remote.list.mockRejectedValue(new Error("offline"));
+    await expect(pollServerProcessing("user-1")).rejects.toThrow("offline");
+    expect(listDrafts).not.toHaveBeenCalled();
+    expect(backupDraft).not.toHaveBeenCalled();
+  });
+
+  it("does not upload again for an accepted job, even on an explicit retry", async () => {
+    remote.available.mockResolvedValue(true);
+    remote.list.mockResolvedValue({ jobs: [{ reportId: report.id, state: "queued", message: "Server", updatedAt: "accepted" }] });
+    listDrafts.mockResolvedValue([{ ...draft, processing: { analyze: true } }]);
+    await pollServerProcessing("user-1");
+    await run();
+    expect(backupDraft).not.toHaveBeenCalled();
+    expect(syncReport).not.toHaveBeenCalled();
+    expect(remote.submit).not.toHaveBeenCalled();
+    expect(analyzeDraft).not.toHaveBeenCalled();
+  });
+
+  it("stops after an account switch during automatic token renewal", async () => {
+    remote.available.mockResolvedValue(true);
+    const pending = { ...draft, processing: { analyze: false } };
+    listDrafts.mockResolvedValue([pending]);
+    getDraft.mockResolvedValue(pending);
+    ensureDriveToken.mockImplementationOnce(async () => { account.currentUser = { uid: "user-2" }; return "other-token"; });
+    await pollServerProcessing("user-1");
+    expect(ensureDriveToken).toHaveBeenCalledOnce();
+    expect(saveReport).not.toHaveBeenCalled();
+    expect(backupDraft).not.toHaveBeenCalled();
+    expect(putLocal).not.toHaveBeenCalled();
+  });
+
+  it("resumes an uncertain handoff without rewriting the durable source", async () => {
+    remote.available.mockResolvedValue(true);
+    const pending = { ...draft, report: { ...report, id: "uncertain-resume", driveReportId: "source" }, processing: { analyze: true, sourceReady: true } };
+    listDrafts.mockResolvedValue([pending]);
+    getDraft.mockResolvedValue(pending);
+    await pollServerProcessing("user-1");
+    expect(remote.submit).toHaveBeenCalledOnce();
+    expect(backupDraft).not.toHaveBeenCalled();
+    expect(syncReport).not.toHaveBeenCalled();
+    expect(finalTranscript).not.toHaveBeenCalled();
+    expect(analyzeDraft).not.toHaveBeenCalled();
+    clearJob("uncertain-resume");
+  });
+
+  it("backs off failed automatic uploads rather than retrying every poll", async () => {
+    remote.available.mockResolvedValue(true);
+    const pending = { ...draft, report: { ...report, id: "backoff" }, processing: { analyze: false } };
+    listDrafts.mockResolvedValue([pending]);
+    getDraft.mockResolvedValue(pending);
+    backupDraft.mockRejectedValue(new Error("offline"));
+    await pollServerProcessing("user-1");
+    await pollServerProcessing("user-1");
+    expect(backupDraft).toHaveBeenCalledOnce();
+    clearJob("backoff");
+  });
+
+  it("does not observe another account after configuration lookup changes the user", async () => {
+    remote.available.mockImplementationOnce(async () => { account.currentUser = { uid: "user-2" }; return true; });
+    await pollServerProcessing("user-1");
+    expect(remote.list).not.toHaveBeenCalled();
+  });
+
+  it("does not race the recording screen while it finishes and saves a draft", async () => {
+    remote.available.mockResolvedValue(true);
+    captureState.busy = "Transkription abschließen …";
+    listDrafts.mockResolvedValue([{ ...draft, processing: { analyze: true } }]);
+    getDraft.mockResolvedValue({ ...draft, processing: { analyze: true } });
+    await pollServerProcessing("user-1");
+    expect(backupDraft).not.toHaveBeenCalled();
+  });
+
+  it("skips an upload held by another tab", async () => {
+    vi.stubGlobal("navigator", { locks: { request: async (_key: string, _options: unknown, callback: (lock: null) => unknown) => callback(null) } });
+    await run();
+    expect(backupDraft).not.toHaveBeenCalled();
+    expect(remote.submit).not.toHaveBeenCalled();
+  });
+
+  it("checkpoints source references before an uncertain handoff", async () => {
+    remote.available.mockResolvedValue(true);
+    const source = { ...report, driveReportId: "source-json", driveFolderId: "folder" };
+    syncReport.mockResolvedValue({ report: source });
+    remote.submit.mockImplementationOnce(async () => {
+      expect(putDraft).toHaveBeenLastCalledWith("user-1", expect.objectContaining({ report: source, processing: { analyze: true, sourceReady: true } }));
+      throw new Error("uncertain");
+    });
+    await run();
+    expect(putDraft.mock.calls.at(-1)?.[1].processing.sourceReady).toBe(true);
+    expect(analyzeDraft).not.toHaveBeenCalled();
+  });
 
   it("restores a server-completed report after reopening without starting another AI call", async () => {
     remote.available.mockResolvedValue(true);
@@ -108,7 +267,7 @@ describe("processing pipeline", () => {
     await run();
     expect(backupDraft).toHaveBeenCalledBefore(syncReport);
     expect(syncReport).toHaveBeenCalledBefore(remote.submit);
-    expect(finalTranscript).toHaveBeenCalledWith(draft, "drive-token", { batch: false });
+    expect(finalTranscript).toHaveBeenCalledWith(expect.objectContaining(draft), "drive-token", { batch: false });
     expect(analyzeDraft).not.toHaveBeenCalled();
     expect(remote.submit).toHaveBeenCalledWith(expect.objectContaining({ id: report.id }), expect.objectContaining({ analyze: true }));
     expect(jobFor(report.id)).toMatchObject({ serverOwned: true, stage: "analyzing" });
