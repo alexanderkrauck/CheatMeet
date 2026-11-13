@@ -1,3 +1,4 @@
+import { microsoftHome, type MicrosoftHome } from "../../shared/storage";
 import { asTodos } from "../../shared/analysis";
 import { validateConsentRecord } from "../../shared/consent";
 import type { ReportData } from "../types";
@@ -40,8 +41,12 @@ export function toArchive(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...report };
   for (const key of INTERNAL) delete out[key];
+  if (report.home) {
+    out.home = microsoftHome(report.home);
+    for (const key of ["rawAudioUrl","driveFolderId","driveReportId","driveMarkdownId","driveTranscriptId","driveConsentId","driveSyncedAt"]) delete out[key];
+  }
   out.archive = {
-    version: ARCHIVE_VERSION,
+    version: report.home ? 2 : ARCHIVE_VERSION,
     generator: "cheatmeet",
     generatedAt,
   };
@@ -53,6 +58,7 @@ const CALENDAR_FIELDS = [
   "calendarId",
   "calendarLink",
   "calendarSyncedAt",
+  "calendarConnectionId",
 ] as const;
 
 const STATUSES = ["pending", "analyzing", "completed", "error"] as const;
@@ -71,7 +77,7 @@ const text = (value: unknown) =>
  */
 export function fromArchive(
   value: unknown,
-  ids: { driveFolderId: string; driveReportId: string },
+  ids: { driveFolderId: string; driveReportId: string } | { home: MicrosoftHome },
 ): ReportData {
   const raw = value as Record<string, unknown> & { archive?: unknown };
   if (!raw || typeof raw !== "object") throw new Error("Ungültige Berichtsdaten");
@@ -80,7 +86,7 @@ export function fromArchive(
     envelope &&
     typeof envelope === "object" &&
     typeof envelope.version === "number" &&
-    envelope.version > ARCHIVE_VERSION
+    envelope.version > ("home" in ids ? 2 : ARCHIVE_VERSION)
   )
     // Must not say "abgelaufen": the restore treats that word as a dead Drive
     // connection and would abort the whole scan instead of skipping one file.
@@ -95,6 +101,7 @@ export function fromArchive(
     !Number.isFinite(Date.parse(raw.date))
   )
     throw new Error("Ungültige Berichtsdaten");
+  if (raw.home && !("home" in ids)) throw new Error("Microsoft-Archiv benötigt einen ausdrücklich gewählten OneDrive-Speicherort.");
   // Validate what report views render before admitting external JSON.
   if (
     raw.takeaways !== undefined &&
@@ -154,6 +161,8 @@ export function fromArchive(
     if (value !== undefined) calendar[field] = value;
   }
 
+  const home = "home" in ids ? microsoftHome(ids.home) : undefined;
+  const legacy = !home;
   return {
     id: raw.id,
     date: raw.date,
@@ -164,8 +173,8 @@ export function fromArchive(
     todos: asTodos(raw.todos),
     takeaways: (raw.takeaways as string[]) || [],
     status,
-    driveFolderId: ids.driveFolderId,
-    driveReportId: ids.driveReportId,
+    ...("home" in ids ? { home: { ...((raw.home && typeof raw.home === "object") ? microsoftHome(raw.home) : ids.home), provider:"microsoft", connectionId:ids.home.connectionId,driveId:ids.home.driveId,rootId:ids.home.rootId,rootName:ids.home.rootName,folderId:ids.home.folderId,reportId:ids.home.reportId,...(ids.home.webUrl?{webUrl:ids.home.webUrl}:{}) } } : {driveFolderId:ids.driveFolderId,driveReportId:ids.driveReportId}),
+    ...(raw.calendarProvider === "microsoft" || raw.calendarProvider === "google" ? {calendarProvider:raw.calendarProvider} : {}),
     ...(updatedAt ? { updatedAt } : {}),
     ...(text(raw.projectName) ? { projectName: text(raw.projectName) } : {}),
     ...(text(raw.suggestedTitle)
@@ -190,17 +199,17 @@ export function fromArchive(
           singleSpeakerSources: raw.singleSpeakerSources as ReportData["singleSpeakerSources"],
         }
       : {}),
-    ...(text(raw.rawAudioUrl) ? { rawAudioUrl: text(raw.rawAudioUrl) } : {}),
-    ...(text(raw.driveMarkdownId)
+    ...(legacy && text(raw.rawAudioUrl) ? { rawAudioUrl: text(raw.rawAudioUrl) } : {}),
+    ...(legacy && text(raw.driveMarkdownId)
       ? { driveMarkdownId: text(raw.driveMarkdownId) }
       : {}),
-    ...(text(raw.driveTranscriptId)
+    ...(legacy && text(raw.driveTranscriptId)
       ? { driveTranscriptId: text(raw.driveTranscriptId) }
       : {}),
-    ...(text(raw.driveConsentId)
+    ...(legacy && text(raw.driveConsentId)
       ? { driveConsentId: text(raw.driveConsentId) }
       : {}),
-    ...(text(raw.driveSyncedAt) ? { driveSyncedAt: text(raw.driveSyncedAt) } : {}),
+    ...(legacy && text(raw.driveSyncedAt) ? { driveSyncedAt: text(raw.driveSyncedAt) } : {}),
     ...(consent ? { consent } : {}),
     ...(text(raw.audioDeletedAt)
       ? { audioDeletedAt: text(raw.audioDeletedAt) }

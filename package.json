@@ -14,6 +14,7 @@
     "test:pwa": "npm run build && node --test tests/pwa.integration.mjs"
   },
   "dependencies": {
+    "@azure/msal-node": "^7.2.2",
     "@google/genai": "^2.21.0",
     "@modelcontextprotocol/express": "2.0.1",
     "@modelcontextprotocol/node": "2.1.0",

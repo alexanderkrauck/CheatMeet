@@ -105,7 +105,7 @@ export default function Dashboard() {
             <p className="muted small">
               {elsewhere} Meeting(s) liegen hier nur als Kurzfassung vor; ihre
               Transkripte werden nicht durchsucht. In den Einstellungen lassen
-              sie sich aus Drive wiederherstellen.
+              sie sich aus Google Drive oder OneDrive wiederherstellen.
             </p>
           )}
         </>

@@ -8,6 +8,8 @@ import {
   type MeetingStatus,
 } from "../lib/meetingMeta";
 import { hasCalendarGrant, subscribeDriveSession } from "../lib/session";
+import {hasAnyCalendarGrant,subscribeCalendar} from "../lib/calendar";
+import type {ServiceProvider} from "../../shared/storage";
 
 /** Sized by CSS per surface, so callers only say where it goes. */
 export function Brand({ className = "" }: { className?: string }) {
@@ -109,11 +111,11 @@ const CALENDAR_TONE: Record<CalendarState, string> = {
 export function CalendarStatus({
   report,
 }: {
-  report: Parameters<typeof calendarState>[0];
+  report: Parameters<typeof calendarState>[0] & {calendarProvider?:ServiceProvider};
 }) {
   const granted = useSyncExternalStore(
-    subscribeDriveSession,
-    hasCalendarGrant,
+    subscribeCalendar,
+    ()=>hasAnyCalendarGrant(report.calendarEventId ? report.calendarProvider || "google" : undefined),
     () => false,
   );
   // Without a grant every row would claim "Kein Termin", which is a statement
@@ -151,7 +153,7 @@ export function Status({
       {local && (
         <span className="badge amber">
           {syncedAt
-            ? "Drive gesichert · App-Index ausstehend"
+            ? "Archiv gesichert · App-Index ausstehend"
             : "Cloud-Speichern ausstehend"}
         </span>
       )}

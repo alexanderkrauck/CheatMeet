@@ -57,7 +57,7 @@ export default function McpClients() {
       </div>
       <p className="muted small">
         Claude, ChatGPT oder Hermes können deine Meetings lesen, wenn du es erlaubst. Füge diese Adresse dort als
-        „Custom Connector“ bzw. MCP-Server ein und melde dich mit Google an.
+        „Custom Connector“ bzw. MCP-Server ein und melde dich mit deinem Google- oder Microsoft-Konto an.
       </p>
       <p className="mcp-address">
         <code>{address}</code>

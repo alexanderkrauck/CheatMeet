@@ -2,16 +2,19 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import config from '../../firebase-applet-config.json';
 import { serviceAccountToken } from '../tokenStore';
 import { firestoreDocStore } from '../mcp/docStore';
-import { googleAccountFor } from '../googleAuth';
+import { firebaseAccountFor, microsoftConfigured } from '../microsoftAuth';
 import { analyzeTranscript } from '../analysis';
 import { createBatchTranscriptionService, ApiError } from '../transcription';
 import { ProcessingError } from './index';
 import { validLanguages } from '../../shared/transcription';
 import type { ProcessingJob, ProcessingOptions, Task } from './index';
 import { createDriveIO } from './drive';
+import { createOneDriveIO } from './onedrive';
+import { storageIO } from './storage';
+import { syncWorkerCalendar } from './calendar';
 import { boundedFetch, remainingProcessingMs } from './budget';
 
-export const processingConfigured=()=>Boolean(process.env.PROCESSING_QUEUE&&process.env.PROCESSING_WORKER_URL&&process.env.PROCESSING_SERVICE_ACCOUNT&&process.env.GOOGLE_OAUTH_CLIENT_SECRET);
+export const processingConfigured=()=>Boolean(process.env.PROCESSING_QUEUE&&process.env.PROCESSING_WORKER_URL&&process.env.PROCESSING_SERVICE_ACCOUNT&&(process.env.GOOGLE_OAUTH_CLIENT_SECRET||microsoftConfigured()));
 const googleKeys=createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 export async function verifyProcessingWorker(token:string) {
   if(!processingConfigured()||!token)throw Error('Worker not configured');
@@ -31,11 +34,11 @@ export function createTaskQueue(fetchImpl:typeof fetch=fetch,token=()=>serviceAc
 }
 export function runtimeOptions():ProcessingOptions {
   const projectId=process.env.FIREBASE_PROJECT_ID||config.projectId;
-  const io=createDriveIO();
+  const io=storageIO(createDriveIO({calendar:syncWorkerCalendar}),createOneDriveIO({calendar:syncWorkerCalendar}));
   const batch=createBatchTranscriptionService({fetchImpl:boundedFetch});
   return {
     enabled:processingConfigured,
-    identify:t=>googleAccountFor(t,projectId),verifyWorker:verifyProcessingWorker,enqueue:createTaskQueue(),
+    identify:t=>firebaseAccountFor(t,projectId),verifyWorker:verifyProcessingWorker,enqueue:createTaskQueue(),
     store:firestoreDocStore<ProcessingJob>({collection:'processingJobs',projectId,databaseId:config.firestoreDatabaseId||'(default)',fetchImpl:fetch,token:()=>serviceAccountToken(fetch)}),
     io,analyze:(text,prefs)=>analyzeTranscript(text,prefs,{retryAttempts:1,timeoutMs:remainingProcessingMs(120000)}),
     preferences:async(owner)=>{

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Loader2, ShieldCheck } from "lucide-react";
 import { auth } from "../lib/firebase";
 import { connectGoogle, errorMessage } from "../lib/session";
+import { signInMicrosoft } from "../lib/microsoftIdentity";
 import {
   ConnectError,
   decide,
@@ -36,7 +37,11 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
         setInfo(loaded);
         setAllowed(loaded.scopes);
       })
-      .catch((e) => live && setError(e instanceof ConnectError ? e.message : errorMessage(e)))
+      .catch(
+        (e) =>
+          live &&
+          setError(e instanceof ConnectError ? e.message : errorMessage(e)),
+      )
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
@@ -53,11 +58,12 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
       setBusy(false);
     }
   }
-  async function signIn() {
+  async function signIn(microsoft = false) {
     setBusy(true);
     setError("");
     try {
-      await connectGoogle();
+      if (microsoft) await signInMicrosoft();
+      else await connectGoogle();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -65,7 +71,11 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
     }
   }
   const toggle = (scope: Scope) =>
-    setAllowed((current) => (current.includes(scope) ? current.filter((s) => s !== scope) : [...current, scope]));
+    setAllowed((current) =>
+      current.includes(scope)
+        ? current.filter((s) => s !== scope)
+        : [...current, scope],
+    );
 
   return (
     <div className="login-page connect-page">
@@ -73,45 +83,89 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
         <div className="login-card">
           <Brand />
           <span className="eyebrow">ZUGRIFF FÜR EINEN ASSISTENTEN</span>
-          {!request && <Notice>Diese Seite öffnet sich aus einem KI-Assistenten heraus, der sich mit CheatMeet verbinden möchte.</Notice>}
+          {!request && (
+            <Notice>
+              Diese Seite öffnet sich aus einem KI-Assistenten heraus, der sich
+              mit CheatMeet verbinden möchte.
+            </Notice>
+          )}
           {loading && <Loader2 className="spin" aria-label="Wird geladen" />}
           {info && (
             <>
               <h2>„{info.clientName}“ erlauben?</h2>
               <p className="muted">
-                Der Assistent ruft CheatMeet von <strong>{info.redirectHost}</strong> aus auf. Den Namen hat der
+                Der Assistent ruft CheatMeet von{" "}
+                <strong>{info.redirectHost}</strong> aus auf. Den Namen hat der
                 Assistent selbst angegeben, CheatMeet hat ihn nicht geprüft.
               </p>
               {signedIn ? (
                 <>
                   <p className="small muted">
-                    Angemeldet als <strong>{auth.currentUser?.email}</strong>. Der Zugriff gilt nur für dieses Konto.
+                    Angemeldet als <strong>{auth.currentUser?.email}</strong>.
+                    Der Zugriff gilt nur für dieses Konto.
                   </p>
                   <div className="connect-scopes">
                     {info.scopes.map((scope) => (
                       <label key={scope}>
-                        <input type="checkbox" checked={allowed.includes(scope)} disabled={busy} onChange={() => toggle(scope)} />
+                        <input
+                          type="checkbox"
+                          checked={allowed.includes(scope)}
+                          disabled={busy}
+                          onChange={() => toggle(scope)}
+                        />
                         <span>{describeScope(scope)}</span>
                       </label>
                     ))}
                   </div>
                   <p className="small muted">
-                    <ShieldCheck size={14} /> Nur lesen. Nichts wird geändert oder gelöscht. Du kannst den Zugriff jederzeit in
-                    den Einstellungen entziehen.
+                    <ShieldCheck size={14} /> Nur lesen. Nichts wird geändert
+                    oder gelöscht. Du kannst den Zugriff jederzeit in den
+                    Einstellungen entziehen.
                   </p>
                   <div className="actions">
-                    <button className="btn btn-primary" disabled={busy || !allowed.length} onClick={() => void answer(true)}>
-                      {busy ? <Loader2 className="spin" /> : <Check size={16} />} Erlauben
+                    <button
+                      className="btn btn-primary"
+                      disabled={busy || !allowed.length}
+                      onClick={() => void answer(true)}
+                    >
+                      {busy ? (
+                        <Loader2 className="spin" />
+                      ) : (
+                        <Check size={16} />
+                      )}{" "}
+                      Erlauben
                     </button>
-                    <button className="btn" disabled={busy} onClick={() => void answer(false)}>
+                    <button
+                      className="btn"
+                      disabled={busy}
+                      onClick={() => void answer(false)}
+                    >
                       Ablehnen
                     </button>
                   </div>
                 </>
               ) : (
-                <button className="btn btn-primary login-button" disabled={busy} onClick={() => void signIn()}>
-                  {busy ? <Loader2 className="spin" /> : <span className="google-g">G</span>} Mit Google anmelden
-                </button>
+                <>
+                  <button
+                    className="btn btn-primary login-button"
+                    disabled={busy}
+                    onClick={() => void signIn()}
+                  >
+                    {busy ? (
+                      <Loader2 className="spin" />
+                    ) : (
+                      <span className="google-g">G</span>
+                    )}{" "}
+                    Mit Google anmelden
+                  </button>
+                  <button
+                    className="btn login-button"
+                    disabled={busy}
+                    onClick={() => void signIn(true)}
+                  >
+                    Mit Microsoft anmelden
+                  </button>
+                </>
               )}
             </>
           )}

@@ -1,7 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { CalendarDays, Check, X } from "lucide-react";
-import { eventsAround, type CalendarEvent } from "../lib/calendar";
-import { hasCalendarGrant, subscribeDriveSession } from "../lib/session";
+import {
+  eventsAround,
+  hasAnyCalendarGrant,
+  subscribeCalendar,
+  calendarSelectionSnapshot,
+  type CalendarEvent,
+} from "../lib/calendar";
 import { rememberPeople } from "../lib/people";
 import { uid } from "../lib/reports";
 import { eventLine } from "../lib/upcoming";
@@ -31,34 +36,54 @@ export default function CalendarMatch({
   const [error, setError] = useState("");
   // The token is usually minted after this mounts; without re-running, the
   // component would sit on "wird geladen …" forever.
-  const granted = useSyncExternalStore(
-    subscribeDriveSession,
-    hasCalendarGrant,
-    () => false,
+  const selection = useSyncExternalStore(
+    subscribeCalendar,
+    calendarSelectionSnapshot,
+    () => "",
   );
+  const granted = hasAnyCalendarGrant();
 
   useEffect(() => {
+    setEvents(null);
+    setError("");
     if (!granted) return;
+    const owner = uid();
+    const stillOwner = () => {
+      try {
+        return uid() === owner;
+      } catch {
+        return false;
+      }
+    };
     let active = true;
     eventsAround(atMs)
       .then((found) => {
-        if (!active) return;
+        if (!active || !stillOwner()) return;
         setEvents(found);
         // Everyone invited becomes a suggestion, whether or not an event is
         // picked: they are people you meet.
-        void rememberPeople(uid(), found.flatMap((e) => e.attendees)).catch(() => {});
+        void rememberPeople(
+          owner,
+          found.flatMap((e) => e.attendees),
+        ).catch(() => {});
       })
-      .catch((cause) => active && setError((cause as Error).message));
+      .catch(
+        (cause) => active && stillOwner() && setError((cause as Error).message),
+      );
     return () => {
       active = false;
     };
-  }, [atMs, granted]);
+  }, [atMs, granted, selection]);
 
   if (!granted) return null;
 
   const picked = events?.find((event) => event.id === selectedId);
   const frame = (children: React.ReactNode) => (
-    <div className="calendar-match" role="group" aria-label="Zugehöriger Termin">
+    <div
+      className="calendar-match"
+      role="group"
+      aria-label="Zugehöriger Termin"
+    >
       {label && <span className="calendar-match-label">{label}</span>}
       {children}
     </div>
@@ -76,7 +101,11 @@ export default function CalendarMatch({
           <strong>Zugeordneter Termin</strong>
           <small>Liegt außerhalb dieses Zeitraums.</small>
         </span>
-        <button type="button" className="calendar-clear" onClick={() => onPick(null)}>
+        <button
+          type="button"
+          className="calendar-clear"
+          onClick={() => onPick(null)}
+        >
           <X size={15} /> Zuordnung aufheben
         </button>
       </div>,
@@ -103,7 +132,8 @@ export default function CalendarMatch({
     );
 
   if (error) return frame(<p className="muted small">{error}</p>);
-  if (!events) return frame(<p className="muted small">Kalender wird geladen …</p>);
+  if (!events)
+    return frame(<p className="muted small">Kalender wird geladen …</p>);
   if (!events.length)
     return frame(
       <p className="muted small">

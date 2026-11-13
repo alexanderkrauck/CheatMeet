@@ -1,5 +1,7 @@
 import {
   GoogleAuthProvider,
+  linkWithCredential,
+  linkWithPopup,
   reauthenticateWithPopup,
   signInWithCredential,
   signInWithPopup,
@@ -104,13 +106,16 @@ export function driveToken(minValidityMs = 0): string | null {
  * nothing would ever set a flag.
  */
 export function hasCalendarGrant(): boolean {
+  const owner=auth.currentUser?.uid;
+  if(!owner) return false;
   // Whether the grant covers the calendar does not expire with the access
   // token it was learned from. Gating on a live token made the calendar
   // vanish every time the cached token lapsed or a 401 cleared it.
-  if (session?.calendar === true) return true;
+  if (session?.owner === owner && session?.calendar === true) return true;
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
-    return raw ? JSON.parse(raw)?.calendar === true : false;
+    const stored=raw ? JSON.parse(raw) : null;
+    return stored?.owner === owner && stored?.calendar === true;
   } catch {
     return false;
   }
@@ -305,19 +310,25 @@ function consentPopup(): Promise<string> {
 }
 
 export async function connectGoogle(): Promise<string> {
+  const startingUser=auth.currentUser;
+  const owner=startingUser?.uid;
+  const check=()=>{if(auth.currentUser?.uid!==owner)throw new Error("Das angemeldete Konto hat sich geändert.");};
   if (await serverAuthAvailable()) {
+    check();
     // One consent screen: the server keeps the refresh token and hands back the
     // identity, which Firebase then adopts.
     const previous = auth.currentUser?.providerData.find(
       (p) => p.providerId === "google.com",
     )?.uid;
     const idToken = await consentPopup();
+    check();
     const granted = googleSubjectOf(idToken);
     if (previous && previous !== granted)
       throw new Error(
         "Bitte dasselbe Google-Konto wie bei der Anmeldung verwenden.",
       );
-    await signInWithCredential(auth, GoogleAuthProvider.credential(idToken));
+    if(startingUser && !previous) await linkWithCredential(startingUser,GoogleAuthProvider.credential(idToken));
+    else await signInWithCredential(auth, GoogleAuthProvider.credential(idToken));
     const token = await ensureDriveToken(0);
     if (!token)
       throw new Error(
@@ -326,8 +337,11 @@ export async function connectGoogle(): Promise<string> {
     startDriveTokenRefresh();
     return token;
   }
-  const result = auth.currentUser
-    ? await reauthenticateWithPopup(auth.currentUser, provider)
+  check();
+  const result = startingUser
+    ? startingUser.providerData?.some(p=>p.providerId==="google.com")
+      ? await reauthenticateWithPopup(startingUser, provider)
+      : await linkWithPopup(startingUser,provider)
     : await signInWithPopup(auth, provider);
   const token = GoogleAuthProvider.credentialFromResult(result)?.accessToken;
   rememberToken(token);
@@ -340,6 +354,8 @@ export async function connectGoogle(): Promise<string> {
 
 export function errorMessage(error: unknown): string {
   const code = (error as { code?: string })?.code;
+  if (code === "auth/account-exists-with-different-credential" || code === "auth/credential-already-in-use" || code === "auth/email-already-in-use")
+    return "Diese Anmeldung gehört zu einem bestehenden Konto. Bitte zuerst mit dessen ursprünglicher Anmeldemethode anmelden und Microsoft in den Einstellungen ausdrücklich verknüpfen. Konten werden nicht anhand gleicher E-Mail-Adressen zusammengeführt.";
   if (code === "permission-denied")
     return "Firebase verweigert das Speichern oder Lesen. Bitte die Firestore-Regeln und Datenbank prüfen. Deine lokale Kopie bleibt erhalten.";
   if (code === "unavailable")

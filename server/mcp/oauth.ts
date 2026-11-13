@@ -48,6 +48,8 @@ export interface OAuthOptions {
   identify: (token: string) => Promise<{ uid: string; googleSub: string }>;
   /** Whether the server holds Drive access for this Google account. */
   hasDriveGrant: (googleSub: string) => Promise<boolean>;
+  /** Provider-aware archive access. Existing integrations may keep the Google callback. */
+  hasStorageGrant?: (identity: {uid:string;googleSub:string}) => Promise<boolean>;
   limits?: { perMinute?: number };
 }
 
@@ -414,8 +416,9 @@ export function createOAuthRouter(options: OAuthOptions): Router {
       res.json({ redirectTo: back({ error: "access_denied", error_description: "Der Nutzer hat den Zugriff abgelehnt." }) });
       return;
     }
-    if (!(await options.hasDriveGrant(identity.googleSub)).valueOf())
-      return oauthError(res, "no_drive_grant", "Bitte zuerst Google Drive in CheatMeet verbinden.", 409);
+    const hasArchive=options.hasStorageGrant?await options.hasStorageGrant(identity):await options.hasDriveGrant(identity.googleSub);
+    if (!hasArchive)
+      return oauthError(res, identity.googleSub?'no_drive_grant':'no_storage_grant', identity.googleSub?'Bitte zuerst Google Drive in CheatMeet verbinden.':'Bitte zuerst OneDrive in CheatMeet verbinden.', 409);
     let scopes = request.scopes;
     if (body.scopes !== undefined) {
       const asked = Array.isArray(body.scopes) ? body.scopes.map(String) : [];

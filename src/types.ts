@@ -1,7 +1,12 @@
 import type { Todo } from "../shared/analysis";
 import type { ConsentRecord } from "../shared/consent";
 import type { MeetingTranscript } from "../shared/transcription";
+import type { MicrosoftHome, ServiceProvider } from "../shared/storage";
 export interface ReportData {
+  /** Microsoft meetings never reuse the legacy Google file-ID fields. */
+  home?: MicrosoftHome;
+  calendarProvider?: ServiceProvider;
+  calendarConnectionId?: string;
   id: string;
   date: string;
   updatedAt?: string;
@@ -62,5 +67,7 @@ export interface Draft {
   processing?: { analyze: boolean; sourceReady?: boolean };
   /** Live identity evidence used to match names after a second transcription. */
   speakerReference?: MeetingTranscript;
+  /** Opaque owner-bound resumable upload handle; never a capability URL. */
+  microsoftUploadHandle?: string;
   audio?: Blob;
 }

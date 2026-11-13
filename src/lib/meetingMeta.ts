@@ -332,6 +332,10 @@ export function searchSnippet(
  * archive's footprint rather than eliminating it.
  */
 export interface ReportSummary {
+  home?: ReportData["home"];
+  calendarProvider?:ReportData["calendarProvider"];
+  calendarConnectionId?:string;
+  calendarId?:string;
   id: string;
   date: string;
   updatedAt?: string;
@@ -377,6 +381,10 @@ export function speakerNamesOf(speech?: MeetingTranscript): string[] {
 
 export function summarise(report: ReportData): ReportSummary {
   return {
+    home:report.home,
+    calendarProvider:report.calendarProvider,
+    calendarConnectionId:report.calendarConnectionId,
+    calendarId:report.calendarId,
     id: report.id,
     date: report.date,
     updatedAt: report.updatedAt,

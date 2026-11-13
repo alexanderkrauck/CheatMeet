@@ -27,6 +27,9 @@ jobs:
       PROCESSING_QUEUE: ${{ vars.PROCESSING_QUEUE }}
       PROCESSING_WORKER_URL: ${{ vars.PROCESSING_WORKER_URL }}
       PROCESSING_SERVICE_ACCOUNT: ${{ vars.PROCESSING_SERVICE_ACCOUNT }}
+      MICROSOFT_CLIENT_ID: ${{ vars.MICROSOFT_CLIENT_ID }}
+      MICROSOFT_PUBLIC_URL: ${{ vars.MICROSOFT_PUBLIC_URL }}
+      MICROSOFT_CLIENT_SECRET_NAME: ${{ vars.MICROSOFT_CLIENT_SECRET_NAME }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Mic } from "lucide-react";
 import { recordHref } from "./EventRow";
-import { recordedEventIds } from "../lib/dayAgenda";
+import { eventKey, reportEventKey } from "../lib/dayAgenda";
 import { countdownLabel, guestLabel, imminentMeeting, timeLabel } from "../lib/upcoming";
 import { useCalendarEvents } from "../lib/useCalendarEvents";
 import type { ReportSummary } from "../lib/meetingMeta";
@@ -44,9 +44,7 @@ export default function NextMeeting({ reports }: { reports: ReportSummary[] }) {
   const next = imminentMeeting(events, nowMs);
   if (!next) return null;
 
-  const reportId = recordedEventIds(reports).has(next.id)
-    ? reports.find((report) => report.calendarEventId === next.id)?.id
-    : "";
+  const reportId = reports.find(report=>reportEventKey(report)===eventKey(next))?.id||'';
   const guests = guestLabel(next);
 
   return (

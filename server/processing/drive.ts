@@ -47,7 +47,7 @@ export function mergeCalendarDescription(existing:string,block:string) {
   const after=existing.slice(region.end).replace(/^(?:\s|<br\s*\/?>)+/i,'');
   return [before,fresh,after].filter(Boolean).join('\n\n');
 }
-export function createDriveIO(options:{fetchImpl?:typeof fetch;grants?:RefreshTokenStore;runtimeToken?:()=>Promise<string>}={}) : ProcessingIO & {audio:(j:ProcessingJob,r:ReportData)=>Promise<Readable>} {
+export function createDriveIO(options:{fetchImpl?:typeof fetch;grants?:RefreshTokenStore;runtimeToken?:()=>Promise<string>;calendar?:(j:ProcessingJob,r:ReportData)=>Promise<ReportData>}={}) : ProcessingIO & {audio:(j:ProcessingJob,r:ReportData)=>Promise<Readable>} {
   const f=options.fetchImpl||boundedFetch;const grants=options.grants||firestoreStore({fetchImpl:f});
   const runtimeToken=options.runtimeToken||(()=>serviceAccountToken(f));
   const project=process.env.FIREBASE_PROJECT_ID||config.projectId;
@@ -171,7 +171,7 @@ export function createDriveIO(options:{fetchImpl?:typeof fetch;grants?:RefreshTo
       if(plan&&current.revision===hash(toArchive(plan,plan.updatedAt!)))return plan;
       if(current.revision!==j.revision)throw new ProcessingError(409,'Die Drive-Quelldatei wurde inzwischen geändert.',true);
       let r:ReportData={...input,updatedAt:plan?.updatedAt||new Date().toISOString(),driveSyncedAt:plan?.driveSyncedAt||new Date().toISOString()};
-      if(j.calendarSync&&j.analyze&&r.summary.trim())r=await calendar(token,r);
+      if(j.calendarSync&&j.analyze&&r.summary.trim())r=options.calendar?await options.calendar(j,r):await calendar(token,r);
       if(r.transcription.trim())r.driveTranscriptId=await upsert(token,j,'transkript.md','text/markdown',transcriptToMarkdown(r),r.driveTranscriptId);
       if(r.summary.trim())r.driveMarkdownId=await upsert(token,j,'zusammenfassung.md','text/markdown',reportToMarkdown(r),r.driveMarkdownId);
       await checkpoint(token,j,'export-plan',r);

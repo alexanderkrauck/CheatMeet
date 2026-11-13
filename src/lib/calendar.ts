@@ -1,4 +1,45 @@
-import { ensureDriveToken, hasCalendarGrant } from "./session";
+import {
+  ensureDriveToken,
+  hasCalendarGrant,
+  subscribeDriveSession,
+} from "./session";
+import {
+  savedCalendarProvider,
+  hasMicrosoftCalendar,
+} from "./providerSettings";
+import { cachedMicrosoftConnections } from "./microsoft";
+import { auth } from "./firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import type { ServiceProvider } from "../../shared/storage";
+import {
+  microsoftEventsBetween,
+  getMicrosoftEvent,
+  updateMicrosoftEventDescription,
+  createMicrosoftEvent,
+} from "./microsoftCalendar";
+
+/** Grant for the selected calendar; storage home never selects a calendar. */
+export function hasAnyCalendarGrant(
+  provider: ServiceProvider = savedCalendarProvider(),
+): boolean {
+  return provider === "microsoft" ? hasMicrosoftCalendar() : hasCalendarGrant();
+}
+const calendarConnection = () =>
+  cachedMicrosoftConnections().find((c) => c.calendar)?.connectionId;
+export const calendarSelectionSnapshot = () =>
+  `${auth.currentUser?.uid || ""}:${savedCalendarProvider()}:${calendarConnection() || ""}:${hasAnyCalendarGrant()}`;
+export function subscribeCalendar(listener: () => void): () => void {
+  const drive = subscribeDriveSession(listener);
+  const account = onAuthStateChanged(auth, listener);
+  if (typeof window !== "undefined")
+    window.addEventListener("cheatmeet:provider-settings", listener);
+  return () => {
+    drive();
+    account();
+    if (typeof window !== "undefined")
+      window.removeEventListener("cheatmeet:provider-settings", listener);
+  };
+}
 
 /**
  * Google Calendar, both directions.
@@ -27,7 +68,8 @@ export class CalendarError extends Error {
 
 /** Only a deleted event justifies dropping a report's link to it. */
 export const isEventGone = (error: unknown) =>
-  error instanceof CalendarError && (error.status === 404 || error.status === 410);
+  error instanceof CalendarError &&
+  (error.status === 404 || error.status === 410);
 
 export interface CalendarEvent {
   id: string;
@@ -48,6 +90,10 @@ export interface CalendarEvent {
   kind: string;
   description: string;
   htmlLink?: string;
+  provider?: import("../../shared/storage").ServiceProvider;
+  connectionId?: string;
+  bodyType?: "html" | "text";
+  etag?: string;
 }
 
 interface RawEvent {
@@ -61,12 +107,21 @@ interface RawEvent {
   conferenceData?: { entryPoints?: unknown[] };
   start?: { dateTime?: string; date?: string };
   end?: { dateTime?: string; date?: string };
-  attendees?: { displayName?: string; email?: string; self?: boolean; resource?: boolean }[];
+  attendees?: {
+    displayName?: string;
+    email?: string;
+    self?: boolean;
+    resource?: boolean;
+  }[];
 }
 
 /** The part of an attendee a person would recognise. */
 const attendeeName = (a: NonNullable<RawEvent["attendees"]>[number]): string =>
-  (a.displayName || a.email?.split("@")[0]?.replace(/[._]+/g, " ") || "").trim();
+  (
+    a.displayName ||
+    a.email?.split("@")[0]?.replace(/[._]+/g, " ") ||
+    ""
+  ).trim();
 
 const time = (slot?: { dateTime?: string; date?: string }) => {
   if (slot?.dateTime) return Date.parse(slot.dateTime) || 0;
@@ -75,7 +130,10 @@ const time = (slot?: { dateTime?: string; date?: string }) => {
   return 0;
 };
 
-export function toEvent(raw: RawEvent, calendarId: string): CalendarEvent | null {
+export function toEvent(
+  raw: RawEvent,
+  calendarId: string,
+): CalendarEvent | null {
   if (!raw.id || raw.status === "cancelled") return null;
   const startMs = time(raw.start);
   if (!startMs) return null;
@@ -124,7 +182,7 @@ async function call(path: string, init: RequestInit = {}) {
     if (response.status === 403)
       throw fail(
         reason.startsWith("forbiddenForNonOrganizer") ||
-        reason === "cannotChangeOrganizer"
+          reason === "cannotChangeOrganizer"
           ? "Der Termin gehört jemand anderem und kann nicht ergänzt werden."
           : // Throttling and quota are transient; telling the user their grant
             // is broken sends them through a pointless re-authorization.
@@ -151,7 +209,11 @@ export async function eventsBetween(
   toMs: number,
   budget = EVENT_BUDGET,
 ): Promise<CalendarEvent[]> {
-  if (!hasCalendarGrant()) return [];
+  if (!hasAnyCalendarGrant()) return [];
+  if (savedCalendarProvider() === "microsoft") {
+    const connectionId = calendarConnection();
+    return microsoftEventsBetween(fromMs, toMs, budget, connectionId);
+  }
   const events: CalendarEvent[] = [];
   let pageToken: string | undefined;
   // Results come back in start order, so a single capped page silently drops
@@ -202,7 +264,10 @@ export function mergeDescription(existing: string, block: string): string {
   const BR = "(?:<br\\s*/?>|\\r?\\n|^|$)";
   // Look-behind rather than consuming: consuming the preceding <br> left it in
   // `before`, so the description grew a blank line on every sync.
-  const opener = new RegExp(`(?<=${BR})[ \t]*--- CheatMeet ---[ \t]*(?=${BR})`, "g");
+  const opener = new RegExp(
+    `(?<=${BR})[ \t]*--- CheatMeet ---[ \t]*(?=${BR})`,
+    "g",
+  );
   const closer = new RegExp(`[ \t]*--- Ende CheatMeet ---[ \t]*(?=${BR})`);
   let region: { start: number; end: number } | null = null;
   for (const match of existing.matchAll(opener)) {
@@ -250,18 +315,35 @@ export function summaryBlock({
 export async function getEvent(
   calendarId: string,
   id: string,
+  provider: ServiceProvider = "google",
+  connectionId?: string,
 ): Promise<CalendarEvent | null> {
+  if (provider === "microsoft") {
+    return getMicrosoftEvent(calendarId, id, connectionId);
+  }
   const data = await call(
     `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(id)}`,
   );
   return toEvent(data, calendarId);
 }
 
-export const updateEventDescription = (
-  event: { calendarId: string; id: string; description: string },
+export const updateEventDescription = async (
+  event: Pick<
+    CalendarEvent,
+    | "calendarId"
+    | "id"
+    | "description"
+    | "provider"
+    | "connectionId"
+    | "bodyType"
+    | "etag"
+  >,
   block: string,
-) =>
-  call(
+) => {
+  if (event.provider === "microsoft") {
+    return updateMicrosoftEventDescription(event, block);
+  }
+  return call(
     `/calendars/${encodeURIComponent(event.calendarId)}/events/${encodeURIComponent(event.id)}`,
     {
       method: "PATCH",
@@ -270,6 +352,7 @@ export const updateEventDescription = (
       }),
     },
   );
+};
 
 /** For a recording that belonged to no event: put the meeting on the calendar. */
 export async function createEvent({
@@ -277,12 +360,32 @@ export async function createEvent({
   startMs,
   endMs,
   block,
+  provider = savedCalendarProvider(),
+  connectionId,
 }: {
   title: string;
   startMs: number;
   endMs: number;
   block: string;
-}): Promise<{ id: string; calendarId: string; htmlLink?: string }> {
+  provider?: ServiceProvider;
+  connectionId?: string;
+}): Promise<{
+  id: string;
+  calendarId: string;
+  htmlLink?: string;
+  calendarProvider: ServiceProvider;
+  calendarConnectionId?: string;
+}> {
+  if (provider === "microsoft") {
+    const pinned = connectionId || calendarConnection();
+    return createMicrosoftEvent({
+      title,
+      startMs,
+      endMs,
+      block,
+      connectionId: pinned,
+    });
+  }
   const data = await call("/calendars/primary/events", {
     method: "POST",
     body: JSON.stringify({
@@ -290,9 +393,16 @@ export async function createEvent({
       description: mergeDescription("", block),
       start: { dateTime: new Date(startMs).toISOString() },
       // A zero-length event is invalid; a recording always occupied some time.
-      end: { dateTime: new Date(Math.max(endMs, startMs + 60_000)).toISOString() },
+      end: {
+        dateTime: new Date(Math.max(endMs, startMs + 60_000)).toISOString(),
+      },
       transparency: "transparent",
     }),
   });
-  return { id: data.id, calendarId: "primary", htmlLink: data.htmlLink };
+  return {
+    id: data.id,
+    calendarId: "primary",
+    htmlLink: data.htmlLink,
+    calendarProvider: "google",
+  };
 }

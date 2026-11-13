@@ -54,8 +54,18 @@ import {
 } from "../lib/session";
 import { startProcessing } from "../lib/pipeline";
 import { audioExtension } from "../../shared/analysis";
-import MeetingLanguages, { languageLabel } from "../components/MeetingLanguages";
+import MeetingLanguages, {
+  languageLabel,
+} from "../components/MeetingLanguages";
 import DriveSettings from "../components/DriveSettings";
+import MicrosoftSettings from "../components/MicrosoftSettings";
+import { savedMeetingHome, loadMeetingHome } from "../lib/providerSettings";
+import {
+  cachedMicrosoftConnections,
+  ensureMicrosoftToken,
+  connectMicrosoft,
+} from "../lib/microsoft";
+import { getOneDriveItem } from "../lib/onedrive";
 import { liveStatus, shareNotice } from "../lib/liveStatus";
 import {
   captureQueue,
@@ -70,6 +80,7 @@ import {
   setCaptureBusy,
   setCaptureError,
   setCaptureTitle,
+  setCaptureHome,
   isCapturing,
   setCaptureEvent,
   setCaptureLanguages,
@@ -124,13 +135,15 @@ export default function RecordPage() {
   // the text on screen and the text in the record are the same function.
   // The folder is not a decision made here: it comes from settings and is
   // read at render time, so it cannot go stale while the notice is on screen.
-  const [decision, setDecision] = useState<Omit<ConsentDecision, "folderName">>(() => ({
-    method: "spoken",
-    participants: [],
-    language: "de",
-    address: "du",
-    retention: savedRetention(),
-  }));
+  const [decision, setDecision] = useState<Omit<ConsentDecision, "folderName">>(
+    () => ({
+      method: "spoken",
+      participants: [],
+      language: "de",
+      address: "du",
+      retention: savedRetention(),
+    }),
+  );
   // Who the calendar says is in this meeting. The consent roster starts from
   // this, so the normal case costs no typing at all.
   const [invited, setInvited] = useState<string[]>([]);
@@ -161,7 +174,32 @@ export default function RecordPage() {
   >(null);
   const [online, setOnline] = useState(navigator.onLine);
   const [folder, setFolder] = useState(savedDriveFolder);
-  const systemAudioAvailable = typeof navigator.mediaDevices?.getDisplayMedia === "function";
+  const [selectedHome, setSelectedHome] = useState(savedMeetingHome);
+  const [homeReady, setHomeReady] = useState(false);
+  const homeOverride = useRef(false);
+  const meetingHome = state === "ready" ? selectedHome : draft.report.home;
+  const storageName = meetingHome ? "OneDrive" : "Google Drive";
+  useEffect(() => {
+    let live = true;
+    void loadMeetingHome()
+      .then((home) => {
+        if (live && !homeOverride.current) {
+          setSelectedHome(home);
+          setHomeReady(true);
+        }
+      })
+      .catch(() => {
+        if (live && !homeOverride.current)
+          setCaptureError(
+            "Der Standard-Speicherort konnte nicht geladen werden. Bitte unter Speicherort ausdrücklich Google Drive oder einen OneDrive-Ordner wählen. Es wird nicht automatisch gewechselt.",
+          );
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const systemAudioAvailable =
+    typeof navigator.mediaDevices?.getDisplayMedia === "function";
   const [audioSources, setAudioSources] = useState<AudioSourcePreference>(() =>
     systemAudioAvailable ? audioSourcePreference() : "mic",
   );
@@ -188,16 +226,22 @@ export default function RecordPage() {
   // itself applies: a 10-minute preflight against ensureDriveToken's 5-minute
   // renewal margin made the button read "Google Drive freigeben" and then
   // start recording instead.
-  const driveReady = !!driveToken();
+  const driveReady = meetingHome
+    ? cachedMicrosoftConnections().some(
+        (c) => c.connectionId === meetingHome.connectionId,
+      )
+    : !!driveToken();
 
   useEffect(() => {
     const update = () => refreshDriveSession((n) => n + 1);
     const timer = window.setInterval(update, 5000);
     window.addEventListener("cheatmeet:drive-session", update);
+    window.addEventListener("cheatmeet:provider-settings", update);
     window.addEventListener("focus", update);
     return () => {
       clearInterval(timer);
       window.removeEventListener("cheatmeet:drive-session", update);
+      window.removeEventListener("cheatmeet:provider-settings", update);
       window.removeEventListener("focus", update);
     };
   }, []);
@@ -233,7 +277,14 @@ export default function RecordPage() {
         if (requestedEvent && !isCapturing()) {
           // A failed lookup must not block the recording; the picker on this
           // screen is still there to link it by hand.
-          const event = await getEvent("primary", requestedEvent).catch(() => null);
+          const event = await getEvent(
+            searchParams.get("calendar") || "primary",
+            requestedEvent,
+            searchParams.get("provider") === "microsoft"
+              ? "microsoft"
+              : "google",
+            searchParams.get("connection") || undefined,
+          ).catch(() => null);
           if (!cancelled && event && !isCapturing()) {
             setCaptureEvent(event);
             setInvited(event.attendees);
@@ -252,9 +303,12 @@ export default function RecordPage() {
     if (operation.current) return;
     operation.current = true;
     setCaptureError("");
-    setCaptureBusy("Google Drive freigeben …");
+    setCaptureBusy(`${storageName} freigeben …`);
     try {
-      await verifyDriveAccess(await connectGoogle());
+      if (meetingHome) {
+        await connectMicrosoft(false);
+        await ensureMicrosoftToken(meetingHome.connectionId);
+      } else await verifyDriveAccess(await connectGoogle());
     } catch (e) {
       setCaptureError(errorMessage(e));
     } finally {
@@ -270,7 +324,8 @@ export default function RecordPage() {
   // changed from this very screen, and the notice names where files go.
   const decisionNow: ConsentDecision = {
     ...decision,
-    folderName: folder?.name || DEFAULT_FOLDER_NAME,
+    folderName: meetingHome?.rootName || folder?.name || DEFAULT_FOLDER_NAME,
+    storageService: meetingHome ? "Microsoft OneDrive" : "Google Drive",
   };
   const consentFactsNow = decisionFacts(
     decisionNow,
@@ -325,21 +380,40 @@ export default function RecordPage() {
     sources: AudioSourcePreference,
     sharingExplained = false,
   ) {
+    if (!homeReady) {
+      setCaptureError(
+        "Bitte zuerst den Speicherort laden oder ausdrücklich im Speicherort-Menü wählen.",
+      );
+      return;
+    }
+    setCaptureHome(selectedHome);
+    const verifyStorage = async () => {
+      const home = captureSnapshot().draft.report.home;
+      if (home) {
+        await ensureMicrosoftToken(home.connectionId);
+        await getOneDriveItem(home, home.rootId);
+        return;
+      }
+      const token = await ensureDriveToken();
+      if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
+      await verifyDriveAccess(token);
+    };
     // The explainer's confirmation click must reach getDisplayMedia without
     // an intervening await (native browser activation requirement).
     if (sharingExplained && sources === "mic+system") {
-      await armCapture(localOnly, async () => {
-        const token = await ensureDriveToken();
-        if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
-        await verifyDriveAccess(token);
-      }, sources);
+      await armCapture(localOnly, verifyStorage, sources);
       seedRoster();
       await skipConsentStep();
       return;
     }
     try {
       // Signed in should already mean authorized; only prompt if that fails.
-      if (!localOnly && navigator.onLine && !(await ensureDriveToken())) {
+      if (
+        !localOnly &&
+        navigator.onLine &&
+        !selectedHome &&
+        !(await ensureDriveToken())
+      ) {
         await authorizeDrive();
         return;
       }
@@ -355,15 +429,7 @@ export default function RecordPage() {
       setSheet("share-explainer");
       return;
     }
-    await armCapture(
-      localOnly,
-      async () => {
-        const token = await ensureDriveToken();
-        if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
-        await verifyDriveAccess(token);
-      },
-      sources,
-    );
+    await armCapture(localOnly, verifyStorage, sources);
     seedRoster();
     await skipConsentStep();
   }
@@ -408,7 +474,10 @@ export default function RecordPage() {
       await setCaptureProcessing(analyze);
       if (uid() !== accountId) return;
       // Renewing is a server call, never a popup.
-      const token = await ensureDriveToken();
+      const token = draft.report.home
+        ? (await ensureMicrosoftToken(draft.report.home.connectionId))
+            .accessToken
+        : await ensureDriveToken();
       if (!token) {
         refreshDriveSession((n) => n + 1);
         throw new Error(
@@ -482,8 +551,8 @@ export default function RecordPage() {
                 : armed
                   ? "NOCH WIRD NICHTS AUFGENOMMEN"
                   : state === "review"
-                  ? "SCHRITT 2 VON 2"
-                  : "SCHRITT 1 VON 2"}
+                    ? "SCHRITT 2 VON 2"
+                    : "SCHRITT 1 VON 2"}
             </span>
             <strong>
               {state === "review"
@@ -532,7 +601,9 @@ export default function RecordPage() {
           </main>
         ) : (
           <>
-            <main className={`walk-content${state === "ready" ? " is-ready" : ""}`}>
+            <main
+              className={`walk-content${state === "ready" ? " is-ready" : ""}`}
+            >
               {state === "ready" ? (
                 <>
                   {/* One object, not two labelled rows: picking the event
@@ -566,7 +637,12 @@ export default function RecordPage() {
                       <FolderOpen size={18} />
                       <span>
                         <small>SPEICHERORT</small>
-                        <strong>{folder?.name || DEFAULT_FOLDER_NAME}</strong>
+                        <strong>
+                          {storageName} ·{" "}
+                          {meetingHome?.rootName ||
+                            folder?.name ||
+                            DEFAULT_FOLDER_NAME}
+                        </strong>
                       </span>
                     </button>
                     <button
@@ -644,14 +720,33 @@ export default function RecordPage() {
                     <fieldset className="walk-speaker-assumptions">
                       <legend>Transkript für die Zusammenfassung</legend>
                       <label>
-                        <input type="checkbox" checked={!!draft.retranscribe} disabled={!!busy}
-                          onChange={(event) => setCaptureRetranscribe(event.target.checked)} />
+                        <input
+                          type="checkbox"
+                          checked={!!draft.retranscribe}
+                          disabled={!!busy}
+                          onChange={(event) =>
+                            setCaptureRetranscribe(event.target.checked)
+                          }
+                        />
                         Gesamte Aufnahme am Ende erneut transkribieren
                       </label>
-                      <p>Optionaler zusätzlicher, kostenpflichtiger AssemblyAI-Durchlauf. Kann Lücken im Live-Transkript schließen, dauert länger und ersetzt nach Erfolg dessen Text. Namen werden soweit eindeutig zugeordnet übernommen; unklare Sprecher kannst du prüfen. Ohne Häkchen wird das Live-Transkript verwendet.</p>
+                      <p>
+                        Optionaler zusätzlicher, kostenpflichtiger
+                        AssemblyAI-Durchlauf. Kann Lücken im Live-Transkript
+                        schließen, dauert länger und ersetzt nach Erfolg dessen
+                        Text. Namen werden soweit eindeutig zugeordnet
+                        übernommen; unklare Sprecher kannst du prüfen. Ohne
+                        Häkchen wird das Live-Transkript verwendet.
+                      </p>
                     </fieldset>
                   )}
-                  {draft.report.transcriptionOrigin === "import" && draft.report.speech?.phase !== "final" && <MeetingLanguages value={draft.report.speech?.languages} onChange={setCaptureLanguages} />}
+                  {draft.report.transcriptionOrigin === "import" &&
+                    draft.report.speech?.phase !== "final" && (
+                      <MeetingLanguages
+                        value={draft.report.speech?.languages}
+                        onChange={setCaptureLanguages}
+                      />
+                    )}
                   {/* The link can still be made after the fact: before this the
                       picker existed only on the pre-recording screen, so a
                       recording started without one could never be attached. */}
@@ -669,12 +764,17 @@ export default function RecordPage() {
                       </span>
                     </div>
                     {draft.audio && (
-                      <AudioPreview blob={draft.audio} durationMs={durationMs} />
+                      <AudioPreview
+                        blob={draft.audio}
+                        durationMs={durationMs}
+                      />
                     )}
                     {failed > 0 && (
                       <p className="walk-gap">
                         Das Live-Transkript kann Lücken enthalten. Es wird ohne
-                        automatische erneute Transkription verwendet. Du kannst oben einen zusätzlichen Durchlauf wählen. Die Originalaufnahme wird gesichert.
+                        automatische erneute Transkription verwendet. Du kannst
+                        oben einen zusätzlichen Durchlauf wählen. Die
+                        Originalaufnahme wird gesichert.
                       </p>
                     )}
                   </div>
@@ -684,8 +784,13 @@ export default function RecordPage() {
                   >
                     <FolderOpen size={18} />
                     <span>
-                      <small>SPEICHERORT IN GOOGLE DRIVE</small>
-                      <strong>{folder?.name || DEFAULT_FOLDER_NAME}</strong>
+                      <small>SPEICHERORT</small>
+                      <strong>
+                        {storageName} ·{" "}
+                        {meetingHome?.rootName ||
+                          folder?.name ||
+                          DEFAULT_FOLDER_NAME}
+                      </strong>
                     </span>
                     <ArrowRight size={17} />
                   </button>
@@ -749,26 +854,29 @@ export default function RecordPage() {
                     onClick={() => startRecording()}
                   >
                     <Mic size={22} />
-                    {online && !driveReady
-                      ? "Google Drive freigeben"
-                      : "Aufnahme vorbereiten"}
+                    {!homeReady
+                      ? "Speicherort wird geladen …"
+                      : online && !driveReady
+                        ? `${storageName} freigeben`
+                        : "Aufnahme vorbereiten"}
                   </button>
                   {localStartOffered && (
                     <button
                       className="walk-secondary"
                       onClick={() => startRecording(true)}
                     >
-                      Trotzdem lokal aufnehmen · später in Drive sichern
+                      Trotzdem lokal aufnehmen · später im gewählten Archiv
+                      sichern
                     </button>
                   )}
                   <button
                     className="walk-secondary"
                     onClick={() => {
-                      if (navigator.onLine && !driveToken(10 * 60 * 1000))
+                      if (navigator.onLine && !driveReady)
                         void authorizeDrive();
                       else audioInput.current?.click();
                     }}
-                    disabled={online && !driveReady}
+                    disabled={!homeReady || (online && !driveReady)}
                   >
                     <Upload size={16} />
                     Vorhandenes Audio importieren
@@ -778,7 +886,7 @@ export default function RecordPage() {
                 <>
                   {online && !driveReady && (
                     <button className="walk-secondary" onClick={authorizeDrive}>
-                      Google Drive vor dem Speichern verbinden
+                      {storageName} vor dem Speichern verbinden
                     </button>
                   )}
                   <button
@@ -848,10 +956,14 @@ export default function RecordPage() {
         accept="audio/*"
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file)
-            void importAudio(file).then(id => {
-              if (id) navigate(`/record?draft=${id}`, { replace: true });
-            }).catch((err) => setCaptureError(errorMessage(err)));
+          if (file) {
+            setCaptureHome(selectedHome);
+            void importAudio(file)
+              .then((id) => {
+                if (id) navigate(`/record?draft=${id}`, { replace: true });
+              })
+              .catch((err) => setCaptureError(errorMessage(err)));
+          }
           e.target.value = "";
         }}
       />
@@ -866,15 +978,29 @@ export default function RecordPage() {
                   ? "Audioquellen"
                   : sheet === "languages"
                     ? "Sprachen"
-                  : sheet === "share-explainer"
-                    ? "Gleich fragt der Browser"
-                    : "Weitere Optionen"
+                    : sheet === "share-explainer"
+                      ? "Gleich fragt der Browser"
+                      : "Weitere Optionen"
           }
           onClose={() => setSheet(null)}
         >
           {sheet === "settings" ? (
             <div className="sheet-stack">
               <DriveSettings />
+              {state === "ready" && (
+                <MicrosoftSettings
+                  meetingOnly
+                  value={selectedHome}
+                  onSelect={(home) => {
+                    homeOverride.current = true;
+                    setHomeReady(true);
+                    setSelectedHome(home);
+                    setCaptureHome(home);
+                    resetNotice();
+                    setCaptureError("");
+                  }}
+                />
+              )}
               {/* Leaving mid-capture would abandon the recording, and the
                   settings page can sign you out. Offer the exit only when
                   there is nothing running to lose. */}
@@ -889,7 +1015,11 @@ export default function RecordPage() {
               )}
             </div>
           ) : sheet === "sources" ? (
-            <div className="walk-sources" role="group" aria-label="Audioquelle auswählen">
+            <div
+              className="walk-sources"
+              role="group"
+              aria-label="Audioquelle auswählen"
+            >
               <button
                 className={`walk-source-option${audioSources === "mic+system" ? " is-selected" : ""}`}
                 aria-pressed={audioSources === "mic+system"}
@@ -916,8 +1046,8 @@ export default function RecordPage() {
                 <span>
                   <strong>Nur Mikrofon</strong>
                   <small>
-                    Für Gespräche ohne Bildschirmfreigabe. Kein
-                    Freigabe-Dialog beim Start.
+                    Für Gespräche ohne Bildschirmfreigabe. Kein Freigabe-Dialog
+                    beim Start.
                   </small>
                 </span>
                 {audioSources === "mic" && <Check size={18} />}
@@ -927,16 +1057,33 @@ export default function RecordPage() {
               <fieldset className="walk-speaker-assumptions">
                 <legend>Personen pro Audioquelle</legend>
                 <label>
-                  <input type="checkbox" checked={!!draft.report.singleSpeakerSources?.mic}
-                    onChange={event => setCaptureSingleSpeaker("mic", event.target.checked)} />
+                  <input
+                    type="checkbox"
+                    checked={!!draft.report.singleSpeakerSources?.mic}
+                    onChange={(event) =>
+                      setCaptureSingleSpeaker("mic", event.target.checked)
+                    }
+                  />
                   Nur eine Person am Mikrofon
                 </label>
-                {audioSources === "mic+system" && <label>
-                  <input type="checkbox" checked={!!draft.report.singleSpeakerSources?.system}
-                    onChange={event => setCaptureSingleSpeaker("system", event.target.checked)} />
-                  Nur eine Person im Systemaudio
-                </label>}
-                <p>Für dieses Meeting: Alle Beiträge der gewählten Quelle gehören zu einer Person, auch nach einer Pause. Namen kannst du direkt im Transkript ändern. Ohne Häkchen werden Stimmen automatisch unterschieden.</p>
+                {audioSources === "mic+system" && (
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={!!draft.report.singleSpeakerSources?.system}
+                      onChange={(event) =>
+                        setCaptureSingleSpeaker("system", event.target.checked)
+                      }
+                    />
+                    Nur eine Person im Systemaudio
+                  </label>
+                )}
+                <p>
+                  Für dieses Meeting: Alle Beiträge der gewählten Quelle gehören
+                  zu einer Person, auch nach einer Pause. Namen kannst du direkt
+                  im Transkript ändern. Ohne Häkchen werden Stimmen automatisch
+                  unterschieden.
+                </p>
               </fieldset>
             </div>
           ) : sheet === "languages" ? (
@@ -948,8 +1095,7 @@ export default function RecordPage() {
           ) : sheet === "share-explainer" ? (
             <div className="walk-explainer">
               <p>
-                Der Browser fragt jetzt, welchen Tab oder Bildschirm du
-                teilst.
+                Der Browser fragt jetzt, welchen Tab oder Bildschirm du teilst.
               </p>
               <ul>
                 <li>
@@ -960,7 +1106,8 @@ export default function RecordPage() {
                   <Volume2 size={15} />
                   <span>
                     <strong>Aktiviere „Audio teilen“, wenn angeboten.</strong>{" "}
-                    Ohne freigegebenen Ton nimmt CheatMeet nur dein Mikrofon auf.
+                    Ohne freigegebenen Ton nimmt CheatMeet nur dein Mikrofon
+                    auf.
                   </span>
                 </li>
               </ul>
@@ -1026,7 +1173,7 @@ export default function RecordPage() {
                     }}
                   >
                     <CloudUpload size={19} />
-                    Nur in Drive sichern, ohne Analyse
+                    Nur in {storageName} sichern, ohne Analyse
                   </button>
                   <button onClick={() => setSheet("leave")}>
                     <ArrowLeft size={19} />

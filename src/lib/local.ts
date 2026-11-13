@@ -12,6 +12,7 @@ import {
 import { asTodos } from "../../shared/analysis";
 import { isRecoveredProcessingStub, mergeRemoteReport } from "./reportProjection";
 import type { Draft, ReportData } from "../types";
+import {archiveAudioId,archiveReportId,archiveSyncedAt} from "../../shared/storage";
 const store = createStore("cheatmeet", "workspace");
 const key = (uid: string, id: string) => `${uid}:report:${id}`;
 export interface LocalReport {
@@ -25,6 +26,7 @@ const channel =
     ? new BroadcastChannel("cheatmeet:local-reports")
     : null;
 function emit(uid: string, broadcast = true, draftsChanged = false) {
+  uid = uid.replace(/:microsoft$/, "");
   for (const listener of listeners) listener(uid);
   if (draftsChanged) for (const listener of draftListeners) listener(uid);
   if (broadcast) channel?.postMessage(draftsChanged ? { uid, draftsChanged: true } : uid);
@@ -49,7 +51,7 @@ export function watchDrafts(uid: string, onChange: () => void) {
   return () => { draftListeners.delete(listener); };
 }
 export async function putLocal(uid: string, report: ReportData, dirty = true) {
-  await set(key(uid, report.id), { report, dirty }, store);
+  await set(key(report.home ? `${uid}:microsoft` : uid, report.id), { report, dirty }, store);
   emit(uid);
 }
 // Check and update in one IndexedDB transaction: an older cloud response must not
@@ -57,7 +59,7 @@ export async function putLocal(uid: string, report: ReportData, dirty = true) {
 export async function acceptRemoteReport(uid: string, report: ReportData) {
   let changed = false;
   await update<LocalReport>(
-    key(uid, report.id),
+    key(report.home ? `${uid}:microsoft` : uid, report.id),
     (existing) => {
       const sameRevision =
         !!report.updatedAt && report.updatedAt === existing?.report.updatedAt;
@@ -89,11 +91,12 @@ const normalise = (value: LocalReport): LocalReport => ({
 /** Removes this device's copy of one report. */
 export async function dropLocal(uid: string, id: string) {
   await del(key(uid, id), store);
+  await del(key(`${uid}:microsoft`, id), store);
   emit(uid);
 }
 
 export const getLocal = async (uid: string, id: string) => {
-  const found = await get<LocalReport>(key(uid, id), store);
+  const found = await get<LocalReport>(key(`${uid}:microsoft`, id), store) || await get<LocalReport>(key(uid, id), store);
   return found && normalise(found);
 };
 /**
@@ -104,7 +107,7 @@ export const getLocal = async (uid: string, id: string) => {
 export async function listLocal(uid: string) {
   const prefix = `${uid}:report:`;
   const selected = (await keys<string>(store)).filter((k) =>
-    k.startsWith(prefix),
+    k.startsWith(prefix) || k.startsWith(`${uid}:microsoft:report:`),
   );
   const values = await getMany<LocalReport>(selected, store);
   return values.filter(Boolean).map(normalise);
@@ -126,6 +129,7 @@ async function migrateDraft(uid: string) {
 }
 
 export async function putDraft(uid: string, draft: Draft) {
+  if (draft.report.home) uid = `${uid}:microsoft`;
   await migrateDraft(uid);
   // A recorded draft's audio already lives in the chunk journal and is rebuilt
   // by recoverAudio on every read, so storing the inline copy too doubled the
@@ -164,7 +168,9 @@ export async function appendRecordingChunk(
   sequence: number,
   blob: Blob,
   durationMs: number,
+  microsoft = false,
 ) {
+  if (microsoft) uid = `${uid}:microsoft`;
   if (!blob.size) return;
   await setMany(
     [
@@ -221,7 +227,12 @@ async function readMatchingRecords(
 export async function listDrafts(
   uid: string,
   options: { includeAudio?: boolean } = {},
+  namespaceOnly = false,
 ): Promise<Draft[]> {
+  if (!namespaceOnly) {
+    const [google, microsoft] = await Promise.all([listDrafts(uid, options, true), listDrafts(`${uid}:microsoft`, options, true)]);
+    return [...google, ...microsoft].sort((a,b)=>(b.report.updatedAt || b.report.date).localeCompare(a.report.updatedAt || a.report.date));
+  }
   await migrateDraft(uid);
   const records = await readMatchingRecords(
     (key) =>
@@ -261,7 +272,7 @@ export async function listDrafts(
       const saved = completed.get(draft.report.id);
       // This is a retained backup, not a new recording. Keep its bytes; a
       // different audio id or any newer journal progress still needs recovery.
-      return !(saved?.status === "completed" && saved.summary?.trim() && saved.driveSyncedAt && saved.driveReportId && saved.rawAudioUrl && saved.rawAudioUrl === draft.report.rawAudioUrl && saved.date === draft.report.date && (saved.durationMs || 0) >= (draft.report.durationMs || 0));
+      return !(saved?.status === "completed" && saved.summary?.trim() && archiveSyncedAt(saved) && archiveReportId(saved) && archiveAudioId(saved) && archiveAudioId(saved) === archiveAudioId(draft.report) && saved.date === draft.report.date && (saved.durationMs || 0) >= (draft.report.durationMs || 0));
     })
     .sort((a, b) =>
       (b.report.updatedAt || b.report.date).localeCompare(
@@ -273,7 +284,12 @@ export async function listDrafts(
 export async function getDraft(
   uid: string,
   id?: string,
+  namespaceOnly = false,
 ): Promise<Draft | undefined> {
+  if (!namespaceOnly) {
+    const drafts=await Promise.all([getDraft(`${uid}:microsoft`,id,true),getDraft(uid,id,true)]);
+    return drafts.filter((d):d is Draft=>!!d).sort((a,b)=>(b.report.updatedAt || b.report.date).localeCompare(a.report.updatedAt || a.report.date))[0];
+  }
   await migrateDraft(uid);
   const selected = id || (await get<string>(activeDraftKey(uid), store));
   if (selected) {
@@ -286,12 +302,13 @@ export async function getDraft(
     }
     if (id) return undefined;
   }
-  return (await listDrafts(uid))[0];
+  return (await listDrafts(uid, {}, true))[0];
 }
 
 export async function deleteDraft(uid: string, id?: string) {
   const draft = await getDraft(uid, id);
   if (!draft) return;
+  if(draft.report.home) uid=`${uid}:microsoft`;
   const storedKeys = await keys<string>(store);
   await delMany(
     [
@@ -329,7 +346,7 @@ export interface StorageReport {
  * the local blob is a duplicate rather than the only copy.
  */
 const audioIsSafe = (report?: ReportData) =>
-  !!report?.driveSyncedAt && !!report.rawAudioUrl;
+  report?.home ? !!report.home.syncedAt && !!report.home.audioId : !!report?.driveSyncedAt && !!report.rawAudioUrl;
 
 /** Every key this account holds for one recording's audio. */
 const audioKeys = (uid: string, all: string[], id: string) =>
@@ -345,8 +362,8 @@ export async function inspectStorage(uid: string): Promise<StorageReport> {
   const reports = await listLocal(uid);
   const byId = new Map(reports.map((v) => [v.report.id, v.report]));
   const draftIds = all
-    .filter((k) => k.startsWith(`${uid}:draft:`))
-    .map((k) => k.slice(`${uid}:draft:`.length));
+    .filter((k) => k.startsWith(`${uid}:draft:`) || k.startsWith(`${uid}:microsoft:draft:`))
+    .map((k) => k.split(":draft:")[1]);
   const estimate = await navigator.storage?.estimate?.().catch(() => null);
   return {
     usageBytes: estimate?.usage,
@@ -369,12 +386,12 @@ export async function releaseSyncedAudio(uid: string): Promise<number> {
   const all = await keys<string>(store);
   const byId = new Map((await listLocal(uid)).map((v) => [v.report.id, v.report]));
   const ids = all
-    .filter((k) => k.startsWith(`${uid}:draft:`))
-    .map((k) => k.slice(`${uid}:draft:`.length))
+    .filter((k) => k.startsWith(`${uid}:draft:`) || k.startsWith(`${uid}:microsoft:draft:`))
+    .map((k) => k.split(":draft:")[1])
     .filter((id) => audioIsSafe(byId.get(id)));
   if (!ids.length) return 0;
   await delMany(
-    ids.flatMap((id) => audioKeys(uid, all, id)),
+    ids.flatMap((id) => audioKeys(byId.get(id)?.home ? `${uid}:microsoft` : uid, all, id)),
     store,
   );
   emit(uid);

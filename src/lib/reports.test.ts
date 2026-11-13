@@ -59,6 +59,11 @@ beforeEach(() => {
 });
 
 describe("saveReport", () => {
+  it("writes Microsoft only to the new index with explicit home references",async()=>{
+    const home={provider:"microsoft" as const,connectionId:"c",driveId:"d",rootId:"root",rootName:"Meetings",folderId:"f",reportId:"j"};
+    await saveReport(report({home,driveReportId:undefined,driveSyncedAt:undefined}));
+    expect(written[0].path).toBe("users/u1/meetings/r1");expect(written[0].data.home).toEqual(home);expect(written[0].data.speech).toBeUndefined();
+  });
   it("sends the cloud an index, never the transcript", async () => {
     await saveReport(report());
 

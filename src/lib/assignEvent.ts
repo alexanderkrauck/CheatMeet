@@ -3,6 +3,7 @@ import { saveReport, uid } from "./reports";
 import { syncReportToCalendar } from "./calendarSync";
 import { errorMessage, hasCalendarGrant } from "./session";
 import type { CalendarEvent } from "./calendar";
+import {hasAnyCalendarGrant} from "./calendar";
 import type { ReportData } from "../types";
 
 export interface AssignOutcome {
@@ -27,7 +28,7 @@ export interface AssignOutcome {
 export async function assignReportToEvent(
   owner: string,
   reportId: string,
-  event: Pick<CalendarEvent, "id" | "calendarId" | "htmlLink">,
+  event: Pick<CalendarEvent, "id" | "calendarId" | "htmlLink"> & Partial<Pick<CalendarEvent,"provider"|"connectionId">>,
   { writeBack = true }: { writeBack?: boolean } = {},
 ): Promise<AssignOutcome> {
   const warnings: string[] = [];
@@ -43,6 +44,8 @@ export async function assignReportToEvent(
   const link = {
     calendarEventId: event.id,
     calendarId: event.calendarId,
+    calendarProvider:event.provider || "google",
+    calendarConnectionId:event.connectionId,
     calendarLink: event.htmlLink,
     calendarError: undefined,
     calendarSyncedAt: undefined,
@@ -50,7 +53,7 @@ export async function assignReportToEvent(
   let patch: Partial<ReportData> = link;
 
   if (writeBack) {
-    if (!hasCalendarGrant())
+    if (!hasAnyCalendarGrant(event.provider || "google"))
       warnings.push(
         "Die Notizen konnten nicht geschrieben werden: Der Kalender ist nicht freigegeben.",
       );

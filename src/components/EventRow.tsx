@@ -7,8 +7,12 @@ import { guestLabel, isRecordable, timeLabel } from "../lib/upcoming";
 /** The drag payload a meeting row writes, and the only one this row accepts. */
 export const MIME = "application/x-cheatmeet-report";
 
-export const recordHref = (event: CalendarEvent) =>
-  `/record?new=1&event=${encodeURIComponent(event.id)}`;
+export const recordHref = (event: CalendarEvent) => {
+  const base=`/record?new=1&event=${encodeURIComponent(event.id)}`;
+  if(event.provider!=='microsoft'&&event.calendarId==='primary')return base;
+  const binding=new URLSearchParams({provider:event.provider||'google',calendar:event.calendarId,...(event.connectionId?{connection:event.connectionId}:{})});
+  return `${base}&${binding}`;
+};
 
 /**
  * A scheduled entry, sitting in the same list as the recordings around it.

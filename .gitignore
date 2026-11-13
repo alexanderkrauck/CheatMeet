@@ -9,6 +9,8 @@ coverage/
 output/
 .transcription-jobs/
 .google-grants/
+.microsoft-grants/
+.microsoft-uploads/
 .mcp-grants/
 .mcp-live/
 .playwright-cli/

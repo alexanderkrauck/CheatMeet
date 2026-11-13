@@ -28,12 +28,25 @@ async function setup(extra: Partial<ProcessingOptions> = {}) {
   const server = createServer(app); servers.push(server);
   await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
   const base = `http://127.0.0.1:${(server.address() as any).port}/api`;
-  const call = async (path: string, body?: unknown, token='alice') => {
-    const res=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
+  const call = async (path: string, body?: unknown, token='alice', microsoft=false) => {
+    const res=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(microsoft?{'X-CheatMeet-Storage':'microsoft'}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});
     return {status:res.status,body:await res.json()};
   };
   return {store,queue,io,analyze,call,artifacts};
 }
+it('accepts Microsoft-only homes and hides their jobs from legacy Google-only clients',async()=>{
+  const h=await setup({identify:async token=>({uid:token,googleSub:''})});
+  const home={provider:'microsoft' as const,connectionId:'ms-account',driveId:'b!drive',rootId:'root',rootName:'Meetings',folderId:'ms-folder',reportId:'ms-json'};
+  const ms={...report,driveFolderId:undefined,driveReportId:undefined,home};
+  h.io.load.mockResolvedValue({report:ms,revision:'source-v1',indexRevision:'index-v1'});
+  expect((await h.call('/processing/meeting-1',{report:ms,analyze:false},'alice',true)).status).toBe(202);
+  expect(h.io.load).toHaveBeenCalledWith(expect.objectContaining({owner:'alice',refs:expect.objectContaining({home})}));
+  expect((await h.call('/processing')).body.jobs).toEqual([]);
+  expect((await h.call('/processing',undefined,'alice',true)).body.jobs).toHaveLength(1);
+  expect((await h.call('/processing/meeting-1')).status).toBe(404);
+  expect((await h.call('/processing/meeting-1',undefined,'alice',true)).status).toBe(200);
+  expect((await h.call('/processing/meeting-1',undefined,'bob',true)).status).toBe(404);
+});
 it('rejects browser tokens at worker and never does work on GET',async()=>{
   const h=await setup();await h.call('/processing/meeting-1',{report,analyze:true});
   const task=h.queue.mock.calls[0][0];

@@ -8,15 +8,17 @@ import {
   Loader2,
 } from "lucide-react";
 import { connectGoogle, errorMessage } from "../lib/session";
+import { signInMicrosoft } from "../lib/microsoftIdentity";
 import { Brand, Notice } from "../components/UI";
 export default function Login({ notice = "" }: { notice?: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  async function login() {
+  async function login(microsoft = false) {
     setLoading(true);
     setError("");
     try {
-      await connectGoogle();
+      if (microsoft) await signInMicrosoft();
+      else await connectGoogle();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -35,7 +37,8 @@ export default function Login({ notice = "" }: { notice?: string }) {
             Alles im <em>Fokus.</em>
           </h1>
           <p>
-            Lass die KI mitschreiben. Zeichne deine Meetings auf und erhalte sofort strukturierte Zusammenfassungen und To-Dos.
+            Lass die KI mitschreiben. Zeichne deine Meetings auf und erhalte
+            sofort strukturierte Zusammenfassungen und To-Dos.
           </p>
           <div className="story-flow">
             <span>
@@ -64,12 +67,12 @@ export default function Login({ notice = "" }: { notice?: string }) {
             Einfach weiterarbeiten.
           </h2>
           <p className="muted">
-            Melde dich mit Google an und gib Drive für deine Meetings frei.
-            Damit ist vor der ersten Aufnahme alles vorbereitet.
+            Melde dich mit Google oder Microsoft an. Den Speicherort und die
+            Kalenderfreigabe wählst du getrennt in den Einstellungen.
           </p>
           <button
             className="btn btn-primary login-button"
-            onClick={login}
+            onClick={() => void login()}
             disabled={loading}
           >
             {loading ? (
@@ -80,6 +83,13 @@ export default function Login({ notice = "" }: { notice?: string }) {
             {loading ? "Verbindung wird hergestellt …" : "Mit Google starten"}
             <ArrowRight size={18} />
           </button>
+          <button
+            className="btn login-button"
+            disabled={loading}
+            onClick={() => void login(true)}
+          >
+            Mit Microsoft anmelden
+          </button>
           {(error || notice) && <Notice>{error || notice}</Notice>}
           <div className="login-benefits">
             <p>
@@ -89,7 +99,7 @@ export default function Login({ notice = "" }: { notice?: string }) {
               <Check /> KI-Berichte zum Prüfen und Bearbeiten
             </p>
             <p>
-              <Check /> Speicherort in Google Drive frei wählen
+              <Check /> Speicherort in Google Drive oder OneDrive wählen
             </p>
           </div>
           <p className="small muted">
@@ -97,9 +107,7 @@ export default function Login({ notice = "" }: { notice?: string }) {
             übermittelt. KI-Befunde bitte vor der Weitergabe prüfen.
           </p>
         </div>
-        <span className="login-bottom">
-          Für effiziente Teams gemacht.
-        </span>
+        <span className="login-bottom">Für effiziente Teams gemacht.</span>
       </div>
     </div>
   );

@@ -8,7 +8,7 @@ export function resetProcessingConfig() { configuration = undefined; }
 
 /** A network error is not proof that server processing is disabled. */
 export function processingAvailable(): Promise<boolean> {
-  return configuration ||= fetch("/api/processing/config", { signal: AbortSignal.timeout(15_000) })
+  return configuration ||= fetch("/api/processing/config", { headers:{"X-CheatMeet-Storage":"microsoft"},signal: AbortSignal.timeout(15_000) })
     .then(async (response) => {
       if (!response.ok) throw new Error("Server-Verarbeitung ist gerade nicht erreichbar.");
       return (await response.json()).enabled === true;
@@ -26,7 +26,7 @@ async function request<T>(path: string, body?: object): Promise<T> {
   check();
   const response = await fetch(`/api/processing${path}`, {
     method: body ? "POST" : "GET",
-    headers: { Authorization: `Bearer ${identity}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+    headers: { Authorization: `Bearer ${identity}`, "X-CheatMeet-Storage": "microsoft", ...(body ? { "Content-Type": "application/json" } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(30_000),
   });

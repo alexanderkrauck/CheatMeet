@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const firebase = vi.hoisted(() => ({
-  auth: { currentUser: { uid: "alice" } as { uid: string } | null },
+  auth: { currentUser: { uid: "alice", providerData:[{providerId:"google.com"}] } as { uid: string; providerData?:{providerId:string}[] } | null },
   provider: {},
   reauthenticate: vi.fn(),
   signIn: vi.fn(),
@@ -24,7 +24,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-10T10:00:00Z"));
-  firebase.auth.currentUser = { uid: "alice" };
+  firebase.auth.currentUser = { uid: "alice",providerData:[{providerId:"google.com"}] };
   stored.clear();
   vi.stubGlobal("sessionStorage", {
     getItem: (name: string) => stored.get(name) ?? null,
@@ -55,7 +55,7 @@ describe("Drive authorization session", () => {
     const reloaded = await import("./session");
     expect(reloaded.driveToken()).toBeNull();
     expect(stored.has(key)).toBe(true);
-    firebase.auth.currentUser = { uid: "alice" };
+    firebase.auth.currentUser = { uid: "alice",providerData:[{providerId:"google.com"}] };
     expect(reloaded.driveToken()).toBe("drive-token");
   });
 

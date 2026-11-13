@@ -32,6 +32,8 @@ const INDEX_DOWN = "Die Meeting-Liste ist gerade nicht erreichbar. Bitte später
 
 function transcriptFailure(error: unknown): CallToolResult {
   if (error instanceof TranscriptError) {
+    if (error.reason === 'storage_revoked') return fail('Der OneDrive-Zugriff wurde entzogen. Bitte Microsoft in CheatMeet erneut verbinden.');
+    if (error.reason === 'storage_unavailable') return fail('OneDrive ist gerade nicht erreichbar. Bitte später erneut versuchen.');
     if (error.reason === "drive_revoked") return fail(DRIVE_REVOKED);
     if (error.reason === "drive_unavailable") return fail(DRIVE_DOWN);
     return fail("Das Transkript ist nicht mehr in Google Drive vorhanden.");
@@ -84,6 +86,10 @@ export function buildServer(deps: ToolDeps, auth: AuthInfo | undefined): McpServ
   const who = (auth?.extra ?? {}) as { uid?: string; googleSub?: string };
   const uid = who.uid ?? "";
   const googleSub = who.googleSub ?? "";
+  const transcriptId = (entry:IndexEntry) => entry.home ? entry.home.transcriptId : entry.driveTranscriptId;
+  const readTranscript = (entry:IndexEntry) => entry.home
+    ? deps.transcripts.readMeeting?.(uid,entry) ?? Promise.reject(new TranscriptError('storage_unavailable'))
+    : deps.transcripts.read(googleSub,entry.driveTranscriptId!);
 
   const load = async (): Promise<IndexEntry[] | CallToolResult> => {
     try {
@@ -173,13 +179,13 @@ export function buildServer(deps: ToolDeps, auth: AuthInfo | undefined): McpServ
       if (isFailure(entries)) return entries;
       const entry = entries.find((candidate) => candidate.id === meeting_id);
       if (!entry) return fail(NOT_FOUND);
-      if (!entry.driveTranscriptId)
+      if (!transcriptId(entry))
         return fail(hasTranscript(entry)
-          ? "Das Transkript dieses Meetings ist noch nicht in Google Drive gesichert."
+          ? `Das Transkript dieses Meetings ist noch nicht in ${entry.home?'OneDrive':'Google Drive'} gesichert.`
           : "Zu diesem Meeting gibt es kein Transkript.");
       let raw: string;
       try {
-        raw = await deps.transcripts.read(googleSub, entry.driveTranscriptId);
+        raw = await readTranscript(entry);
       } catch (error) {
         return transcriptFailure(error);
       }
@@ -212,7 +218,7 @@ export function buildServer(deps: ToolDeps, auth: AuthInfo | undefined): McpServ
         const todos = entry.todos.map((todo) => todo.text).join("\n");
         if (todos.toLowerCase().includes(needle)) add(entry, "todos", todos);
       }
-      const withTranscript = ordered.filter((entry) => entry.driveTranscriptId);
+      const withTranscript = ordered.filter((entry) => transcriptId(entry));
       const deadline = deps.now() + 20_000;
       const budget = withTranscript.slice(0, 60);
       let searched = 0;
@@ -221,11 +227,11 @@ export function buildServer(deps: ToolDeps, auth: AuthInfo | undefined): McpServ
       const worker = async () => {
         for (let entry = queue.shift(); entry; entry = queue.shift()) {
           if (deps.now() > deadline) return;
-          const key = `${googleSub}:${entry.driveTranscriptId}:${entry.updatedAt ?? ""}`;
+          const key = JSON.stringify([uid,googleSub,entry.home?.connectionId,entry.home?.driveId,transcriptId(entry),entry.updatedAt]);
           let text = cache.get(key);
           if (text === undefined) {
             try {
-              text = stripFrontmatter(await deps.transcripts.read(googleSub, entry.driveTranscriptId!));
+              text = stripFrontmatter(await readTranscript(entry));
               cache.set(key, text);
             } catch (error) {
               if (error instanceof TranscriptError && error.reason !== "not_found") throw error;

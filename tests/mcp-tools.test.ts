@@ -61,6 +61,13 @@ beforeEach(async () => {
     now: () => clock,
     index: { list: async (uid) => { if (indexDown) throw new Error("index down"); return entries[uid] ?? []; } },
     transcripts: {
+      readMeeting: async (uid: string, meeting: IndexEntry) => {
+        reads++;
+        if (!entries[uid]?.some(e => e.id === meeting.id)) throw new TranscriptError('not_found');
+        const fileId = (meeting as any).home?.transcriptId;
+        if (!fileId || files[fileId] === undefined) throw new TranscriptError('not_found');
+        return files[fileId];
+      },
       read: async (googleSub, fileId) => {
         reads++;
         if (driveMode === "revoked") throw new TranscriptError("drive_revoked");
@@ -100,6 +107,18 @@ const call = async (client: Client, name: string, args: Record<string, unknown> 
   return { text, isError: Boolean(result.isError), result };
 };
 const data = (text: string) => JSON.parse(text);
+
+it('reads and searches OneDrive meetings for a Microsoft-only workspace without Google identity', async()=>{
+  entries.alice=[entry('ms1','2030-05-30T09:00:00Z',{driveTranscriptId:undefined,home:{provider:'microsoft',connectionId:'conn',driveId:'drive',rootId:'root',rootName:'Meetings',folderId:'folder',transcriptId:'ms-transcript'}} as any)];
+  files['ms-transcript']=FRONT('ms1')+'[0:01] (Anna) Microsoft Budgetentscheid.';
+  const client=await connect(await mint('alice',['meetings:read'],''));
+  const transcript=await call(client,'get_transcript',{meeting_id:'ms1'});
+  expect(transcript.isError).toBe(false);
+  expect(data(transcript.text).text).toContain('Microsoft Budgetentscheid');
+  const searched=data((await call(client,'search_meetings',{query:'Budgetentscheid'})).text);
+  expect(searched.hits).toEqual(expect.arrayContaining([expect.objectContaining({meeting_id:'ms1',where:'transcript'})]));
+  expect((await call(await connect(await mint('bob')),'get_transcript',{meeting_id:'ms1'})).isError).toBe(true);
+});
 
 describe("firestore value decoding", () => {
   it("decodes every value type the report index uses", () => {

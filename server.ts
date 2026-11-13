@@ -3,6 +3,8 @@ import express from "express";
 import path from "node:path";
 import { createAnalysisRouter } from "./server/analysis";
 import { createAuthRouter } from "./server/googleAuth";
+import { createMicrosoftAuthRouter, microsoftConfigured } from './server/microsoftAuth';
+import { createMicrosoftUploadRouter } from './server/microsoftUploads';
 import { createTranscriptionRouter } from "./server/transcription";
 import { createMcpRoutes } from "./server/mcp/routes";
 import { createProcessingRouter, processingConfigured } from "./server/processing";
@@ -20,6 +22,8 @@ async function startServer() {
   app.use(mcp.root);
   app.use("/api", mcp.api);
   app.use("/api", createAuthRouter());
+  app.use('/api',createMicrosoftAuthRouter());
+  app.use('/api',createMicrosoftUploadRouter());
   app.use("/api", createTranscriptionRouter());
   app.use("/api", createAnalysisRouter());
   app.use("/api", createProcessingRouter());
@@ -30,6 +34,7 @@ async function startServer() {
       transcriptionConfigured: Boolean(process.env.ASSEMBLYAI_API_KEY),
       mcpConfigured: mcp.enabled,
       processingConfigured: processingConfigured(),
+      microsoftConfigured: microsoftConfigured(),
     }),
   );
   app.use("/api", (_req, res) =>

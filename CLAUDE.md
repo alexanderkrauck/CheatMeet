@@ -30,6 +30,8 @@ python3 -m unittest discover -s tests -p 'test_deploy_config.py'
 
 ## Architecture
 
+**Microsoft ecosystem:** `MICROSOFT_IMPLEMENTATION.md` owns setup, permissions and recovery. Identity, calendar and archive provider are independent. Explicit Microsoft `home` refs use `users/{uid}/meetings` and isolated local namespaces; never put OneDrive IDs in legacy Google fields or fall back to Google. Server auth/upload routers, provider-aware worker IO and read-only MCP share the existing durable stores. Microsoft credentials belong only in Secret Manager and Firebase provider configuration.
+
 Single Express process serves both the API and the SPA (`server.ts`): in dev it mounts Vite middleware, in production it serves `dist/` and 404s any `*.cjs` request so the server bundle sharing `dist/` is never publicly readable. `/api/health` reports whether `GEMINI_API_KEY` is set; the deploy smoke test asserts on it and on `transcriptionConfigured` (`ASSEMBLYAI_API_KEY`).
 
 **Three independent storage backends, each able to fail alone.** This is the central design constraint:

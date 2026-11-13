@@ -8,6 +8,12 @@ import {
 } from "../../shared/consent";
 
 const account = vi.hoisted(() => ({ uid: "capture-test" }));
+it("freezes OneDrive home before the notice and refuses changing it after arming",async()=>{
+ const c=await import("./capture");await c.openDraft("capture-test",undefined,true);
+ const home={provider:"microsoft" as const,connectionId:"c",driveId:"d",rootId:"root",rootName:"Meetings"};c.setCaptureHome(home);
+ await c.armCapture(true,async()=>{},"mic");c.setCaptureHome(null);expect(c.captureSnapshot().draft.report.home).toEqual(home);
+ c.disarmCapture();
+});
 vi.mock("./firebase", () => ({ auth: { get currentUser() { return account; } } }));
 vi.mock("./local", () => ({
   appendRecordingChunk: vi.fn().mockResolvedValue(undefined),

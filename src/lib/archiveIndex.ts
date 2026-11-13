@@ -14,6 +14,7 @@ import type { ReportData } from "../types";
  */
 
 export interface ArchiveIndexEntry {
+  home?: ReportData["home"];
   id: string;
   date: string;
   title: string;
@@ -44,17 +45,32 @@ export const ARCHIVE_SCHEMA_NAME = "SCHEMA.md";
 
 export function archiveIndexEntry(report: ReportData): ArchiveIndexEntry {
   const files: Record<string, string> = {};
-  if (report.driveMarkdownId) files["zusammenfassung.md"] = report.driveMarkdownId;
-  if (report.driveTranscriptId) files["transkript.md"] = report.driveTranscriptId;
+  if (report.driveMarkdownId)
+    files["zusammenfassung.md"] = report.driveMarkdownId;
+  if (report.driveTranscriptId)
+    files["transkript.md"] = report.driveTranscriptId;
   if (report.driveReportId) files["bericht_daten.json"] = report.driveReportId;
   if (report.driveConsentId) files["einwilligung.md"] = report.driveConsentId;
   if (report.rawAudioUrl) files["aufnahme"] = report.rawAudioUrl;
+  if (report.home) {
+    for (const [name, id] of Object.entries({
+      "zusammenfassung.md": report.home.markdownId,
+      "transkript.md": report.home.transcriptId,
+      "bericht_daten.json": report.home.reportId,
+      "einwilligung.md": report.home.consentId,
+      aufnahme: report.home.audioId,
+    }))
+      if (id) files[name] = id;
+  }
   return {
     id: report.id,
+    ...(report.home ? { home: report.home } : {}),
     date: report.date,
     title: report.title,
     folder: reportFolderName(report),
-    folder_id: report.driveFolderId || "",
+    folder_id: report.home
+      ? report.home.folderId || ""
+      : report.driveFolderId || "",
     duration_ms: meetingDurationMs(report),
     participants: report.speech
       ? speakerNamesOf(report.speech)
@@ -62,7 +78,7 @@ export function archiveIndexEntry(report: ReportData): ArchiveIndexEntry {
     summary: report.summary || "",
     todos: (report.todos || []).map((todo) => todo.text),
     takeaways: report.takeaways || [],
-    has_audio: !!report.rawAudioUrl,
+    has_audio: report.home ? !!report.home.audioId : !!report.rawAudioUrl,
     consent_obtained_at: report.consent?.obtainedAt ?? null,
     files,
   };
@@ -73,7 +89,7 @@ export function buildArchiveIndex(
   generatedAt: string,
 ): ArchiveIndex {
   return {
-    schema: `cheatmeet.index/${ARCHIVE_VERSION}`,
+    schema: `cheatmeet.index/${reports.some((r) => r.home) ? 2 : ARCHIVE_VERSION}`,
     generator: "cheatmeet",
     generated_at: generatedAt,
     derived: true,
@@ -81,7 +97,9 @@ export function buildArchiveIndex(
       "Jeder Ordner enthält bericht_daten.json — das ist die Quelle. Diese Datei ist nur eine Übersicht und kann unvollständig sein.",
     meetings: reports
       // Only meetings that actually exist in Drive belong in a Drive index.
-      .filter((report) => !!report.driveFolderId)
+      .filter((report) =>
+        report.home ? !!report.home.folderId : !!report.driveFolderId,
+      )
       .map(archiveIndexEntry)
       .sort((a, b) => b.date.localeCompare(a.date)),
   };

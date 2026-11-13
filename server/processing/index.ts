@@ -9,12 +9,13 @@ import type { DocStore } from '../mcp/docStore';
 import { runtimeOptions } from './runtime';
 import { toArchive } from '../../src/lib/archive';
 import { withProcessingBudget } from './budget';
+import { microsoftHome, type MicrosoftHome } from '../../shared/storage';
 export { processingConfigured } from './runtime';
 
 export interface Task { key: string; run: string; seq: number }
 export interface ProcessingJob extends ProcessingJobView {
   owner: string; googleSub: string; key: string; run: string; seq: number;
-  refs: { id:string; driveFolderId:string; driveReportId:string };
+  refs: { id:string; driveFolderId:string; driveReportId:string; home?:MicrosoftHome };
   revision:string; indexRevision:string; analyze:boolean; retranscribe:boolean; calendarSync:boolean; regenerate?:boolean;
   preferences:string; step:'prepare'|'analyze'|'export'|'publish'; failures:number; polls:number;
   lease?:string; leaseUntil?:number;
@@ -42,8 +43,9 @@ export class ProcessingError extends Error {
 }
 export const jobKey=(owner:string,id:string)=>createHash('sha256').update(`${owner}\0${id}`).digest('hex');
 export const publicJob=(j:ProcessingJob):ProcessingJobView=>({reportId:j.reportId,state:j.state,message:j.message,attempts:j.attempts,updatedAt:j.updatedAt,...(j.error?{error:j.error}:{}),...(j.warning?{warning:j.warning}:{})});
-const messages:Record<ProcessingJobView['state'],string>={queued:'Verarbeitung ist gesichert.',transcribing:'Transkript wird vorbereitet …',analyzing:'Bericht wird erstellt …',exporting:'Bericht wird in Drive gesichert …',review:'Sprecher prüfen oder Prüfung überspringen.',done:'Fertig.',blocked:'Bitte Google erneut verbinden oder den Auftrag prüfen.',error:'Verarbeitung fehlgeschlagen.'};
+const messages:Record<ProcessingJobView['state'],string>={queued:'Verarbeitung ist gesichert.',transcribing:'Transkript wird vorbereitet …',analyzing:'Bericht wird erstellt …',exporting:'Bericht wird im Meeting-Archiv gesichert …',review:'Sprecher prüfen oder Prüfung überspringen.',done:'Fertig.',blocked:'Bitte den verbundenen Speicherdienst oder den Auftrag prüfen.',error:'Verarbeitung fehlgeschlagen.'};
 const validId=(id:unknown):id is string=>typeof id==='string'&&/^[a-zA-Z0-9_-]{1,200}$/.test(id);
+const providerAware=(req:express.Request)=>req.get('X-CheatMeet-Storage')==='microsoft';
 export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
   const o={...runtimeOptions(),...options} as ProcessingOptions;
   const router=express.Router(); const now=o.now||Date.now;
@@ -145,10 +147,10 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
       res.json({ok:true});
     }catch(e){fail(res,e);}
   });
-  router.get('/processing',async(req,res)=>{try{const a=await auth(req);const jobs=await o.store.listByOwner(a.uid);res.json({jobs:jobs.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)).slice(0,50).map(publicJob)});}catch(e){fail(res,e);}});
+  router.get('/processing',async(req,res)=>{try{const a=await auth(req);const jobs=await o.store.listByOwner(a.uid);res.setHeader('Cache-Control','no-store');res.json({jobs:jobs.filter(j=>!j.refs.home||providerAware(req)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)).slice(0,50).map(publicJob)});}catch(e){fail(res,e);}});
   router.get('/processing/:id',async(req,res)=>{try{
     const a=await auth(req);const j=await o.store.get(jobKey(a.uid,String(req.params.id)));
-    if(!j||j.owner!==a.uid)throw new ProcessingError(404,'Auftrag nicht gefunden.');
+    if(!j||j.owner!==a.uid||j.refs.home&&!providerAware(req))throw new ProcessingError(404,'Auftrag nicht gefunden.');
     const report=['done','review'].includes(j.state)?await o.io.readCheckpoint(j,'exported'):null;
     res.setHeader('Cache-Control','no-store');res.json({job:publicJob(j),...(report?{report}:{})});
   }catch(e){fail(res,e);}});
@@ -156,10 +158,16 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
     const a=await auth(req);
     if(!o.enabled())throw new ProcessingError(503,'Serververarbeitung ist nicht eingerichtet.');
     const b=req.body;const r=b?.report;
-    if(!r||!validId(req.params.id)||r.id!==req.params.id||!validId(r.driveFolderId)||!validId(r.driveReportId)||typeof b.analyze!=='boolean'||['retranscribe','calendarSync','regenerate'].some(k=>b[k]!==undefined&&typeof b[k]!=='boolean')||b.preferences!==undefined&&(typeof b.preferences!=='string'||b.preferences.length>20000))throw new ProcessingError(400,'Gesicherte Berichtsreferenzen fehlen.');
+    let home:MicrosoftHome|undefined;
+    if(r?.home!==undefined){
+      try{home=microsoftHome(r.home);}catch{throw new ProcessingError(400,'Ungültiger OneDrive-Speicherort.');}
+      if(!providerAware(req)||!home.folderId||!home.reportId||r.driveFolderId||r.driveReportId||r.rawAudioUrl)throw new ProcessingError(400,'Eindeutige OneDrive-Berichtsreferenzen fehlen.');
+    }
+    if(!r||!validId(req.params.id)||r.id!==req.params.id||!home&&(!validId(r.driveFolderId)||!validId(r.driveReportId))||typeof b.analyze!=='boolean'||['retranscribe','calendarSync','regenerate'].some(k=>b[k]!==undefined&&typeof b[k]!=='boolean')||b.preferences!==undefined&&(typeof b.preferences!=='string'||b.preferences.length>20000))throw new ProcessingError(400,'Gesicherte Berichtsreferenzen fehlen.');
     const key=jobKey(a.uid,r.id);const existing=await o.store.get(key);
+    if(existing&&(Boolean(existing.refs.home)!==Boolean(home)||home&&['connectionId','driveId','folderId','reportId'].some(k=>(existing.refs.home as any)?.[k]!== (home as any)[k])))throw new ProcessingError(409,'Der Auftrag gehört zu einem anderen Meeting-Speicherort.',true);
     if(existing&&processingActive(existing)){await send(existing);res.status(202).json({job:publicJob(existing)});return;}
-    const refs={id:r.id,driveFolderId:r.driveFolderId,driveReportId:r.driveReportId};
+    const refs:ProcessingJob['refs']={id:r.id,driveFolderId:home?.folderId||r.driveFolderId,driveReportId:home?.reportId||r.driveReportId,...(home?{home}:{})};
     const source=await o.io.load({owner:a.uid,googleSub:a.googleSub,refs});
     if(existing?.state==='done'&&(existing.analyze||!b.analyze)&&existing.revision===source.revision){res.status(202).json({job:publicJob(existing)});return;}
     if(existing?.state==='done'&&(existing.analyze||!b.analyze)){

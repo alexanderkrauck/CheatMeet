@@ -1,0 +1,17 @@
+{
+  "tenantId": "3301b473-eb5c-408e-aae1-03d7b40ace17",
+  "applicationObjectId": "0f32ff1a-efd9-4c8e-bef5-1c1d55f8b463",
+  "clientId": "0ff7ecd1-f390-4353-ab4f-1bd9984b773f",
+  "servicePrincipalId": "2d6abfd6-3719-4ba4-bd0f-cf770adbe3be",
+  "secretResource": "cheatmeet-microsoft-client-secret",
+  "credentialExpiryVienna": "2027-05-12T19:34:44+02:00",
+  "publicUrl": "https://cheatmeet.ai.studio",
+  "redirectUris": [
+    "https://cheatmeet.ai.studio/api/auth/microsoft/callback",
+    "https://gen-lang-client-0187125016.firebaseapp.com/__/auth/handler"
+  ],
+  "firebaseMicrosoftEnabled": true,
+  "githubVariablesVerified": true,
+  "tenantWideConsentGranted": false,
+  "authorization": "User explicitly approved progress.works registration after explanation of separate app; no PF Fachkraft changes."
+}

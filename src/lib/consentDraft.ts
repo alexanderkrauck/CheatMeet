@@ -19,19 +19,34 @@ export async function draftConsentNotice(
 ): Promise<ConsentParts> {
   const user = auth.currentUser;
   if (!user) throw new Error("Bitte erneut anmelden.");
+  const owner = user.uid;
+  const check = () => {
+    if (auth.currentUser?.uid !== owner)
+      throw new Error("Das angemeldete Konto hat sich geändert.");
+  };
   const token = await user.getIdToken();
+  check();
   const response = await fetch("/api/consent-notice", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ facts, instructions }),
+    body: JSON.stringify({
+      facts: {
+        ...facts,
+        storageService: facts.storage.service,
+        folderName: facts.storage.folder,
+      },
+      instructions,
+    }),
     signal: AbortSignal.timeout(30_000),
   });
+  check();
   const data = await response
     .json()
     .catch(() => ({}) as { parts?: unknown; error?: string });
+  check();
   if (!response.ok)
     throw new Error(
       data.error ||

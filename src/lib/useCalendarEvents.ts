@@ -1,8 +1,13 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { eventsBetween, type CalendarEvent } from "./calendar";
+import {
+  eventsBetween,
+  hasAnyCalendarGrant,
+  subscribeCalendar,
+  calendarSelectionSnapshot,
+  type CalendarEvent,
+} from "./calendar";
 import { rememberPeople } from "./people";
 import { uid } from "./reports";
-import { hasCalendarGrant, subscribeDriveSession } from "./session";
 
 export interface CalendarFeed {
   events: CalendarEvent[];
@@ -26,11 +31,12 @@ export function useCalendarEvents(
   range: { fromMs: number; toMs: number } | null,
   budget?: number,
 ): CalendarFeed {
-  const granted = useSyncExternalStore(
-    subscribeDriveSession,
-    hasCalendarGrant,
-    () => false,
+  const selection = useSyncExternalStore(
+    subscribeCalendar,
+    calendarSelectionSnapshot,
+    () => "",
   );
+  const granted = hasAnyCalendarGrant();
   const [events, setEvents] = useState<CalendarEvent[]>(NOTHING);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -45,28 +51,37 @@ export function useCalendarEvents(
       setLoading(false);
       return;
     }
+    const owner = uid();
+    const stillOwner = () => {
+      try {
+        return uid() === owner;
+      } catch {
+        return false;
+      }
+    };
     let active = true;
     setLoading(true);
     setError("");
     eventsBetween(fromMs, toMs, budget)
       .then((found) => {
-        if (!active) return;
+        if (!active || !stillOwner()) return;
         setEvents(found);
         // Every attendee seen is a name the speaker editor can suggest later.
-        void rememberPeople(uid(), found.flatMap((event) => event.attendees)).catch(
-          () => {},
-        );
+        void rememberPeople(
+          owner,
+          found.flatMap((event) => event.attendees),
+        ).catch(() => {});
       })
       .catch((cause) => {
-        if (!active) return;
+        if (!active || !stillOwner()) return;
         setEvents(NOTHING);
         setError((cause as Error).message);
       })
-      .finally(() => active && setLoading(false));
+      .finally(() => active && stillOwner() && setLoading(false));
     return () => {
       active = false;
     };
-  }, [granted, fromMs, toMs, budget, attempt]);
+  }, [granted, selection, fromMs, toMs, budget, attempt]);
 
   return { events, loading, error, retry: () => setAttempt((n) => n + 1) };
 }

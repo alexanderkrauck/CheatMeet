@@ -16,6 +16,7 @@ export default function DeleteMeeting({
   id,
   title,
   driveFolderId,
+  home,
   onDeleted,
   onOpenChange,
   onWarning,
@@ -23,6 +24,7 @@ export default function DeleteMeeting({
   id: string;
   title: string;
   driveFolderId?: string;
+  home?:ReportData["home"];
   onDeleted?: () => void;
   onOpenChange?: (open: boolean) => void;
   /** Survives this component being unmounted by the delete it just performed. */
@@ -54,7 +56,7 @@ export default function DeleteMeeting({
       // The folder id comes from the row, not only from the local copy: a
       // report restored on another device may not be in this IndexedDB.
       const report =
-        stored?.report ?? ({ id, title, driveFolderId } as ReportData);
+        stored?.report ?? ({ id, title, driveFolderId,home } as ReportData);
       const { removed, warnings } = await deleteReport(owner, report, { fromDrive });
       if (!removed) {
         // Nothing was removed; the dialog is still mounted and can be retried.
@@ -100,10 +102,10 @@ export default function DeleteMeeting({
           <p className="muted">
             Der Bericht wird von diesem Gerät und aus der Cloud-Übersicht
             entfernt.
-            {!driveFolderId &&
+            {!(home?.folderId || driveFolderId) &&
               " Diese Aufnahme ist noch nirgends gesichert — auch die Audiodatei ist danach weg."}
           </p>
-          {driveFolderId && (
+          {(home?.folderId || driveFolderId) && (
             <label className="confirm-option">
               <input
                 type="checkbox"
@@ -111,7 +113,7 @@ export default function DeleteMeeting({
                 onChange={(event) => setFromDrive(event.target.checked)}
               />
               <span>
-                <strong>Auch aus Google Drive löschen</strong>
+                <strong>Auch aus {home ? "OneDrive":"Google Drive"} löschen</strong>
                 <small>
                   Verschiebt Aufnahme, Transkript und Bericht in den
                   Drive-Papierkorb. Ohne dieses Häkchen bleiben die Dateien dort.

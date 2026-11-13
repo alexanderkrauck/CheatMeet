@@ -12,6 +12,12 @@ import { isMeeting } from "./upcoming";
  * sequence, not two lists.
  */
 type Timed = { atMs: number; dayKey: string; allDay: boolean };
+/** Legacy primary Google IDs stay compatible; other identities are fully scoped. */
+export const eventKey = (event:Pick<CalendarEvent,'id'|'calendarId'|'provider'|'connectionId'>) =>
+  (!event.provider||event.provider==='google')&&(!event.calendarId||event.calendarId==='primary')
+    ? event.id : JSON.stringify([event.provider||'google',event.connectionId||'',event.calendarId,event.id]);
+export const reportEventKey = (report:ReportSummary) => report.calendarEventId
+  ? eventKey({id:report.calendarEventId,calendarId:report.calendarId||'primary',provider:report.calendarProvider,connectionId:report.calendarConnectionId}) : undefined;
 export type AgendaEntry =
   | (Timed & { kind: "report"; allDay: false; report: ReportSummary })
   | (Timed & { kind: "event"; event: CalendarEvent; quiet: boolean });
@@ -29,7 +35,7 @@ export function scheduledByDay(
 ): Map<string, CalendarEvent[]> {
   const days = new Map<string, CalendarEvent[]>();
   for (const event of events) {
-    if (recorded.has(event.id)) continue;
+    if (recorded.has(eventKey(event))) continue;
     const key = localDayKey(new Date(event.startMs).toISOString());
     const bucket = days.get(key);
     if (bucket) bucket.push(event);
@@ -42,7 +48,7 @@ export function scheduledByDay(
 export const recordedEventIds = (reports: ReportSummary[]): Set<string> =>
   new Set(
     reports
-      .map((report) => report.calendarEventId)
+      .map(reportEventKey)
       .filter((id): id is string => Boolean(id)),
   );
 
@@ -66,7 +72,7 @@ export function buildAgenda(
     report,
   }));
   for (const event of events) {
-    if (recorded.has(event.id)) continue;
+    if (recorded.has(eventKey(event))) continue;
     entries.push({
       kind: "event",
       atMs: event.startMs,

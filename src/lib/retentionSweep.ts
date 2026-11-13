@@ -1,4 +1,6 @@
 import { trashDriveFile } from "./drive";
+import { trashOneDrive } from "./onedrive";
+import { archiveAudioId } from "../../shared/storage";
 import { auth } from "./firebase";
 import { deleteDraft, getLocal, listLocal, putLocal } from "./local";
 import { activeJobs } from "./pipeline";
@@ -58,26 +60,28 @@ export async function sweepRetention(
   );
   if (!due.length) return result;
   // Only now is a token worth minting: an ordinary start costs one scan.
-  const token = await ensureDriveToken();
-  if (!token) return result;
+  const token = due.some(r=>!r.home) ? await ensureDriveToken() : null;
 
   for (const stale of due) {
     // Another device may have deleted the meeting since the scan. Writing it
     // back here would resurrect it in IndexedDB and in the cloud index.
     const current = (await getLocal(owner, stale.id))?.report;
-    if (!current?.rawAudioUrl || current.audioDeletedAt) continue;
+    if (!current || !archiveAudioId(current) || current.audioDeletedAt) continue;
+    if(!current.home && !token) continue;
     try {
-      await run(() => trashDriveFile(current.rawAudioUrl!, token));
+      if(current.home) await run(()=>trashOneDrive(current.home!,current.home!.audioId!));
+      else await run(() => trashDriveFile(current.rawAudioUrl!, token!));
       // Through syncReport so the summary and the archived JSON stop pointing
       // at a file that is no longer there.
       await syncReport(
         {
           ...current,
           rawAudioUrl: undefined,
+          ...(current.home ? {home:{...current.home,audioId:undefined}} : {}),
           audioDeletedAt: new Date(now).toISOString(),
           audioDeleteError: undefined,
         },
-        token,
+        token || "",
       );
       // Otherwise this browser keeps full-quality audio that can never be
       // released again: freeing it requires the Drive pointer just cleared.

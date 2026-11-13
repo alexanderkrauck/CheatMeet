@@ -33,6 +33,14 @@ def managed_from_environment(environ):
         if not all(processing.values()):
             raise ValueError("Server processing needs queue, worker URL and service account together.")
         plain.update(processing)
+    microsoft = {name: (environ.get(name) or "").strip() for name in (
+        "MICROSOFT_CLIENT_ID", "MICROSOFT_PUBLIC_URL", "MICROSOFT_CLIENT_SECRET_NAME"
+    )}
+    if any(microsoft.values()):
+        if not all(microsoft.values()):
+            raise ValueError("Microsoft needs client ID, public URL and secret reference together.")
+        plain.update({name: microsoft[name] for name in ("MICROSOFT_CLIENT_ID", "MICROSOFT_PUBLIC_URL")})
+        secrets["MICROSOFT_CLIENT_SECRET"] = microsoft["MICROSOFT_CLIENT_SECRET_NAME"]
     return plain, secrets
 
 

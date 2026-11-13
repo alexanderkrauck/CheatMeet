@@ -39,6 +39,16 @@ for (let attempt = 0; attempt < 20; attempt++) {
     }
     if (process.env.PROCESSING_QUEUE && !data.processingConfigured)
       throw new Error("Deployment must enable durable server processing.");
+    if (process.env.MICROSOFT_CLIENT_ID && !data.microsoftConfigured)
+      throw new Error("Deployment must enable the configured Microsoft integration.");
+    if (data.microsoftConfigured) {
+      const microsoft = await probe('/api/microsoft/config');
+      if (!microsoft.ok || !(await microsoft.json()).configured)
+        throw new Error('Microsoft configuration is unavailable.');
+      const connections = await probe('/api/microsoft/connections');
+      if (connections.status !== 401)
+        throw new Error('Microsoft connections must require authentication.');
+    }
     if (data.processingConfigured) {
       const config = await probe("/api/processing/config");
       if (!config.ok || !(await config.json()).enabled)

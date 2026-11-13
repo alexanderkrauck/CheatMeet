@@ -92,7 +92,7 @@ export function ConsentRecordPanel({ report }: { report: ReportData }) {
             : ""}{" "}
           gelöscht. Transkript und Zusammenfassung bleiben erhalten.
         </p>
-      ) : expires !== null && report.rawAudioUrl ? (
+      ) : expires !== null && (report.home?report.home.audioId:report.rawAudioUrl) ? (
         <p className="muted">
           Die Originalaufnahme wird nach dem {day(expires)} gelöscht, sobald
           CheatMeet geöffnet ist.

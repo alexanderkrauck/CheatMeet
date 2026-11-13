@@ -136,7 +136,7 @@ export default function AppLayout() {
             </span>
           </Link>
           <p className="rail-note">
-            <Cloud size={13} /> Dateien in deinem Google Drive
+            <Cloud size={13} /> Dateien in deinem Drive oder OneDrive
           </p>
         </div>
       </aside>

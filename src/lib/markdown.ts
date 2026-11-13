@@ -6,6 +6,7 @@ import {
 } from "../../shared/consent";
 import { meetingDurationMs, speakerNamesOf } from "./meetingMeta";
 import type { ReportData } from "../types";
+import {archiveFolderLink} from "../../shared/storage";
 
 function escapeText(text: string): string {
   return text
@@ -138,9 +139,9 @@ export function reportShareText(report: ReportData): string {
       lines.push(`- ${formatTodoLine(todo)}${todo.done ? " (erledigt)" : ""}`);
     lines.push("");
   }
-  if (report.driveFolderId)
+  if (archiveFolderLink(report))
     lines.push(
-      `Dateien: https://drive.google.com/drive/folders/${encodeURIComponent(report.driveFolderId)}`,
+      `Dateien: ${archiveFolderLink(report)}`,
     );
   return lines.join("\n").trim();
 }

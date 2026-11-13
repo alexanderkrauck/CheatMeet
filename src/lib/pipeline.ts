@@ -1,3 +1,5 @@
+import { ensureMicrosoftToken } from "./microsoft";
+import { hasAnyCalendarGrant } from "./calendar";
 import { analyzeDraft, backupDraft, syncReport } from "./workflow";
 import { saveReport } from "./reports";
 import { acceptRemoteReport, deleteDraft, putLocal, putDraft, getDraft, listDrafts, getLocal, type LocalReport } from "./local";
@@ -229,13 +231,16 @@ export function startProcessing({
       } else if (resume || current.processing?.sourceReady) {
         throw new Error("Server-Verarbeitung derzeit nicht erreichbar. Der Entwurf bleibt erhalten.");
       }
-      token ||= await ensureDriveToken();
+      if (current.report.home) {
+        if (!configured) throw new Error("OneDrive benötigt die Server-Verarbeitung. Der lokale Entwurf bleibt erhalten; es wird nicht zu Google gewechselt.");
+        token = (await ensureMicrosoftToken(current.report.home.connectionId)).accessToken;
+      } else token ||= await ensureDriveToken();
       assertOwner();
       if (!token) throw new Error("Bitte Google Drive erneut verbinden. Der Entwurf bleibt erhalten.");
       if (current.processing?.sourceReady) {
         await handoffServerProcessing(owner, current.report, {
           analyze, retranscribe: analyze && current.retranscribe === true,
-          calendarSync: analyze && calendarSyncEnabled() && hasCalendarGrant(),
+          calendarSync: analyze && calendarSyncEnabled() && hasAnyCalendarGrant(current.report.calendarEventId ? current.report.calendarProvider || "google" : undefined),
         });
         assertOwner();
         await deleteDraft(owner, reportId);
@@ -271,7 +276,7 @@ export function startProcessing({
         assertOwner();
         await handoffServerProcessing(owner, source.report, {
           analyze, retranscribe: analyze && current.retranscribe === true,
-          calendarSync: analyze && calendarSyncEnabled() && hasCalendarGrant(),
+          calendarSync: analyze && calendarSyncEnabled() && hasAnyCalendarGrant(current.report.calendarEventId ? current.report.calendarProvider || "google" : undefined),
         });
         assertOwner();
         await deleteDraft(owner, reportId);
@@ -338,7 +343,7 @@ export function startProcessing({
       if (
         analyze &&
         calendarSyncEnabled() &&
-        hasCalendarGrant() &&
+        hasAnyCalendarGrant(current.report.calendarEventId ? current.report.calendarProvider || "google" : undefined) &&
         current.report.calendarEventId
       ) {
         update("exporting", "Kalendereintrag wird aktualisiert …", { warning });
@@ -373,7 +378,8 @@ export function startProcessing({
       });
     } catch (error) {
       const previous = retries.get(key)?.attempts || 0;
-      retries.set(key, { attempts: previous + 1, after: Date.now() + Math.min(300_000, 30_000 * 2 ** previous) });
+      const retryAfter=(error as {retryAfterMs?:number})?.retryAfterMs;
+      retries.set(key, { attempts: previous + 1, after: Date.now() + Math.max(Math.min(300_000, 30_000 * 2 ** previous), Number.isFinite(retryAfter)?retryAfter!:0) });
       if (auth.currentUser?.uid !== owner) return;
       current.report = { ...current.report, status: "error", error: errorMessage(error) };
       // Preparing an imported transcript may fail before the summary block. Keep its recovery

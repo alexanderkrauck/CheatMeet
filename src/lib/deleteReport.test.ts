@@ -6,7 +6,7 @@ let driveFails = false;
 let firestoreFails = false;
 let token: string | null = "t";
 
-vi.mock("./firebase", () => ({ db: {} }));
+vi.mock("./firebase", () => ({ db: {}, auth: { currentUser: { uid: "u1" } } }));
 vi.mock("firebase/firestore", () => ({
   doc: (_db: unknown, ...path: string[]) => path.join("/"),
   deleteDoc: async (path: string) => {
@@ -16,7 +16,8 @@ vi.mock("firebase/firestore", () => ({
 }));
 vi.mock("./drive", () => ({
   trashDriveFile: async (id: string) => {
-    if (driveFails) throw new Error("Der Drive-Ordner konnte nicht gelöscht werden (500).");
+    if (driveFails)
+      throw new Error("Der Drive-Ordner konnte nicht gelöscht werden (500).");
     calls.push(`drive:${id}`);
   },
 }));
@@ -29,9 +30,15 @@ vi.mock("./session", () => ({ ensureDriveToken: async () => token }));
 const { deleteReport } = await import("./deleteReport");
 
 const report = (over: Partial<ReportData> = {}): ReportData => ({
-  id: "r1", date: "2026-09-14T08:00:00.000Z", title: "Weekly",
-  summary: "", transcription: "", todos: [], takeaways: [],
-  driveFolderId: "folder-1", ...over,
+  id: "r1",
+  date: "2026-09-14T08:00:00.000Z",
+  title: "Weekly",
+  summary: "",
+  transcription: "",
+  todos: [],
+  takeaways: [],
+  driveFolderId: "folder-1",
+  ...over,
 });
 
 beforeEach(() => {
@@ -77,9 +84,13 @@ describe("deleteReport", () => {
   });
 
   it("says so when Drive was asked for but no folder is known", async () => {
-    const result = await deleteReport("u1", report({ driveFolderId: undefined }), {
-      fromDrive: true,
-    });
+    const result = await deleteReport(
+      "u1",
+      report({ driveFolderId: undefined }),
+      {
+        fromDrive: true,
+      },
+    );
     expect(result.warnings[0]).toContain("kein Drive-Ordner");
     expect(calls).toEqual([]);
   });
@@ -95,10 +106,18 @@ describe("deleteReport", () => {
   });
 
   it("removes a meeting that never reached Drive when Drive was not asked for", async () => {
-    const result = await deleteReport("u1", report({ driveFolderId: undefined }), {
-      fromDrive: false,
-    });
+    const result = await deleteReport(
+      "u1",
+      report({ driveFolderId: undefined }),
+      {
+        fromDrive: false,
+      },
+    );
     expect(result.warnings).toEqual([]);
-    expect(calls).toEqual(["firestore:users/u1/reports/r1", "draft:r1", "local:r1"]);
+    expect(calls).toEqual([
+      "firestore:users/u1/reports/r1",
+      "draft:r1",
+      "local:r1",
+    ]);
   });
 });

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const account = vi.hoisted(() => ({ currentUser: { uid: "user-1" } }));
 const remote = vi.hoisted(() => ({ available: vi.fn(), submit: vi.fn(), list: vi.fn(), get: vi.fn() }));
+const microsoftToken = vi.hoisted(() => vi.fn(async () => ({accessToken:"microsoft",connectionId:"c"})));
+vi.mock("./microsoft",()=>({ensureMicrosoftToken:microsoftToken}));
 vi.mock("./serverProcessing", () => ({ processingAvailable: remote.available, submitServerProcessing: remote.submit, listServerProcessing: remote.list, getServerProcessing: remote.get }));
 vi.mock("./firebase", () => ({ auth: account }));
 const captureState = vi.hoisted(() => ({ active: false, busy: "" }));
@@ -95,6 +97,15 @@ describe("processing pipeline", () => {
     deleteDraft.mockResolvedValue(undefined);
   });
   afterEach(() => clearJob(report.id));
+
+  it("pins the Microsoft source and never asks Google for its credential", async () => {
+    remote.available.mockResolvedValue(true);
+    const ms = {...report, home:{provider:"microsoft" as const,connectionId:"c",driveId:"d",rootId:"root",rootName:"Meetings",folderId:"f",audioId:"a",reportId:"j"}};
+    syncReport.mockResolvedValue({report:ms,warning:null});
+    await startProcessing({owner:"user-1",draft:{...draft,report:ms},analyze:false});
+    expect(ensureDriveToken).not.toHaveBeenCalled();expect(microsoftToken).toHaveBeenCalledWith("c");
+    expect(remote.submit).toHaveBeenCalledWith(expect.objectContaining({home:ms.home}),expect.objectContaining({analyze:false}));
+  });
 
   it("persists explicit intent before any network work", async () => {
     saveReport.mockImplementationOnce(async () => {

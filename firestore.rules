@@ -4,6 +4,33 @@ service cloud.firestore {
     function owns(userId) {
       return request.auth != null && request.auth.uid == userId;
     }
+    function projectedReport(reportId) {
+      return request.resource.data.id == reportId
+        && request.resource.data.title is string
+        && request.resource.data.date is string
+        && request.resource.data.get('summary', '') is string
+        && request.resource.data.get('todos', []) is list
+        && request.resource.data.get('takeaways', []) is list
+        && request.resource.data.get('transcription', '') == ''
+        && !request.resource.data.keys().hasAny(['speech']);
+    }
+    function optionalReference(home, field) {
+      return home.get(field, '') is string && home.get(field, '').size() <= 512;
+    }
+    function microsoftHome(home) {
+      return home is map
+        && home.keys().hasOnly(['provider', 'connectionId', 'driveId', 'rootId', 'rootName', 'folderId', 'reportId', 'audioId', 'markdownId', 'transcriptId', 'consentId', 'webUrl', 'syncedAt'])
+        && home.provider == 'microsoft'
+        && home.connectionId is string && home.connectionId.size() > 0 && home.connectionId.size() <= 512
+        && home.driveId is string && home.driveId.size() > 0 && home.driveId.size() <= 512
+        && home.rootId is string && home.rootId.size() > 0 && home.rootId.size() <= 512
+        && home.rootName is string && home.rootName.size() > 0 && home.rootName.size() <= 500
+        && optionalReference(home, 'folderId') && optionalReference(home, 'reportId')
+        && optionalReference(home, 'audioId') && optionalReference(home, 'markdownId')
+        && optionalReference(home, 'transcriptId') && optionalReference(home, 'consentId')
+        && home.get('webUrl', '') is string && home.get('webUrl', '').size() <= 4000
+        && home.get('syncedAt', '') is string && home.get('syncedAt', '').size() <= 100;
+    }
     match /users/{userId}/reports/{reportId} {
       allow read, delete: if owns(userId);
       // The cloud copy is an index: the transcript lives in the user's Drive
@@ -20,7 +47,21 @@ service cloud.firestore {
         && request.resource.data.get('todos', []) is list
         && request.resource.data.get('takeaways', []) is list
         && request.resource.data.get('transcription', '') == ''
-        && !request.resource.data.keys().hasAny(['speech']);
+        && !request.resource.data.keys().hasAny(['speech', 'home']);
+    }
+    // Separate namespace prevents cached Google-only clients rerouting OneDrive archives.
+    match /users/{userId}/meetings/{reportId} {
+      allow read, delete: if owns(userId);
+      allow create, update: if owns(userId) && projectedReport(reportId)
+        && microsoftHome(request.resource.data.home)
+        && !request.resource.data.keys().hasAny(['driveFolderId', 'driveReportId', 'rawAudioUrl']);
+    }
+    match /users/{userId}/settings/providers {
+      allow read, delete: if owns(userId);
+      allow create, update: if owns(userId)
+        && request.resource.data.keys().hasOnly(['calendarProvider', 'meetingHome'])
+        && request.resource.data.get('calendarProvider', 'google') in ['google', 'microsoft']
+        && (request.resource.data.get('meetingHome', null) == null || microsoftHome(request.resource.data.meetingHome));
     }
     match /users/{userId}/settings/preferences {
       allow read, delete: if owns(userId);

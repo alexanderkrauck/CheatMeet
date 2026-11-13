@@ -5,7 +5,8 @@ vi.mock("./firebase", () => ({
 }));
 
 const { draftConsentNotice } = await import("./consentDraft");
-const { consentFacts, assembleConsentText } = await import("../../shared/consent");
+const { consentFacts, assembleConsentText } =
+  await import("../../shared/consent");
 
 const facts = consentFacts({
   sources: ["mic", "system"],
@@ -39,6 +40,23 @@ describe("draftConsentNotice", () => {
     ]);
   });
 
+  it("preserves the chosen storage through server normalisation", async () => {
+    respond(200, { parts: { opening: "Kurz vorab:" } });
+    await draftConsentNotice(
+      {
+        ...facts,
+        storage: { service: "Microsoft OneDrive", folder: "Besprechungen" },
+      },
+      [],
+    );
+    const payload = JSON.parse(
+      vi.mocked(fetch).mock.calls[0][1]?.body as string,
+    );
+    expect(consentFacts(payload.facts).storage).toEqual({
+      service: "Microsoft OneDrive",
+      folder: "Besprechungen",
+    });
+  });
   it("keeps only phrasing for elements the notice actually has", async () => {
     respond(200, {
       parts: { opening: "  Kurz vorab:  ", boshaft: "<script>", ask: "" },

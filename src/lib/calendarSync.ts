@@ -1,5 +1,6 @@
 import {
   createEvent,
+  hasAnyCalendarGrant,
   getEvent,
   isEventGone,
   summaryBlock,
@@ -7,11 +8,14 @@ import {
   type CalendarEvent,
 } from "./calendar";
 import { formatTodoLine } from "../../shared/analysis";
-import { hasCalendarGrant } from "./session";
+import { savedCalendarProvider } from "./providerSettings";
 import type { ReportData } from "../types";
+import { auth } from "./firebase";
 
 const driveLink = (id?: string) =>
-  id ? `https://drive.google.com/drive/folders/${encodeURIComponent(id)}` : undefined;
+  id
+    ? `https://drive.google.com/drive/folders/${encodeURIComponent(id)}`
+    : undefined;
 
 /**
  * Puts the finished meeting back where it was planned.
@@ -25,11 +29,29 @@ export async function syncReportToCalendar(
   report: ReportData,
   { create = true }: { create?: boolean } = {},
 ): Promise<Partial<ReportData>> {
-  if (!hasCalendarGrant()) throw new Error("Der Kalender ist nicht freigegeben.");
+  const owner = auth.currentUser?.uid;
+  if (!owner) throw new Error("Bitte zuerst anmelden.");
+  const checkOwner = () => {
+    if (auth.currentUser?.uid !== owner)
+      throw new Error("Das angemeldete Konto hat sich geändert.");
+  };
+  const linked = !!(report.calendarEventId && report.calendarId);
+  const provider = linked
+    ? report.calendarProvider || "google"
+    : savedCalendarProvider();
+  if (!hasAnyCalendarGrant(provider))
+    throw new Error("Der Kalender ist nicht freigegeben.");
+  if (linked && provider === "microsoft" && !report.calendarConnectionId)
+    throw new Error(
+      "Die Microsoft-Kalender-Verbindung fehlt. Bitte den Termin erneut zuordnen.",
+    );
   const block = summaryBlock({
     summary: report.summary,
     todos: (report.todos || []).map(formatTodoLine),
-    link: driveLink(report.driveFolderId),
+    link:
+      report.home?.provider === "microsoft"
+        ? report.home.webUrl
+        : driveLink(report.driveFolderId),
   });
   const syncedAt = new Date().toISOString();
 
@@ -41,17 +63,25 @@ export async function syncReportToCalendar(
     // meeting from its event and says the event was deleted.
     let current: CalendarEvent | null;
     try {
-      current = await getEvent(report.calendarId, report.calendarEventId);
+      current = await getEvent(
+        report.calendarId,
+        report.calendarEventId,
+        provider,
+        report.calendarConnectionId,
+      );
     } catch (error) {
       if (!isEventGone(error)) throw error;
       current = null;
     }
+    checkOwner();
     if (!current)
       // Returning the cleared link makes the message true: the caller persists
       // it, so the next attempt creates a fresh event instead of failing again.
       return {
         calendarEventId: undefined,
         calendarId: undefined,
+        calendarProvider: undefined,
+        calendarConnectionId: undefined,
         calendarLink: undefined,
         calendarSyncedAt: undefined,
         calendarError:
@@ -62,9 +92,14 @@ export async function syncReportToCalendar(
         calendarId: report.calendarId,
         id: report.calendarEventId,
         description: current.description,
+        provider,
+        connectionId: report.calendarConnectionId || current.connectionId,
+        bodyType: current.bodyType,
+        etag: current.etag,
       },
       block,
     );
+    checkOwner();
     return {
       calendarSyncedAt: syncedAt,
       calendarLink: current.htmlLink,
@@ -82,12 +117,16 @@ export async function syncReportToCalendar(
 
   const startMs = Date.parse(report.date) || Date.now();
   const created = await createEvent({
+    provider,
     title: report.title || "Meeting",
     startMs,
     endMs: startMs + (report.durationMs || 0),
     block,
   });
+  checkOwner();
   return {
+    calendarProvider: created.calendarProvider,
+    calendarConnectionId: created.calendarConnectionId,
     calendarEventId: created.id,
     calendarId: created.calendarId,
     calendarLink: created.htmlLink,

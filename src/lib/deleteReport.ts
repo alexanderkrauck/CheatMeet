@@ -1,5 +1,7 @@
 import { deleteDoc, doc } from "firebase/firestore";
-import { db } from "./firebase";
+import { auth, db } from "./firebase";
+import { trashOneDrive } from "./onedrive";
+import { reportIndexCollection } from "../../shared/storage";
 import { trashDriveFile } from "./drive";
 import { deleteDraft, dropLocal } from "./local";
 import { ensureDriveToken } from "./session";
@@ -29,20 +31,43 @@ export async function deleteReport(
   { fromDrive }: { fromDrive: boolean },
 ): Promise<DeleteOutcome> {
   const warnings: string[] = [];
+  const check = () => {
+    if (auth.currentUser?.uid !== uid)
+      throw new Error(
+        "Das angemeldete Konto hat sich geändert. Die lokale Kopie bleibt erhalten.",
+      );
+  };
+  check();
 
   if (fromDrive) {
-    if (!report.driveFolderId)
+    if (report.home?.folderId) {
+      try {
+        check();
+        await trashOneDrive(report.home, report.home.folderId);
+        check();
+      } catch (cause) {
+        warnings.push(
+          cause instanceof Error
+            ? cause.message
+            : "Der OneDrive-Ordner konnte nicht gelöscht werden.",
+        );
+      }
+    } else if (!report.driveFolderId || report.home)
       warnings.push(
         "Für dieses Meeting ist kein Drive-Ordner bekannt; in Drive wurde nichts gelöscht.",
       );
     else
       try {
         const token = await ensureDriveToken();
+        check();
         if (!token)
           warnings.push(
             "Google Drive ist nicht verbunden. Die Dateien liegen weiterhin dort.",
           );
-        else await trashDriveFile(report.driveFolderId, token);
+        else {
+          await trashDriveFile(report.driveFolderId, token);
+          check();
+        }
       } catch (cause) {
         warnings.push(
           cause instanceof Error
@@ -60,7 +85,10 @@ export async function deleteReport(
   // good. The mutation is persisted either way and flushes on reconnect, so a
   // timeout is reported as "later", not as a failure.
   let timer: ReturnType<typeof setTimeout>;
-  const pending = deleteDoc(doc(db, "users", uid, "reports", report.id));
+  check();
+  const pending = deleteDoc(
+    doc(db, "users", uid, reportIndexCollection(report), report.id),
+  );
   pending.catch(() => {});
   try {
     await Promise.race([
@@ -79,7 +107,9 @@ export async function deleteReport(
     clearTimeout(timer!);
   }
 
+  check();
   await deleteDraft(uid, report.id).catch(() => {});
+  check();
   await dropLocal(uid, report.id);
   return { removed: true, warnings };
 }

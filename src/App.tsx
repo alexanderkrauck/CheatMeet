@@ -8,6 +8,8 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { observeServerProcessing } from "./lib/pipeline";
 import { auth } from "./lib/firebase";
+import {loadMicrosoftConnections} from "./lib/microsoft";
+import {loadProviderSettings} from "./lib/providerSettings";
 import {
   rememberToken,
   connectGoogle,
@@ -53,7 +55,9 @@ export default function App() {
         // Signed in implies Drive-authorized: keep a usable token on hand
         // instead of prompting when an upload is already under way.
         if (u) {
-          startDriveTokenRefresh();
+          if(u.providerData.some(p=>p.providerId==="google.com"))startDriveTokenRefresh();else stopDriveTokenRefresh();
+          void loadMicrosoftConnections().catch(()=>{});
+          void loadProviderSettings().catch(()=>{});
           // Deletion has no server to run on: it happens while the app is open.
           startRetentionSweep();
         } else {
@@ -76,7 +80,7 @@ export default function App() {
   return (
     <>
       <BrowserRouter>
-        <InstallApp />
+        <InstallApp signedIn={Boolean(user)} />
         {user && revoked && (
           <div className="notice" role="status">
             {revoked} Deine Anmeldung bleibt erhalten.

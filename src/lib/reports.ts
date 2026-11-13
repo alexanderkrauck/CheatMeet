@@ -1,4 +1,5 @@
 import { doc, setDoc, collection, onSnapshot } from "firebase/firestore";
+import { reportIndexCollection } from "../../shared/storage";
 import { auth, db } from "./firebase";
 import {
   putLocal,
@@ -31,6 +32,7 @@ export async function saveReport(report: ReportData): Promise<string | null> {
     }),
   );
   await putLocal(user, next);
+  if (auth.currentUser?.uid !== user) throw new Error("Das angemeldete Konto hat sich geändert.");
   // Names the user typed, kept for the next meeting's suggestions. Never allowed
   // to fail a save.
   void rememberPeople(
@@ -43,7 +45,7 @@ export async function saveReport(report: ReportData): Promise<string | null> {
     // lives in Drive and in IndexedDB. A long meeting would otherwise grow
     // past the document limit and silently stop syncing for good.
     const write = setDoc(
-      doc(db, "users", user, "reports", report.id),
+      doc(db, "users", user, reportIndexCollection(report), report.id),
       JSON.parse(JSON.stringify(projectReport(next))),
     );
     // A late acknowledgement can still clear this revision, but never a newer edit.
@@ -99,14 +101,15 @@ export function watchReports(
     void publish().catch(reportError);
   });
   void publish().catch(reportError);
-  const unsub = onSnapshot(
-    collection(db, "users", user, "reports"),
+  const observe = (index: "reports" | "meetings") => onSnapshot(
+    collection(db, "users", user, index),
     { includeMetadataChanges: true },
     (snapshot) => {
       if (!snapshot.metadata.hasPendingWrites && !snapshot.metadata.fromCache) {
         void Promise.all(
           snapshot.docs.map(async (d) => {
             const remote = { ...d.data(), id: d.id } as ReportData;
+            if (auth.currentUser?.uid !== user || (index === "meetings" ? !remote.home : !!remote.home)) return;
             await acceptRemoteReport(user, remote);
             // Documents written before the index carried full transcripts.
             // Trim one once its content is safely local AND in Drive; a report
@@ -131,10 +134,13 @@ export function watchReports(
     },
     reportError,
   );
+  const unsub = observe("reports");
+  const unsubMicrosoft = observe("meetings");
   return () => {
     active = false;
     stopLocal();
     unsub();
+    unsubMicrosoft();
   };
 }
 export { getLocal };

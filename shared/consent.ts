@@ -52,7 +52,7 @@ export const CONSENT_REQUIRED: readonly ConsentElement[] = [
  * Bump whenever a sentence literal below changes. Every record stores the
  * version it was spoken under, so an old meeting keeps its own wording.
  */
-export const CONSENT_TEMPLATE_VERSION = "2";
+export const CONSENT_TEMPLATE_VERSION = "3";
 
 export interface ConsentProcessor {
   name: string;
@@ -102,6 +102,7 @@ export function retentionDays(value: unknown): number | null {
 }
 
 export interface ConsentInput {
+  storageService?: "Google Drive" | "Microsoft OneDrive";
   sources: ConsentSource[];
   folderName: string;
   retention: RetentionPolicy;
@@ -116,7 +117,7 @@ export interface ConsentFacts {
   address: ConsentAddress;
   sources: ConsentSource[];
   processors: ConsentProcessor[];
-  storage: { service: "Google Drive"; folder: string };
+  storage: { service: "Google Drive" | "Microsoft OneDrive"; folder: string };
   recipients: string[];
   retention: RetentionPolicy;
 }
@@ -145,7 +146,7 @@ export function consentFacts(input: ConsentInput): ConsentFacts {
       ? input.processors
       : [ASSEMBLYAI_PROCESSOR, GEMINI_PROCESSOR],
     storage: {
-      service: "Google Drive",
+      service: input.storageService === "Microsoft OneDrive" ? "Microsoft OneDrive" : "Google Drive",
       folder: String(input.folderName || "").trim().slice(0, MAX_FOLDER_CHARS),
     },
     recipients,
@@ -215,7 +216,7 @@ function germanSentences(facts: ConsentFacts): Record<ConsentElement, string> {
     // zugänglich" either: the root folder is user-chosen and its sharing
     // state is never read, so exclusivity cannot honestly be claimed.
     recipients:
-      "Gespeichert wird das in meinem Google Drive." +
+      `Gespeichert wird das in meinem ${facts.storage.service}.` +
       (facts.recipients.length
         ? ` Die Zusammenfassung geht an ${joinList(facts.recipients, "und")}.`
         : " Die Zusammenfassung gebe ich nur mit Ansage weiter."),
@@ -260,7 +261,7 @@ function englishSentences(facts: ConsentFacts): Record<ConsentElement, string> {
         ? ` Processed by ${joinList(processors, "and")}.`
         : " No external service processes the recording."),
     recipients:
-      "It's stored in my Google Drive." +
+      `It's stored in my ${facts.storage.service}.` +
       (facts.recipients.length
         ? ` The summary goes to ${joinList(facts.recipients, "and")}.`
         : " I'd only pass the summary on after saying so."),
@@ -376,7 +377,7 @@ export function acceptConsentParts(
         continue;
     }
     // Where it is stored is the fact; the folder name is not spoken.
-    if (key === "recipients" && !lower.includes("drive")) continue;
+    if (key === "recipients" && (!lower.includes("drive") || (facts.storage.service === "Microsoft OneDrive" && (!lower.includes("onedrive") || /google\s*drive/.test(lower))))) continue;
     kept[key] = text;
   }
   return kept;
@@ -438,6 +439,7 @@ const METHODS: readonly ConsentMethod[] = ["spoken", "chat", "calendar", "other"
  * and cannot disagree.
  */
 export interface ConsentDecision {
+  storageService?: "Google Drive" | "Microsoft OneDrive";
   method: ConsentMethod;
   /** Everyone present, and what each of them actually said. */
   participants: ConsentParticipant[];
@@ -458,6 +460,7 @@ export function decisionFacts(
   return consentFacts({
     sources,
     folderName: decision.folderName,
+    storageService: decision.storageService,
     retention: decision.retention,
     recipients: decision.recipients,
     language: decision.language,

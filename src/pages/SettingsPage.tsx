@@ -3,6 +3,8 @@ import { RetentionSettings } from "../components/RetentionSettings";
 import { signOut } from "firebase/auth";
 import { LogOut, Mic, ShieldOff, UserRound } from "lucide-react";
 import DriveSettings from "../components/DriveSettings";
+import MicrosoftSettings from "../components/MicrosoftSettings";
+import { hasAnyCalendarGrant, subscribeCalendar } from "../lib/calendar";
 import McpClients from "../components/McpClients";
 import MeetingLanguages from "../components/MeetingLanguages";
 import Preferences from "../components/Preferences";
@@ -19,13 +21,17 @@ import {
   setDefaultLanguages,
   setOwnSpeakerName,
 } from "../lib/meetingDefaults";
-import { errorMessage, hasCalendarGrant, revokeDriveGrant, subscribeDriveSession } from "../lib/session";
+import {
+  errorMessage,
+  hasCalendarGrant,
+  revokeDriveGrant,
+  subscribeDriveSession,
+} from "../lib/session";
 import {
   audioSourcePreference,
   setAudioSourcePreference,
   type AudioSourcePreference,
 } from "../lib/audioSources";
-
 
 const SOURCES: { id: AudioSourcePreference; label: string; hint: string }[] = [
   {
@@ -48,8 +54,8 @@ export default function SettingsPage() {
   const [calendarSync, setCalendarSyncState] = useState(calendarSyncEnabled);
   const [consentStep, setConsentStepState] = useState(consentStepEnabled);
   const calendarReady = useSyncExternalStore(
-    subscribeDriveSession,
-    hasCalendarGrant,
+    subscribeCalendar,
+    hasAnyCalendarGrant,
     () => false,
   );
   const [revoking, setRevoking] = useState(false);
@@ -90,7 +96,7 @@ export default function SettingsPage() {
         <section className="panel" aria-labelledby="account-title">
           <div>
             <span className="eyebrow">KONTO</span>
-            <h2 id="account-title">Angemeldet mit Google</h2>
+            <h2 id="account-title">Dein CheatMeet-Arbeitsbereich</h2>
           </div>
           <p className="account-identity">
             <span className="avatar" aria-hidden="true">
@@ -120,7 +126,7 @@ export default function SettingsPage() {
               onClick={() => void revoke()}
             >
               <ShieldOff size={16} />
-              {revoking ? "Wird entzogen …" : "Drive-Zugriff entziehen"}
+              {revoking ? "Wird entzogen …" : "Google-Drive-Zugriff entziehen"}
             </button>
           </div>
           <p className="muted small">
@@ -130,6 +136,7 @@ export default function SettingsPage() {
         </section>
 
         <DriveSettings />
+        <MicrosoftSettings />
 
         <McpClients />
 
@@ -178,12 +185,16 @@ export default function SettingsPage() {
                 Zeigt vor jedem Start den Hinweis, den du vorliest, und hält
                 fest, wann und wie alle Anwesenden informiert wurden. Ohne
                 diesen Schritt startet die Aufnahme sofort — dann wird für das
-                Meeting auch keine Einwilligung dokumentiert. Sinnvoll nur,
-                wenn außer dir niemand aufgenommen wird.
+                Meeting auch keine Einwilligung dokumentiert. Sinnvoll nur, wenn
+                außer dir niemand aufgenommen wird.
               </small>
             </span>
           </label>
-          <div className="choice-list" role="group" aria-label="Standard-Tonquelle">
+          <div
+            className="choice-list"
+            role="group"
+            aria-label="Standard-Tonquelle"
+          >
             {SOURCES.map(({ id, label, hint }) => (
               <button
                 key={id}
@@ -218,7 +229,7 @@ export default function SettingsPage() {
 
         <section className="panel" aria-labelledby="calendar-title">
           <div>
-            <span className="eyebrow">GOOGLE KALENDER</span>
+            <span className="eyebrow">KALENDER</span>
             <h2 id="calendar-title">Termine und Zusammenfassungen</h2>
           </div>
           {calendarReady ? (
@@ -243,15 +254,16 @@ export default function SettingsPage() {
                     Nach der Analyse werden die Notizen eines zugeordneten
                     Termins ergänzt. Ohne Zuordnung passiert nichts — im Bericht
                     kannst du über „In den Kalender“ jederzeit einen Termin
-                    anlegen.
+                    anlegen. Outlook-Änderungen können Benachrichtigungen
+                    auslösen; ein schreibgeschützter Termin wird nicht ersetzt.
                   </small>
                 </span>
               </label>
             </>
           ) : (
             <p className="muted">
-              Für dieses Konto ist der Kalender noch nicht freigegeben. Melde
-              dich ab und erneut an — Google fragt dann nach dem Kalenderzugriff.
+              Für dieses Konto ist der Kalender noch nicht freigegeben. Gib den
+              gewünschten Anbieter in den Verbindungseinstellungen frei.
             </p>
           )}
         </section>

@@ -6,6 +6,7 @@ import {
   type ConsentSource,
 } from "../../shared/consent";
 import type { Draft } from "../types";
+import {microsoftHome,type MicrosoftHome,type ServiceProvider} from "../../shared/storage";
 import { appendRecordingChunk, deleteDraft, getDraft, putDraft } from "./local";
 import { mergeAudioStreams, type MergedAudio } from "./audioMerge";
 import { RecordingClock, preferredRecordingMimeType } from "./recording";
@@ -242,6 +243,7 @@ async function flushChunks() {
       sequence,
       chunk.blob,
       chunk.durationMs,
+      !!snapshot.draft.report.home,
     );
     pendingChunks.delete(sequence);
     emit({ checkpointMs: chunk.durationMs });
@@ -355,7 +357,7 @@ export const setCaptureTitle = (title: string) =>
  * model's.
  */
 export const setCaptureEvent = (
-  event: { id: string; calendarId: string; title: string } | null,
+  event: { id: string; calendarId: string; title: string; provider?:ServiceProvider; connectionId?:string } | null,
 ) => {
   // A deep link opened mid-meeting must not retag the running recording.
   if (ownerChanged() || isCapturing()) return;
@@ -365,6 +367,8 @@ export const setCaptureEvent = (
       ...snapshot.draft.report,
       calendarEventId: event?.id,
       calendarId: event?.calendarId,
+      calendarProvider: event?.provider,
+      calendarConnectionId: event?.connectionId,
       ...(event && !snapshot.draft.report.projectName
         ? { title: event.title }
         : {}),
@@ -372,6 +376,11 @@ export const setCaptureEvent = (
   }).catch(() => {});
 };
 
+export function setCaptureHome(home:MicrosoftHome|null) {
+  if(ownerChanged() || snapshot.state!=="ready" || busyOperation) return;
+  const selected=home?microsoftHome(home):undefined;
+  emit({draft:{...snapshot.draft,report:{...snapshot.draft.report,home:selected}}});
+}
 export const setCaptureError = (error: string) => emit({ error });
 export const setCaptureBusy = (busy: string) => emit({ busy });
 export const setCaptureHint = (hint: string) => emit({ hint });
@@ -536,6 +545,7 @@ export async function beginRecording(decision: ConsentDecision | null) {
   busyOperation = true;
   try {
     if (ownerChanged()) { releaseCapture(); return; }
+    if(decision && (decision.storageService || "Google Drive") !== (snapshot.draft.report.home ? "Microsoft OneDrive" : "Google Drive")) throw new Error("Der Speicherort stimmt nicht mit dem Einwilligungshinweis überein. Bitte die Aufnahme neu vorbereiten.");
     // Read the share again rather than trusting what arm saw: a share stopped
     // while the notice was being read is already cleared from module state.
     const system = sources.system;
@@ -859,12 +869,14 @@ export async function importAudio(file: File) {
     ...snapshot.draft,
     audio: file,
     speakerReference: undefined,
+    microsoftUploadHandle: undefined,
     retranscribe: undefined,
     // Replacing audio starts a NEW submission identity; never reuse a provider
     // job from the previous file under the same report ID.
     // An import is a new meeting: without this it inherits whenever this draft
       // slot was first opened, which the calendar and the list both show.
       report: { ...snapshot.draft.report, id: crypto.randomUUID(), date: new Date().toISOString(), updatedAt: undefined, error: "", rawAudioUrl: undefined,
+      home: snapshot.draft.report.home ? {provider:"microsoft",connectionId:snapshot.draft.report.home.connectionId,driveId:snapshot.draft.report.home.driveId,rootId:snapshot.draft.report.home.rootId,rootName:snapshot.draft.report.home.rootName} : undefined,
       transcriptionOrigin: "import", captureState: undefined, captureSources: undefined, singleSpeakerSources: undefined,
       driveFolderId: undefined, driveReportId: undefined, driveMarkdownId: undefined,
       driveTranscriptId: undefined, driveConsentId: undefined, driveSyncedAt: undefined,
@@ -874,6 +886,7 @@ export async function importAudio(file: File) {
       audioDeleteError: undefined, transcriptChars: undefined, participants: undefined,
       speakerReviewPending: undefined,
       calendarEventId: undefined, calendarId: undefined, calendarLink: undefined,
+      calendarProvider: undefined, calendarConnectionId: undefined,
       calendarSyncedAt: undefined, calendarError: undefined, transcription: "", summary: "", todos: [], takeaways: [], status: "pending", durationMs: 0,
       speech: { provider: "assemblyai", phase: "pending", languages: snapshot.draft.report.speech?.languages || defaultLanguages(), turns: [], speakerNames: {} } },
   });

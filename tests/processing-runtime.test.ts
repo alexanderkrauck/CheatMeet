@@ -1,13 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createDriveIO, mergeCalendarDescription } from '../server/processing/drive';
-import { createTaskQueue, verifyProcessingWorker } from '../server/processing/runtime';
+import { createTaskQueue, verifyProcessingWorker, processingConfigured } from '../server/processing/runtime';
 import { withProcessingBudget, boundedFetch } from '../server/processing/budget';
 import { toArchive } from '../src/lib/archive';
 import { ProcessingError, type ProcessingJob } from '../server/processing';
 import type { ReportData } from '../src/types';
 
 const report:ReportData={id:'meeting',title:'Titel',date:'2026-09-30T10:00:00Z',summary:'',transcription:'Gespeicherter Text',todos:[],takeaways:[],driveFolderId:'folder',driveReportId:'json'};
-function fakeDrive(noV3Etags=false,laggingV2=false){
+function fakeDrive(noV3Etags=false,laggingV2=false,calendar?:(j:ProcessingJob,r:ReportData)=>Promise<ReportData>){
   const files=new Map<string,{name:string;mimeType:string;parents:string[];ownedByMe:boolean;body:any;etag:string}>();
   files.set('folder',{name:'Meeting',mimeType:'application/vnd.google-apps.folder',parents:[],ownedByMe:true,body:'',etag:'folder-1'});
   files.set('json',{name:'bericht_daten.json',mimeType:'application/json',parents:['folder'],ownedByMe:true,body:toArchive(report,report.date),etag:'json-1'});
@@ -44,11 +44,25 @@ function fakeDrive(noV3Etags=false,laggingV2=false){
     const q=url.searchParams.get('q')||'';const name=/name = '([^']+)'/.exec(q)?.[1];
     return json({files:[...files.entries()].filter(([,v])=>v.name===name&&v.parents.includes('folder')).map(([id])=>({id}))});
   }) as unknown as typeof fetch;
-  const io=createDriveIO({fetchImpl:f,grants:{get:async()=> 'refresh',set:async()=>{},remove:async()=>{}},runtimeToken:async()=> 'runtime'});
+  const io=createDriveIO({fetchImpl:f,grants:{get:async()=> 'refresh',set:async()=>{},remove:async()=>{}},runtimeToken:async()=> 'runtime',calendar});
   const j={owner:'alice',googleSub:'google-alice',refs:{id:'meeting',driveReportId:'json',driveFolderId:'folder'},run:'run-1',updatedAt:report.date,calendarSync:false,analyze:true} as ProcessingJob;
   return {io,j,files,calls,f,setIndex:(v:any)=>{index=v;},failAfterWrite:()=>{failAfterSourceWrite=true;},sourcePatches:()=>sourcePatches,creates:()=>creates,index:()=>index};
 }
 afterEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals();});
+it('uses the provider-aware calendar hook for a Microsoft event archived in Google Drive',async()=>{
+  const calendar=vi.fn(async(_j:ProcessingJob,r:ReportData)=>({...r,calendarSyncedAt:'2026-11-13T12:00:00Z'}));
+  const h=fakeDrive(false,false,calendar);Object.assign(h.j,await h.io.load(h.j));h.j.calendarSync=true;
+  const out=await h.io.export(h.j,{...report,summary:'Summary',calendarProvider:'microsoft',calendarConnectionId:'ms',calendarEventId:'ms-event',calendarId:'ms-calendar'});
+  expect(calendar).toHaveBeenCalledTimes(1);expect(out.calendarSyncedAt).toBe('2026-11-13T12:00:00Z');
+  expect(h.calls.filter(c=>c.url.includes('/calendar/'))).toHaveLength(0);
+});
+it('can configure a Microsoft-only worker without a Google OAuth secret',()=>{
+  vi.stubEnv('PROCESSING_QUEUE','queue');vi.stubEnv('PROCESSING_WORKER_URL','https://example.test/worker');vi.stubEnv('PROCESSING_SERVICE_ACCOUNT','worker@example.test');
+  vi.stubEnv('GOOGLE_OAUTH_CLIENT_SECRET','');vi.stubEnv('MICROSOFT_CLIENT_ID','ms-client');vi.stubEnv('MICROSOFT_CLIENT_SECRET','ms-secret');
+  vi.stubEnv('MICROSOFT_PUBLIC_URL','https://cheatmeet.example.com');
+  expect(processingConfigured()).toBe(true);
+  vi.stubEnv('MICROSOFT_PUBLIC_URL','');expect(processingConfigured()).toBe(false);
+});
 it('uses named Firestore, verifies source membership, exports/upserts and publishes transcript-free projection',async()=>{
   const h=fakeDrive();const initial=await h.io.load(h.j);Object.assign(h.j,{revision:initial.revision,indexRevision:initial.indexRevision});
   const exported=await h.io.export(h.j,{...report,summary:'Ergebnis'});

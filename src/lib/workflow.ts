@@ -1,3 +1,5 @@
+import { backupMicrosoftDraft, syncMicrosoftReport } from "./microsoftWorkflow";
+import { downloadOneDrive } from "./onedrive";
 import { doc, getDoc } from "firebase/firestore";
 import { getRootFolder } from "./driveSettings";
 import { auth, db } from "./firebase";
@@ -164,6 +166,7 @@ export async function backupDraft(
 ) {
   const { owner, run, assertOwner } = ownedOperation();
   const report = draft.report;
+  if (report.home) return backupMicrosoftDraft(draft, progress);
   // Upload checkpoints are local and immediate. syncReport writes the final cloud index once.
   const checkpoint = async () => {
     assertOwner();
@@ -208,6 +211,7 @@ export async function backupDraft(
   return report;
 }
 export async function syncReport(report: ReportData, token: string) {
+  if (report.home) return syncMicrosoftReport(report);
   const { owner, run, assertOwner } = ownedOperation();
   // Saving a stub would overwrite the user's own Drive copy with it, which is
   // worse than anything the cloud index can do: the archive is the last copy.
@@ -303,6 +307,11 @@ export async function restoreDraft(
   token: string,
 ): Promise<Draft> {
   const { run } = ownedOperation();
+  if (report.home) {
+    if (!report.home.audioId) throw new Error("Keine Originalaufnahme in OneDrive vorhanden.");
+    const audio = await run(() => downloadOneDrive(report.home!,report.home!.audioId!));
+    return {report,audio};
+  }
   if (!report.rawAudioUrl)
     throw new Error(
       report.audioDeletedAt

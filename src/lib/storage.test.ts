@@ -15,7 +15,13 @@ vi.mock("idb-keyval", () => ({
   getMany: async (ks: string[]) => ks.map((k) => db.get(k)),
 }));
 
-const { inspectStorage, releaseSyncedAudio, acceptRemoteReport } = await import("./local");
+const { inspectStorage, releaseSyncedAudio, acceptRemoteReport, putLocal, putDraft, listLocal, getDraft, appendRecordingChunk } = await import("./local");
+it("isolates Microsoft reports, drafts, active pointers and chunks from old Google clients", async () => {
+ const report={id:"ms",title:"Meeting",date:"2026-11-01",summary:"",transcription:"",todos:[],takeaways:[],captureState:"recording" as const,home:{provider:"microsoft" as const,connectionId:"c",driveId:"d",rootId:"root",rootName:"Meetings"}};
+ await putLocal("u1",report);await putDraft("u1",{report});await appendRecordingChunk("u1","ms",0,new Blob(["audio"]),100,true);
+ expect([...db.keys()].some(k=>/^u1:(report|draft|audio-chunk|active-draft|capture-progress)(:|$)/.test(k))).toBe(false);
+ expect((await listLocal("u1"))[0].report.home).toEqual(report.home);expect((await getDraft("u1","ms"))?.audio?.size).toBe(5);
+});
 
 const put = (key: string, report: Record<string, unknown>, dirty = false) =>
   db.set(key, { report: { todos: [], takeaways: [], ...report }, dirty });

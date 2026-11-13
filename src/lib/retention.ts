@@ -1,4 +1,5 @@
 import type { ReportData } from "../types";
+import { archiveAudioId,archiveSyncedAt } from "../../shared/storage";
 
 /** After this many failed attempts a file is left alone rather than retried forever. */
 export const MAX_ATTEMPTS = 3;
@@ -31,8 +32,8 @@ export function audioExpiresAt(report: ReportData): number | null {
 export function sweepable(report: ReportData): boolean {
   return (
     audioExpiresAt(report) !== null &&
-    !!report.rawAudioUrl &&
-    !!report.driveSyncedAt &&
+    !!archiveAudioId(report) &&
+    !!archiveSyncedAt(report) &&
     !report.audioDeletedAt &&
     (report.audioDeleteAttempts ?? 0) < MAX_ATTEMPTS &&
     (!!report.speech || !!report.transcription?.trim())

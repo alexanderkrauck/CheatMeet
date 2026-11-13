@@ -29,7 +29,14 @@ async function upsert(
   const cacheKey = `${rootId}:${name}`;
   const existing =
     known.get(cacheKey) ?? (await findFileInFolder(name, rootId, token));
-  const id = await uploadFileToFolder(body, name, mime, rootId, token, existing);
+  const id = await uploadFileToFolder(
+    body,
+    name,
+    mime,
+    rootId,
+    token,
+    existing,
+  );
   known.set(cacheKey, id);
 }
 
@@ -39,12 +46,17 @@ export async function refreshArchiveIndex(
   generatedAt: string,
 ) {
   const rootId = await getRootFolder(token);
-  const reports = (await listLocal(owner)).map((entry) => entry.report);
+  const reports = (await listLocal(owner))
+    .map((entry) => entry.report)
+    .filter((report) => !report.home);
   await upsert(
     ARCHIVE_INDEX_NAME,
-    new Blob([JSON.stringify(buildArchiveIndex(reports, generatedAt), null, 2)], {
-      type: "application/json",
-    }),
+    new Blob(
+      [JSON.stringify(buildArchiveIndex(reports, generatedAt), null, 2)],
+      {
+        type: "application/json",
+      },
+    ),
     "application/json",
     rootId,
     token,

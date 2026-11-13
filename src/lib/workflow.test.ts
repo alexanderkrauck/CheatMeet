@@ -207,6 +207,11 @@ describe("the archive overview", () => {
     expect(meetings[0].consent_obtained_at).toBe("2026-09-15T12:00:00.000Z");
   });
 
+  it("never copies Microsoft meeting metadata into the Google archive index",async()=>{
+    storedReports=[report({home:{provider:"microsoft",connectionId:"c",driveId:"d",rootId:"root",rootName:"Meetings",folderId:"ms-folder"},driveFolderId:undefined})];
+    await syncReport(report({driveFolderId:"google-folder"}),"token");
+    expect(indexed?.meetings).toEqual([]);
+  });
   it("replaces the overview instead of piling up copies", async () => {
     existingIndexId = "vorhandene-index-id";
 

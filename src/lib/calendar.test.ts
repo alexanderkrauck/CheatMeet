@@ -1,5 +1,75 @@
-import { describe, expect, it } from "vitest";
-import { mergeDescription, summaryBlock, toEvent } from "./calendar";
+import { describe, expect, it, vi } from "vitest";
+const selection = vi.hoisted(() => ({
+  provider: "google" as "google" | "microsoft",
+  granted: false,
+}));
+const ms = vi.hoisted(() => ({
+  events: vi.fn(async () => []),
+  get: vi.fn(async () => null),
+  patch: vi.fn(async () => {}),
+  create: vi.fn(async () => ({
+    id: "m",
+    calendarId: "primary",
+    calendarProvider: "microsoft",
+    calendarConnectionId: "work",
+  })),
+}));
+vi.mock("./providerSettings", () => ({
+  savedCalendarProvider: () => selection.provider,
+  hasMicrosoftCalendar: () => selection.granted,
+}));
+vi.mock("./microsoft", () => ({
+  cachedMicrosoftConnections: () =>
+    selection.granted ? [{ connectionId: "work", calendar: true }] : [],
+}));
+vi.mock("./microsoftCalendar", () => ({
+  microsoftEventsBetween: ms.events,
+  getMicrosoftEvent: ms.get,
+  updateMicrosoftEventDescription: ms.patch,
+  createMicrosoftEvent: ms.create,
+}));
+import {
+  mergeDescription,
+  summaryBlock,
+  toEvent,
+  eventsBetween,
+  hasAnyCalendarGrant,
+  getEvent,
+  createEvent,
+  updateEventDescription,
+} from "./calendar";
+
+describe("calendar provider facade", () => {
+  it("reads the chosen Outlook calendar even without Google authorization", async () => {
+    selection.provider = "microsoft";
+    selection.granted = true;
+    expect(hasAnyCalendarGrant()).toBe(true);
+    await eventsBetween(0, 1000, 10);
+    expect(ms.events).toHaveBeenCalledWith(0, 1000, 10, "work");
+    await getEvent("primary", "linked", "microsoft", "personal");
+    expect(ms.get).toHaveBeenCalledWith("primary", "linked", "personal");
+    const linked = {
+      id: "linked",
+      calendarId: "primary",
+      provider: "microsoft" as const,
+      connectionId: "personal",
+      description: "Agenda",
+      bodyType: "html" as const,
+      etag: "rev",
+    };
+    await updateEventDescription(linked, "Summary");
+    expect(ms.patch).toHaveBeenCalledWith(linked, "Summary");
+    const created = await createEvent({
+      title: "Test",
+      startMs: 0,
+      endMs: 1000,
+      block: "Summary",
+    });
+    expect(created.calendarProvider).toBe("microsoft");
+    selection.provider = "google";
+    selection.granted = false;
+  });
+});
 
 describe("toEvent", () => {
   const raw = {
@@ -16,7 +86,10 @@ describe("toEvent", () => {
   };
 
   it("keeps the people and drops rooms and yourself", () => {
-    expect(toEvent(raw, "primary")?.attendees).toEqual(["Anna Berger", "ben klein"]);
+    expect(toEvent(raw, "primary")?.attendees).toEqual([
+      "Anna Berger",
+      "ben klein",
+    ]);
   });
   it("normalises the title and the times", () => {
     const event = toEvent(raw, "primary")!;
@@ -25,18 +98,30 @@ describe("toEvent", () => {
     expect(event.endMs).toBe(Date.parse("2026-09-14T10:00:00.000Z"));
   });
   it("reads an all-day date as a local day, not as UTC midnight", () => {
-    const event = toEvent({ id: "e2", start: { date: "2026-09-14" } }, "primary");
+    const event = toEvent(
+      { id: "e2", start: { date: "2026-09-14" } },
+      "primary",
+    );
     expect(event?.startMs).toBe(new Date(2026, 8, 14).getTime());
     expect(event?.endMs).toBe(event?.startMs);
   });
   it("skips cancelled events and anything without an id or a start", () => {
     expect(toEvent({ ...raw, status: "cancelled" }, "primary")).toBe(null);
-    expect(toEvent({ summary: "x", start: { dateTime: "2026-09-14T09:00:00Z" } }, "primary")).toBe(null);
+    expect(
+      toEvent(
+        { summary: "x", start: { dateTime: "2026-09-14T09:00:00Z" } },
+        "primary",
+      ),
+    ).toBe(null);
     expect(toEvent({ id: "e3" }, "primary")).toBe(null);
   });
   it("falls back to a title rather than rendering nothing", () => {
-    expect(toEvent({ id: "e4", start: { dateTime: "2026-09-14T09:00:00Z" } }, "primary")?.title)
-      .toBe("Ohne Titel");
+    expect(
+      toEvent(
+        { id: "e4", start: { dateTime: "2026-09-14T09:00:00Z" } },
+        "primary",
+      )?.title,
+    ).toBe("Ohne Titel");
   });
 });
 
@@ -103,7 +188,7 @@ describe("summaryBlock", () => {
 describe("mergeDescription — marker collisions", () => {
   it("ignores the marker words inside the organiser's own prose", () => {
     const text =
-      'Siehe --- CheatMeet --- Block unten besprechen\n\nWichtig: Raum 3B';
+      "Siehe --- CheatMeet --- Block unten besprechen\n\nWichtig: Raum 3B";
     const merged = mergeDescription(text, "Neu");
     expect(merged).toContain("Wichtig: Raum 3B");
     expect(merged).toContain("Siehe --- CheatMeet --- Block unten besprechen");
@@ -121,7 +206,9 @@ describe("mergeDescription — marker collisions", () => {
       "Nachtrag vom Organisator",
     ].join("\n");
     const merged = mergeDescription(text, "ZWEITER STAND");
-    expect(merged).toContain("Notiz: der --- CheatMeet --- Block kommt automatisch");
+    expect(merged).toContain(
+      "Notiz: der --- CheatMeet --- Block kommt automatisch",
+    );
     expect(merged).toContain("Nachtrag vom Organisator");
     expect(merged).toContain("ZWEITER STAND");
     expect(merged).not.toContain("ERSTER STAND");

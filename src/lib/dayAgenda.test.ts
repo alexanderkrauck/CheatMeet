@@ -7,6 +7,7 @@ import {
 } from "./dayAgenda";
 import type { CalendarEvent } from "./calendar";
 import type { ReportSummary } from "./meetingMeta";
+import { recordHref } from '../components/EventRow';
 
 const at = (h: number, m = 0, day = 16) =>
   new Date(2026, 8, day, h, m).getTime();
@@ -36,6 +37,18 @@ const report = (over: Partial<ReportSummary> = {}): ReportSummary =>
   }) as ReportSummary;
 
 describe("recordedEventIds", () => {
+  it('keeps provider/account/calendar identity when matching identical event IDs',()=>{
+    const recorded=recordedEventIds([report({calendarProvider:'microsoft',calendarConnectionId:'work',calendarId:'calendar',calendarEventId:'e1'})]);
+    const work=event({provider:'microsoft',connectionId:'work',calendarId:'calendar'});
+    const personal=event({provider:'microsoft',connectionId:'personal',calendarId:'calendar'});
+    const otherCalendar=event({provider:'microsoft',connectionId:'work',calendarId:'another'});
+    const remaining=buildAgenda([], [work,personal,otherCalendar,event()],recorded);
+    expect(remaining.filter(e=>e.kind==='event').map(e=>e.kind==='event'&&e.event)).toEqual([personal,otherCalendar,event()]);
+  });
+  it('carries the Outlook event binding from the calendar row to recording preselection',()=>{
+    const url=new URL(recordHref(event({provider:'microsoft',connectionId:'work',calendarId:'calendar'})),'https://cheatmeet.test');
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({provider:'microsoft',connection:'work',calendar:'calendar',event:'e1'});
+  });
   it("collects only the reports that are linked to an event", () => {
     const ids = recordedEventIds([
       report({ id: "a", calendarEventId: "e1" }),

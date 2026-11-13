@@ -9,10 +9,12 @@ import {
 } from "../lib/install";
 
 /**
- * Mounted once, including on the login screen. Dismissing it only hides the
- * banner — both actions stay available under Einstellungen.
+ * Mounted once after sign-in. On small login/consent screens a fixed nudge
+ * covered the Microsoft choice; both actions remain available in settings.
  */
-export default function InstallApp() {
+export default function InstallApp({
+  signedIn = false,
+}: { signedIn?: boolean } = {}) {
   const { prompt, update, ios } = useSyncExternalStore(
     subscribeInstall,
     installState,
@@ -23,13 +25,17 @@ export default function InstallApp() {
 
   // The capture screen owns its bottom edge, exactly as JobProgress respects.
   if (
+    !signedIn ||
     dismissed ||
     location.pathname.startsWith("/record") ||
     (!update && !prompt && !ios)
   )
     return null;
   return (
-    <aside className="install-banner no-print" aria-label="App installieren oder aktualisieren">
+    <aside
+      className="install-banner no-print"
+      aria-label="App installieren oder aktualisieren"
+    >
       <p>
         {update ? (
           <>
@@ -47,7 +53,11 @@ export default function InstallApp() {
       </p>
       <div className="actions">
         {update ? (
-          <button type="button" className="btn btn-primary" onClick={applyUpdate}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={applyUpdate}
+          >
             <RefreshCw size={16} /> Aktualisieren
           </button>
         ) : prompt ? (

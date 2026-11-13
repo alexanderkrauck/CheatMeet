@@ -1,5 +1,7 @@
 import { useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
+import {archiveFolderLink,archiveSyncedAt} from "../../shared/storage";
+import {hasAnyCalendarGrant,subscribeCalendar} from "../lib/calendar";
 import { CalendarPlus, CloudUpload, ExternalLink, MoreHorizontal } from "lucide-react";
 import Menu from "./Menu";
 import AssignEvent from "./AssignEvent";
@@ -46,8 +48,8 @@ export default function MeetingRow({
   const [message, setMessage] = useState("");
   const [assigning, setAssigning] = useState(false);
   const calendarReady = useSyncExternalStore(
-    subscribeDriveSession,
-    hasCalendarGrant,
+    subscribeCalendar,
+    hasAnyCalendarGrant,
     () => false,
   );
 
@@ -112,7 +114,7 @@ export default function MeetingRow({
           <h3>{report.title || "Unbenanntes Meeting"}</h3>
           <Status
             status={report.status}
-            syncedAt={report.driveSyncedAt}
+            syncedAt={archiveSyncedAt(report)}
             local={dirty}
             running={running}
           />
@@ -150,19 +152,20 @@ export default function MeetingRow({
               {busy ? "Speichern …" : "In der Cloud speichern"}
             </button>
           )}
-          {report.driveFolderId && (
+          {archiveFolderLink(report) && (
             <a
-              href={`https://drive.google.com/drive/folders/${encodeURIComponent(report.driveFolderId)}`}
+              href={archiveFolderLink(report)}
               target="_blank"
               rel="noreferrer"
             >
-              <ExternalLink size={16} /> In Drive öffnen
+              <ExternalLink size={16} /> In {report.home?"OneDrive":"Drive"} öffnen
             </a>
           )}
           <DeleteMeeting
             id={report.id}
             title={report.title}
             driveFolderId={report.driveFolderId}
+            home={report.home}
             onWarning={onWarning}
           />
         </>

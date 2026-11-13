@@ -169,6 +169,15 @@ class ManagedSettingsTests(unittest.TestCase):
     def env(self, result):
         return {item["name"]: item for item in result["spec"]["template"]["spec"]["containers"][0]["env"]}
 
+    def test_microsoft_configuration_is_complete_and_secret_is_only_a_reference(self):
+        settings = {"MICROSOFT_CLIENT_ID": "client-id", "MICROSOFT_PUBLIC_URL": "https://cheatmeet.example.com",
+                    "MICROSOFT_CLIENT_SECRET_NAME": "cheatmeet-microsoft-client-secret"}
+        plain, secrets = module.managed_from_environment(settings)
+        self.assertEqual(plain, {"MICROSOFT_CLIENT_ID": "client-id", "MICROSOFT_PUBLIC_URL": "https://cheatmeet.example.com"})
+        self.assertEqual(secrets, {"MICROSOFT_CLIENT_SECRET": "cheatmeet-microsoft-client-secret"})
+        with self.assertRaises(ValueError):
+            module.managed_from_environment({"MICROSOFT_CLIENT_ID": "client-id"})
+
     def test_adds_plain_values_and_secret_references_without_touching_the_rest(self):
         env = self.env(self.prepare(
             plain={"MCP_PUBLIC_URL": "https://cheatmeet.example.com"},

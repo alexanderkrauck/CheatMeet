@@ -27,6 +27,7 @@ const IDENTITIES: Record<string, { uid: string; googleSub: string }> = {
   "alice-token": { uid: "alice", googleSub: "g-alice" },
   "bob-token": { uid: "bob", googleSub: "g-bob" },
   "nogoogle-token": { uid: "carol", googleSub: "g-carol" },
+  "microsoft-token": { uid: "microsoft-owner", googleSub: "" },
 };
 
 beforeEach(async () => {
@@ -44,6 +45,7 @@ beforeEach(async () => {
       return found;
     },
     hasDriveGrant: async (sub) => driveGrants.has(sub),
+    hasStorageGrant: async ({uid,googleSub}) => uid === 'microsoft-owner' || driveGrants.has(googleSub),
     limits: { perMinute: 1000 },
   }));
   await new Promise<void>((resolve) => { server = app.listen(0, "127.0.0.1", resolve); });
@@ -98,6 +100,13 @@ async function authorizeAll(scope?: string, token = "alice-token") {
   const url = new URL(decided.body.redirectTo);
   return { flow, code: url.searchParams.get("code")!, url };
 }
+it('authorizes a Microsoft-only account through its own connected archive, without a Google grant',async()=>{
+  const {response}=await startFlow({scope:'meetings:read'});
+  const approved=await approve(requestOf(response),'microsoft-token');
+  expect(approved.response.status).toBe(200);
+  expect(new URL(approved.body.redirectTo).searchParams.get('code')).toBeTruthy();
+  expect((await store.listByOwner('microsoft-owner'))[0]).toMatchObject({uid:'microsoft-owner',googleSub:''});
+});
 const exchange = (flow: Flow, code: string, extra: Record<string, string> = {}) =>
   fetch(`${base}/api/oauth/token`, form({
     grant_type: "authorization_code", code, code_verifier: flow.verifier, client_id: flow.clientId,

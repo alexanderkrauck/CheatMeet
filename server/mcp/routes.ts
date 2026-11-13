@@ -5,13 +5,14 @@ import path from "node:path";
 import firebaseConfig from "../../firebase-applet-config.json";
 import type { LiveDoc } from "../../shared/mcp";
 import { verifyFirebaseToken } from "../analysis";
-import { googleAccountFor, refreshAccessToken } from "../googleAuth";
+import { refreshAccessToken } from "../googleAuth";
+import { firebaseAccountFor, getMicrosoftAccess, listMicrosoftConnections } from '../microsoftAuth';
 import { fileGrantStore, firestoreStore, serviceAccountToken, type RefreshTokenStore } from "../tokenStore";
 import { mcpConfig, type McpConfig } from "./config";
 import { fileDocStore, firestoreDocStore, memoryDocStore, type DocStore } from "./docStore";
 import { createMcpRouter } from "./index";
 import { createLiveRouter } from "./live";
-import { driveTranscriptReader, firestoreReportIndex } from "./meetings";
+import { driveTranscriptReader, firestoreReportIndex, microsoftTranscriptReader } from "./meetings";
 import { createOAuthRouter, type Grant } from "./oauth";
 
 const run = promisify(execFile);
@@ -65,23 +66,24 @@ export function createMcpRoutes(env: Record<string, string | undefined> = proces
   const clientSecret = env.GOOGLE_OAUTH_CLIENT_SECRET || "";
   const driveRefreshTokens: RefreshTokenStore = production ? firestoreStore({ fetchImpl: fetch }) : fileGrantStore();
 
-  const identify = (idToken: string) => googleAccountFor(idToken, projectId);
+  const identify = (idToken: string) => firebaseAccountFor(idToken, projectId);
   const oauth = createOAuthRouter({
     config,
     store: grants,
     identify,
     hasDriveGrant: async (googleSub) => Boolean(await driveRefreshTokens.get(googleSub).catch(() => null)),
+    hasStorageGrant: async ({uid,googleSub}) => Boolean(googleSub&&await driveRefreshTokens.get(googleSub)) || (await listMicrosoftConnections(uid)).length>0,
   });
   const mcp = createMcpRouter({
     config,
     grants,
     live,
     index: firestoreReportIndex({ projectId, databaseId, fetchImpl: fetch, token }),
-    transcripts: driveTranscriptReader({
+    transcripts: {...driveTranscriptReader({
       refreshToken: (googleSub) => driveRefreshTokens.get(googleSub),
       mint: (refreshToken) => refreshAccessToken({ refreshToken, clientId, clientSecret }),
       fetchImpl: fetch,
-    }),
+    }),readMeeting:microsoftTranscriptReader({access:async(owner,connectionId)=>(await getMicrosoftAccess(owner,connectionId)).accessToken,fetchImpl:fetch})},
   });
   const root = express.Router();
   root.use(oauth);
