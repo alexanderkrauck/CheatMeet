@@ -32,6 +32,11 @@ async function fixture(fetchImpl = provider(), store = memoryDocStore<UploadDocu
   return {post,fetchImpl,store};
 }
 describe('Microsoft server-owned upload sessions',()=>{
+  it('serializes OData annotations before item properties for the real Graph parser',async()=>{
+    const f=await fixture();expect((await f.post('',input)).status).toBe(200);
+    const request=f.fetchImpl.mock.calls.find(([url])=>url.endsWith('/createUploadSession'))!;
+    expect(Object.keys(JSON.parse(request[1]!.body as string).item)[0]).toBe('@microsoft.graph.conflictBehavior');
+  });
   it('resumes after router restart, never sends bearer to the upload URL, hides foreign handles',async()=>{
     const f=await fixture(); const {handle}=(await f.post('',input)).body;
     f.fetchImpl.mockImplementation(async(url,init)=>{

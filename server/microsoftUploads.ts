@@ -104,7 +104,8 @@ export function createMicrosoftUploadRouter(options: Options = {}): express.Rout
     const createdAt = now();
     const session = await graph(token,base+(b.itemId ? enc(b.itemId) : enc(b.parentId)+':/'+enc(b.name)+':')+'/createUploadSession',{
       method:'POST',headers:b.itemId ? {'If-Match':b.etag} : {},
-      body:JSON.stringify({item:{name:b.name,'@microsoft.graph.conflictBehavior':b.itemId ? 'replace' : 'fail'},...(b.itemId ? {deferCommit:true} : {})})
+      // Graph's OData reader requires annotations before ordinary properties.
+      body:JSON.stringify({item:{'@microsoft.graph.conflictBehavior':b.itemId ? 'replace' : 'fail',name:b.name},...(b.itemId ? {deferCommit:true} : {})})
     }); check(session);
     const s = await session.json();
     if (!safeUploadUrl(s.uploadUrl) || !Number.isFinite(Date.parse(s.expirationDateTime)) || Date.parse(s.expirationDateTime) <= now()) throw new UploadError(502,'Microsoft hat keine sichere Uploadsitzung geliefert.');
@@ -158,7 +159,7 @@ export function createMicrosoftUploadRouter(options: Options = {}): express.Rout
       // Crucially the precondition is on this final commit, not just session creation.
       const committed = await graph(token,`/drives/${enc(doc.driveId)}/items/${enc(doc.itemId)}`,{
         method:'PUT',headers:{'If-Match':doc.initialEtag!},
-        body:JSON.stringify({name:doc.name,'@microsoft.graph.conflictBehavior':'replace','@microsoft.graph.sourceUrl':doc.uploadUrl})
+        body:JSON.stringify({'@microsoft.graph.conflictBehavior':'replace','@microsoft.graph.sourceUrl':doc.uploadUrl,name:doc.name})
       }); check(committed); const receipt = await committed.json();
       if (receipt.id !== doc.itemId || typeof receipt.eTag !== 'string') throw conflict();
       const verified = await graph(token,`/drives/${enc(doc.driveId)}/items/${enc(doc.itemId)}`);
