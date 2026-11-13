@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, Loader2, ShieldCheck } from "lucide-react";
 import { auth } from "../lib/firebase";
-import { connectGoogle, errorMessage } from "../lib/session";
+import { signInGoogle, errorMessage } from "../lib/session";
 import { signInMicrosoft } from "../lib/microsoftIdentity";
 import {
   ConnectError,
@@ -63,7 +63,7 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
     setError("");
     try {
       if (microsoft) await signInMicrosoft();
-      else await connectGoogle();
+      else await signInGoogle();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -147,7 +147,7 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
               ) : (
                 <>
                   <button
-                    className="btn btn-primary login-button"
+                    className="btn login-button"
                     disabled={busy}
                     onClick={() => void signIn()}
                   >

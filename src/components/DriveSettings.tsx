@@ -9,14 +9,23 @@ import {
   savedDriveFolder,
   type DriveFolder,
 } from "../lib/driveSettings";
-import { DEFAULT_FOLDER_NAME, findOrCreateRootFolder, listDriveReports } from "../lib/drive";
+import {
+  DEFAULT_FOLDER_NAME,
+  findOrCreateRootFolder,
+  listDriveReports,
+} from "../lib/drive";
 import { connectGoogle, ensureDriveToken, errorMessage } from "../lib/session";
 import { getLocal, putLocal } from "../lib/local";
 import { uid } from "../lib/reports";
+import { saveMeetingHome } from "../lib/providerSettings";
 export default function DriveSettings({
   onImported,
+  onSelected,
+  defaultSelectionDisabled = false,
 }: {
   onImported?: () => void;
+  onSelected?: () => void;
+  defaultSelectionDisabled?: boolean;
 }) {
   const [folder, setFolder] = useState<DriveFolder | null>(savedDriveFolder);
   const [busy, setBusy] = useState(false);
@@ -105,7 +114,7 @@ export default function DriveSettings({
     >
       <div>
         <span className="eyebrow">GOOGLE DRIVE</span>
-        <h2 id="drive-settings-title">Dein Speicherort</h2>
+        <h2 id="drive-settings-title">Google Drive</h2>
       </div>
       <p className="muted">
         Audio, Transkript und Bericht liegen in deinem Drive. Jedes Meeting
@@ -128,7 +137,26 @@ export default function DriveSettings({
       <div className="actions">
         <button
           type="button"
-          className="btn btn-primary"
+          className="btn"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setMessage("");
+            void connectGoogle()
+              .then(() =>
+                setMessage(
+                  "Google Drive verbunden. Der Standardspeicher bleibt unverändert.",
+                ),
+              )
+              .catch((e) => setMessage(errorMessage(e)))
+              .finally(() => setBusy(false));
+          }}
+        >
+          Google Drive verbinden
+        </button>
+        <button
+          type="button"
+          className="btn"
           onClick={() => void select()}
           disabled={busy}
         >
@@ -147,6 +175,34 @@ export default function DriveSettings({
         Eine Änderung gilt für neue Meetings. Bestehende Berichte bleiben in
         ihrem bisherigen Ordner.
       </p>
+      <button
+        type="button"
+        className="btn"
+        disabled={busy || defaultSelectionDisabled}
+        onClick={() => {
+          setBusy(true);
+          setMessage("");
+          const owner = uid();
+          void (async () => {
+            (await ensureDriveToken()) || (await connectGoogle());
+            if (uid() !== owner)
+              throw new Error(
+                "Das angemeldete Konto hat sich geändert. Bitte den Standardspeicher erneut wählen.",
+              );
+            await saveMeetingHome(null);
+            if (uid() !== owner)
+              throw new Error("Das angemeldete Konto hat sich geändert.");
+            onSelected?.();
+            setMessage(
+              "Google Drive als Standard für neue Meetings gespeichert. Bestehende Meetings bleiben unverändert.",
+            );
+          })()
+            .catch((e) => setMessage(errorMessage(e)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        Google Drive als Standardspeicher verwenden
+      </button>
       <button
         type="button"
         className="btn"

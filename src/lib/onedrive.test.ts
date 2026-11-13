@@ -28,6 +28,15 @@ const home = {
   rootName: "Root",
   folderId: "f",
 };
+it('updates bounded text with native Graph If-Match rather than a Personal-only deferred commit',async()=>{
+  m.api.mockReset().mockRejectedValue(Error('Deferred update is not supported by Business OneDrive'));
+  m.request.mockReset().mockResolvedValueOnce(Response.json({id:'json',eTag:'v1'})).mockResolvedValueOnce(Response.json({id:'json',size:5,eTag:'v2'}));
+  const revisions=new Map<string,string>();
+  vi.stubGlobal('localStorage',{getItem:(key:string)=>revisions.get(key)||'v1',setItem:(key:string,value:string)=>revisions.set(key,value)});
+  expect(await writeOneDriveText(home,'bericht_daten.json','hello','json')).toMatchObject({id:'json',eTag:'v2'});
+  expect(m.request).toHaveBeenLastCalledWith('/drives/d/items/json/content',expect.objectContaining({method:'PUT',body:'hello',headers:expect.objectContaining({'If-Match':'v1'})}),'c');
+  expect(m.api).not.toHaveBeenCalled();
+});
 it("resumes sequential chunks from server-owned ranges, never sends bearer to upload capability, verifies completion", async () => {
   m.api.mockImplementation(async (path: string) =>
     path === "uploads"

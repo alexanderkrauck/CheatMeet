@@ -7,7 +7,7 @@ import {
   FileText,
   Loader2,
 } from "lucide-react";
-import { connectGoogle, errorMessage } from "../lib/session";
+import { signInGoogle, errorMessage } from "../lib/session";
 import { signInMicrosoft } from "../lib/microsoftIdentity";
 import { Brand, Notice } from "../components/UI";
 export default function Login({ notice = "" }: { notice?: string }) {
@@ -18,7 +18,7 @@ export default function Login({ notice = "" }: { notice?: string }) {
     setError("");
     try {
       if (microsoft) await signInMicrosoft();
-      else await connectGoogle();
+      else await signInGoogle();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -68,7 +68,7 @@ export default function Login({ notice = "" }: { notice?: string }) {
           </h2>
           <p className="muted">
             Melde dich mit Google oder Microsoft an. Den Speicherort und die
-            Kalenderfreigabe wählst du getrennt in den Einstellungen.
+            Kalenderfreigabe wählst du danach separat in der Einrichtung.
           </p>
           <button
             className="btn btn-primary login-button"
@@ -78,17 +78,23 @@ export default function Login({ notice = "" }: { notice?: string }) {
             {loading ? (
               <Loader2 className="spin" />
             ) : (
-              <span className="google-g">G</span>
+              <span aria-hidden="true">G</span>
             )}
-            {loading ? "Verbindung wird hergestellt …" : "Mit Google starten"}
+            Mit Google anmelden
             <ArrowRight size={18} />
           </button>
           <button
-            className="btn login-button"
+            className="btn btn-primary login-button"
             disabled={loading}
             onClick={() => void login(true)}
           >
+            {loading ? (
+              <Loader2 className="spin" />
+            ) : (
+              <span aria-hidden="true">M</span>
+            )}
             Mit Microsoft anmelden
+            <ArrowRight size={18} />
           </button>
           {(error || notice) && <Notice>{error || notice}</Notice>}
           <div className="login-benefits">

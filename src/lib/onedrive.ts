@@ -315,6 +315,17 @@ export async function writeOneDriveText(
       name === "bericht_daten.json",
     );
     check();
+    // Small archive text uses Graph's native atomic update on both account types.
+    // Deferred sourceUrl commits are not supported by Business OneDrive.
+    const size=new Blob([text]).size;
+    if(size>250*1024*1024)throw Error('Die Textdatei ist für eine sichere OneDrive-Aktualisierung zu groß.');
+    const item=await json<OneDriveItem>(`${itemPath(home,itemId)}/content`,{
+      method:'PUT',headers:{'Content-Type':name.endsWith('.json')?'application/json':'text/markdown;charset=utf-8','If-Match':etag},body:text,
+    },home.connectionId);
+    check();
+    if(item.id!==itemId||item.size!==size||!item.eTag)throw Error('OneDrive konnte die aktualisierte Datei nicht bestätigen.');
+    rememberRevision(home,item);
+    return item;
   }
   return uploadOneDrive(
     home,

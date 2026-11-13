@@ -12,8 +12,16 @@ vi.mock("firebase/auth", () => ({
   },
   signInWithPopup: m.signIn,
   linkWithPopup: m.link,
+  getAdditionalUserInfo:(result:{fresh?:boolean})=>({isNewUser:result.fresh}),
 }));
 import { signInMicrosoft, linkMicrosoftIdentity } from "./microsoftIdentity";
+it('starts the same setup for a new Microsoft workspace without assigning storage',async()=>{
+  m.auth.currentUser=null;m.signIn.mockResolvedValueOnce({user:{uid:'new-microsoft'},fresh:true});
+  const stored=new Map<string,string>();vi.stubGlobal('window',new EventTarget());vi.stubGlobal('sessionStorage',{getItem:(k:string)=>stored.get(k)||null,setItem:(k:string,v:string)=>stored.set(k,v)});
+  await signInMicrosoft();expect((await import('./identitySetup')).identitySetupPending('new-microsoft')).toBe(true);
+  expect([...stored.keys()]).toEqual(['cheatmeet:identity-setup:new-microsoft']);
+  m.signIn.mockReset();
+});
 it("signs in separately from Graph and only explicitly links an existing UID, never merges by email", async () => {
   await signInMicrosoft();
   expect(m.signIn).toHaveBeenCalledOnce();

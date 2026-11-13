@@ -1,5 +1,6 @@
 import {
   GoogleAuthProvider,
+  getAdditionalUserInfo,
   linkWithCredential,
   linkWithPopup,
   reauthenticateWithPopup,
@@ -7,6 +8,7 @@ import {
   signInWithPopup,
 } from "firebase/auth";
 import { auth, provider } from "./firebase";
+import {markIdentitySetup} from './identitySetup';
 
 const SESSION_KEY = "cheatmeet:drive-session";
 /** Fallback lifetime when the token's own expiry is unknown. */
@@ -193,7 +195,8 @@ export async function ensureDriveToken(
       const data = await response.json().catch(() => ({}));
       if (auth.currentUser?.uid !== owner) return null;
       if (response.status === 403 && data.reauth) {
-        reportRevoked(data.error || "Google Drive ist nicht mehr freigegeben.");
+        if(data.reason==='no_grant')rememberToken(undefined);
+        else reportRevoked(data.error || "Google Drive ist nicht mehr freigegeben.");
         return null;
       }
       if (!response.ok)
@@ -309,6 +312,19 @@ function consentPopup(): Promise<string> {
   });
 }
 
+/** Identity only: file/calendar permission is requested later in connection setup. */
+export async function signInGoogle():Promise<void>{
+  if(auth.currentUser)throw Error('Bitte Google in den Einstellungen ausdrücklich mit dem bestehenden Arbeitsbereich verknüpfen.');
+  const result=await signInWithPopup(auth,new GoogleAuthProvider());
+  markIdentitySetup(result.user.uid,getAdditionalUserInfo(result)?.isNewUser===true);
+}
+export async function linkGoogleIdentity():Promise<void>{
+  const user=auth.currentUser;
+  if(!user)throw Error('Bitte zuerst mit dem bestehenden Konto anmelden.');
+  const owner=user.uid;
+  const result=await linkWithPopup(user,new GoogleAuthProvider());
+  if(auth.currentUser?.uid!==owner||result.user.uid!==owner)throw Error('Das angemeldete Konto hat sich geändert. Die Verknüpfung wurde nicht übernommen.');
+}
 export async function connectGoogle(): Promise<string> {
   const startingUser=auth.currentUser;
   const owner=startingUser?.uid;
@@ -355,7 +371,7 @@ export async function connectGoogle(): Promise<string> {
 export function errorMessage(error: unknown): string {
   const code = (error as { code?: string })?.code;
   if (code === "auth/account-exists-with-different-credential" || code === "auth/credential-already-in-use" || code === "auth/email-already-in-use")
-    return "Diese Anmeldung gehört zu einem bestehenden Konto. Bitte zuerst mit dessen ursprünglicher Anmeldemethode anmelden und Microsoft in den Einstellungen ausdrücklich verknüpfen. Konten werden nicht anhand gleicher E-Mail-Adressen zusammengeführt.";
+    return "Diese Anmeldung gehört zu einem bestehenden Konto. Bitte zuerst mit dessen ursprünglicher Anmeldemethode anmelden und die weitere Anmeldemethode in den Einstellungen ausdrücklich verknüpfen. Konten werden nicht anhand gleicher E-Mail-Adressen zusammengeführt.";
   if (code === "permission-denied")
     return "Firebase verweigert das Speichern oder Lesen. Bitte die Firestore-Regeln und Datenbank prüfen. Deine lokale Kopie bleibt erhalten.";
   if (code === "unavailable")

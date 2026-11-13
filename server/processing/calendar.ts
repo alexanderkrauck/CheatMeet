@@ -33,7 +33,7 @@ export async function syncWorkerCalendar(j:ProcessingJob,r:ReportData,options:Op
       });
       token=await access(j.googleSub);
     }
-    const url=microsoft?`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(r.calendarId)}/events/${encodeURIComponent(r.calendarEventId)}`
+    const url=microsoft?`https://graph.microsoft.com/v1.0/me/${r.calendarId==='primary'?'':`calendars/${encodeURIComponent(r.calendarId)}/`}events/${encodeURIComponent(r.calendarEventId)}`
       :`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(r.calendarId)}/events/${encodeURIComponent(r.calendarEventId)}`;
     const call=async(init:RequestInit={})=>{
       const res=await f(url,{...init,headers:{...init.headers,Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(microsoft?{Prefer:'IdType="ImmutableId"'}:{})},redirect:'error',signal:AbortSignal.timeout(10000)});

@@ -4,7 +4,7 @@ Microsoft is an alternative to the existing Google connection, not a second appl
 
 ## User flow
 
-- New users can sign in with Microsoft. Existing users should **link Microsoft sign-in from settings while signed in to their existing workspace**, rather than create another workspace. Matching email addresses alone never merge accounts.
+- Google and Microsoft sign-in identify the workspace only; neither sign-in asks for archive/calendar permission. Only genuinely new Firebase accounts enter `/setup`, with separate storage and optional calendar steps. Returning accounts keep their UID, defaults, grants and archives without restarting setup. Settings offer symmetric explicit linking for both sign-in methods. Matching email addresses alone never merge accounts.
 - OneDrive authorization and optional Outlook calendar authorization are separate from Firebase sign-in. Both personal and organizational Microsoft accounts are intended to work; organizational consent, Conditional Access and OneDrive provisioning remain tenant-controlled.
 - Choose a OneDrive folder in settings as the default for future meetings, or choose a home for an individual meeting before recording/consent. Existing meetings retain their pinned home; no migration or dual-write occurs.
 - Calendar selection is independent: Google Calendar with OneDrive and Outlook with Google Drive are supported combinations. Linked calendar events retain their original provider and connection, regardless of later default changes.
@@ -63,7 +63,9 @@ The per-meeting JSON is canonical. Root `index.json`/`SCHEMA.md` are derived con
 
 Opted-in calendar write-back is provider-aware and nonfatal to archive completion. Outlook requests immutable IDs, preserves the current HTML/Teams body, replaces only the bounded CheatMeet block and uses a revision precondition. Automatic processing never creates a missing event.
 
-Resumable browser uploads are backed by owner-only server session handles: `/api/microsoft/uploads`, `/uploads/session` and `/uploads/complete`. Only the opaque handle is journaled on the device; preauthenticated upload URLs remain server-side except while returned to their owner for direct chunk upload. Graph bearer credentials are not forwarded to those URLs. Final acceptance requires a verified item, not merely a successful chunk request. Updating existing canonical text must retain a commit-time revision guard; creating a session with an ETag alone is not proof against edits during upload.
+Resumable browser uploads are backed by owner-only server session handles: `/api/microsoft/uploads`, `/uploads/session` and `/uploads/complete`. Only the opaque handle is journaled on the device; preauthenticated upload URLs remain server-side except while returned to their owner for direct chunk upload. Graph bearer credentials are not forwarded to those URLs. Final acceptance requires a verified item, not merely a successful chunk request. Emit OData annotations before ordinary item properties: real Graph rejects the opposite ordering even though generic JSON fixtures accept it.
+
+Existing bounded text uses native Graph `PUT /content` with the known `If-Match` revision; a real Business OneDrive check returned 200 followed by 412 for the stale revision. Personal-style deferred sourceUrl commits are not supported by Business OneDrive, so the client does not use them for text edits. The older server upload-update path fails closed rather than dropping its revision guard; clients must refresh to use the native text path. Large audio remains resumable, new-file-only upload-session data.
 
 ## Recovery and failure semantics
 

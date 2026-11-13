@@ -198,6 +198,11 @@ describe("server-held drive authorization", () => {
     expect(session.driveToken()).toBeNull();
   });
 
+  it('treats identity without a Drive connection as unconfigured, not revoked',async()=>{
+    const {session}=await load({mintStatus:403,mint:{error:'not connected',reauth:true,reason:'no_grant'} as never});
+    const changed=vi.fn();window.addEventListener('cheatmeet:drive-revoked',changed);
+    expect(await session.ensureDriveToken()).toBeNull();expect(changed).not.toHaveBeenCalled();
+  });
   it("signs the user out when the grant is gone", async () => {
     const { session } = await load({
       mintStatus: 403,

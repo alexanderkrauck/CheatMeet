@@ -1,5 +1,6 @@
-import { OAuthProvider, signInWithPopup, linkWithPopup } from "firebase/auth";
+import { OAuthProvider, signInWithPopup, linkWithPopup, getAdditionalUserInfo } from "firebase/auth";
 import { auth } from "./firebase";
+import {markIdentitySetup} from './identitySetup';
 function provider() {
   const p = new OAuthProvider("microsoft.com");
   p.setCustomParameters({ prompt: "select_account" });
@@ -11,7 +12,8 @@ export async function signInMicrosoft() {
     throw Error(
       "Bitte Microsoft in den Einstellungen ausdrücklich mit dem bestehenden Arbeitsbereich verknüpfen.",
     );
-  await signInWithPopup(auth, provider());
+  const result=await signInWithPopup(auth, provider());
+  if(result)markIdentitySetup(result.user.uid,getAdditionalUserInfo(result)?.isNewUser===true);
 }
 export async function linkMicrosoftIdentity() {
   const user = auth.currentUser;

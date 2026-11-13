@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { auth } from "../lib/firebase";
+
 import {
   cachedMicrosoftConnections,
   connectMicrosoft,
@@ -7,7 +7,7 @@ import {
   loadMicrosoftConnections,
   type MicrosoftConnection,
 } from "../lib/microsoft";
-import { linkMicrosoftIdentity } from "../lib/microsoftIdentity";
+
 import {
   listOneDriveFolders,
   oneDriveRoot,
@@ -29,10 +29,16 @@ export default function MicrosoftSettings({
   onSelect,
   meetingOnly = false,
   value,
+  storageOnly = false,
+  onSaved,
+  defaultSelectionDisabled = false,
 }: {
   onSelect?: (home: MicrosoftHome | null) => void;
   meetingOnly?: boolean;
   value?: MicrosoftHome | null;
+  storageOnly?: boolean;
+  onSaved?: (home: MicrosoftHome | null) => void;
+  defaultSelectionDisabled?: boolean;
 }) {
   const [connections, setConnections] = useState<MicrosoftConnection[]>(
     cachedMicrosoftConnections,
@@ -102,6 +108,7 @@ export default function MicrosoftSettings({
     if (onSelect) onSelect(next);
     else await saveMeetingHome(next);
     setHome(next);
+    onSaved?.(next);
     setCurrent(null);
     setMessage(
       onSelect
@@ -111,33 +118,13 @@ export default function MicrosoftSettings({
   }
   return (
     <section className="panel" aria-label="Microsoft und Meeting-Speicherort">
-      <h2>
-        {meetingOnly ? "Speicherort dieses Meetings" : "Microsoft und OneDrive"}
-      </h2>
+      <h2>{meetingOnly ? "Speicherort dieses Meetings" : "OneDrive"}</h2>
       <p className="muted">
         Anmeldung und Microsoft-Dateizugriff sind getrennt. OneDrive benötigt
         „Files.ReadWrite“: Zugriff auf deine eigenen Dateien, nicht nur diesen
         Ordner. Bestehende Freigaben bleiben unverändert.
       </p>
-      {!meetingOnly &&
-        !auth.currentUser?.providerData.some(
-          (p) => p.providerId === "microsoft.com",
-        ) && (
-          <button
-            className="btn"
-            disabled={busy}
-            onClick={() =>
-              void act(async () => {
-                await linkMicrosoftIdentity();
-                setMessage(
-                  "Microsoft-Anmeldung mit diesem Arbeitsbereich verknüpft.",
-                );
-              })
-            }
-          >
-            Microsoft-Anmeldung ausdrücklich verknüpfen
-          </button>
-        )}
+
       <div className="actions">
         <button
           className="btn"
@@ -153,7 +140,7 @@ export default function MicrosoftSettings({
         >
           OneDrive verbinden
         </button>
-        {!meetingOnly && (
+        {!meetingOnly && !storageOnly && (
           <button
             className="btn"
             disabled={busy}
@@ -188,7 +175,7 @@ export default function MicrosoftSettings({
           )}
         </p>
       ))}
-      {!meetingOnly && (
+      {!meetingOnly && !storageOnly && (
         <label className="form-field">
           Kalender für neue Zuordnungen
           <select
@@ -212,17 +199,19 @@ export default function MicrosoftSettings({
         <strong>
           {home
             ? `OneDrive · ${home.rootName}`
-            : "Google Drive (bisheriger Standard)"}
+            : "Kein OneDrive-Standardspeicher ausgewählt"}
         </strong>
       </p>
       <div className="actions">
-        <button
-          className="btn"
-          disabled={busy}
-          onClick={() => void act(() => select(null))}
-        >
-          Google Drive wählen
-        </button>
+        {meetingOnly && (
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={() => void act(() => select(null))}
+          >
+            Google Drive wählen
+          </button>
+        )}
         {connections.length > 0 && (
           <>
             <select
@@ -255,7 +244,7 @@ export default function MicrosoftSettings({
           <h3>{current.name || "OneDrive"}</h3>
           <button
             className="btn"
-            disabled={busy}
+            disabled={busy || defaultSelectionDisabled}
             onClick={() =>
               void act(async () => {
                 await select({

@@ -1,4 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
+import { Link } from "react-router-dom";
 import { RetentionSettings } from "../components/RetentionSettings";
 import { signOut } from "firebase/auth";
 import { LogOut, Mic, ShieldOff, UserRound } from "lucide-react";
@@ -11,6 +12,7 @@ import Preferences from "../components/Preferences";
 import StorageSettings from "../components/StorageSettings";
 import { Notice } from "../components/UI";
 import { auth } from "../lib/firebase";
+import { linkMicrosoftIdentity } from "../lib/microsoftIdentity";
 import {
   calendarSyncEnabled,
   consentStepEnabled,
@@ -23,9 +25,10 @@ import {
 } from "../lib/meetingDefaults";
 import {
   errorMessage,
-  hasCalendarGrant,
+  linkGoogleIdentity,
   revokeDriveGrant,
   subscribeDriveSession,
+  driveToken,
 } from "../lib/session";
 import {
   audioSourcePreference,
@@ -59,7 +62,26 @@ export default function SettingsPage() {
     () => false,
   );
   const [revoking, setRevoking] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const [methods, setMethods] = useState(
+    () => user?.providerData.map((p) => p.providerId) || [],
+  );
   const [error, setError] = useState("");
+  const googleDriveConnected=useSyncExternalStore(subscribeDriveSession,()=>Boolean(driveToken()),()=>false);
+
+  async function linkIdentity(provider: "google" | "microsoft") {
+    setLinking(true);
+    setError("");
+    try {
+      if (provider === "google") await linkGoogleIdentity();
+      else await linkMicrosoftIdentity();
+      setMethods(auth.currentUser?.providerData.map((p) => p.providerId) || []);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setLinking(false);
+    }
+  }
 
   async function revoke() {
     // Google's revoke endpoint drops the grant for this app on every device,
@@ -86,7 +108,7 @@ export default function SettingsPage() {
       <div className="page-head">
         <div>
           <h1>Einstellungen</h1>
-          <p className="muted">Speicherort, Analyse und Aufnahme.</p>
+          <p className="muted">Konto, Verbindungen und Aufnahme.</p>
         </div>
       </div>
 
@@ -111,6 +133,29 @@ export default function SettingsPage() {
               <small className="muted">{user?.email}</small>
             </span>
           </p>
+          <h3>Anmeldemethoden</h3>
+          <p className="muted small">
+            Verknüpfe weitere Anmeldemethoden ausdrücklich mit diesem
+            Arbeitsbereich, statt ein neues Konto anzulegen. Speicher- und
+            Kalenderzugriff werden separat eingerichtet.
+          </p>
+          <div className="actions">
+            {(["google", "microsoft"] as const).map((provider) => {
+              const linked = methods.includes(`${provider}.com`);
+              const name = provider === "google" ? "Google" : "Microsoft";
+              return (
+                <button
+                  key={provider}
+                  className="btn"
+                  disabled={linking || linked}
+                  onClick={() => void linkIdentity(provider)}
+                >
+                  {name}
+                  {linked ? " · Anmeldung verknüpft" : "-Anmeldung verknüpfen"}
+                </button>
+              );
+            })}
+          </div>
           <div className="actions">
             <button
               type="button"
@@ -119,24 +164,35 @@ export default function SettingsPage() {
             >
               <LogOut size={16} /> Abmelden
             </button>
-            <button
-              type="button"
-              className="btn danger"
-              disabled={revoking}
-              onClick={() => void revoke()}
-            >
-              <ShieldOff size={16} />
-              {revoking ? "Wird entzogen …" : "Google-Drive-Zugriff entziehen"}
-            </button>
+
           </div>
           <p className="muted small">
-            Abmelden beendet nur diese Sitzung. „Drive-Zugriff entziehen“ gilt
-            für alle Geräte und meldet dich ab.
+            Abmelden beendet nur diese Sitzung; bestehende Verbindungen bleiben
+            erhalten.
+
           </p>
         </section>
 
-        <DriveSettings />
-        <MicrosoftSettings />
+        <section className="panel" aria-labelledby="connections-title">
+          <span className="eyebrow">VERBINDUNGEN</span>
+          <h2 id="connections-title">Speicher und Kalender</h2>
+          <p className="muted">
+            Google Drive oder OneDrive für neue Meetings; Google Kalender oder
+            Outlook unabhängig davon. Änderungen verschieben keine bestehenden
+            Meetings.
+          </p>
+          <Link className="btn btn-primary" to="/setup">
+            Verbindungen einrichten
+          </Link>
+        </section>
+        <div className="connection-provider-grid">
+          <div>
+            <DriveSettings />
+            {googleDriveConnected&&<button type="button" className="btn danger" disabled={revoking} onClick={()=>void revoke()}><ShieldOff size={16}/>{revoking?'Wird entzogen …':'Google-Drive-Zugriff entziehen'}</button>}
+            {googleDriveConnected&&<p className="muted small">Entziehen gilt für Google Drive auf allen Geräten und meldet diesen Arbeitsbereich ab. Gespeicherte Dateien bleiben erhalten.</p>}
+          </div>
+          <MicrosoftSettings storageOnly />
+        </div>
 
         <McpClients />
 
@@ -168,7 +224,7 @@ export default function SettingsPage() {
           </label>
           <p className="muted small">
             Wird verwendet, sobald du für ein Meeting „Nur eine Person am
-            Mikrofon“ aktivierst. Leer lassen übernimmt den Google-Namen.
+            Mikrofon“ aktivierst. Leer lassen übernimmt deinen Kontonamen.
           </p>
           <label className="confirm-option">
             <input
@@ -232,6 +288,9 @@ export default function SettingsPage() {
             <span className="eyebrow">KALENDER</span>
             <h2 id="calendar-title">Termine und Zusammenfassungen</h2>
           </div>
+          <Link className="btn" to="/setup">
+            Kalender verbinden oder auswählen
+          </Link>
           {calendarReady ? (
             <>
               <p className="muted">

@@ -1007,10 +1007,39 @@ textarea {
   gap: 16px;
   max-width: 720px;
 }
-.settings-stack > .panel {
+.settings-stack > .panel,
+.connection-provider-grid > .panel {
   display: grid;
+  align-content: start;
   gap: 13px;
   padding: 24px;
+  min-width: 0;
+}
+.connection-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.connection-provider-grid .actions {
+  flex-wrap: wrap;
+}
+.connection-provider-grid .btn {
+  white-space: normal;
+}
+.connection-provider-grid .field {
+  max-width: 100%;
+}
+.connection-setup [aria-current="step"] {
+  font-weight: 700;
+  color: var(--brand);
+}
+.login-button + .login-button {
+  margin-top: 12px;
+}
+@media (max-width: 640px) {
+  .connection-provider-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 /* The stack owns the rhythm; the eyebrow must not add a second one. */
 .settings-stack .eyebrow {

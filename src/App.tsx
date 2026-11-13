@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { captureSnapshot, disarmCapture } from "./lib/capture";
 import {
   startRetentionSweep,
   stopRetentionSweep,
 } from "./lib/retentionSweep";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { observeServerProcessing } from "./lib/pipeline";
 import { auth } from "./lib/firebase";
@@ -28,10 +28,17 @@ import InstallApp from "./components/InstallApp";
 import JobProgress from "./components/JobProgress";
 import RecordingBar from "./components/RecordingBar";
 import { Loader2 } from "lucide-react";
+import ConnectionSetup from './components/ConnectionSetup';
+import {identitySetupPending,completeIdentitySetup,subscribeIdentitySetup} from './lib/identitySetup';
+function SetupRoute({owner}:{owner:string}){
+  const navigate=useNavigate();
+  return <ConnectionSetup onComplete={()=>{completeIdentitySetup(owner);navigate('/dashboard',{replace:true});}}/>;
+}
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [revoked, setRevoked] = useState("");
+  const setupPending=useSyncExternalStore(subscribeIdentitySetup,()=>Boolean(user&&identitySetupPending(user.uid)),()=>false);
   // Identity and Drive permission are independent. Keep the user signed in
   // so a blocked server job remains visible while Drive is reconnected.
   useEffect(() => {
@@ -52,8 +59,8 @@ export default function App() {
         // consent notice aloud with the microphone already open.
         const armed = captureSnapshot();
         if (armed.state === "armed" && u?.uid !== armed.owner) disarmCapture();
-        // Signed in implies Drive-authorized: keep a usable token on hand
-        // instead of prompting when an upload is already under way.
+        // Discover/renew an existing Google grant; an identity-only account
+        // without one is unconfigured, not signed out or forced to use Google.
         if (u) {
           if(u.providerData.some(p=>p.providerId==="google.com"))startDriveTokenRefresh();else stopDriveTokenRefresh();
           void loadMicrosoftConnections().catch(()=>{});
@@ -97,7 +104,7 @@ export default function App() {
           <Route
             path="/"
             element={
-              user ? <Navigate to="/dashboard" replace /> : <Login notice={revoked} />
+              user ? <Navigate to={setupPending?'/setup':'/dashboard'} replace /> : <Login notice={revoked} />
             }
           />
           {/* Reachable signed out: signing in re-renders this page, keeping the signed request in the address. */}
@@ -106,7 +113,8 @@ export default function App() {
           <Route
             element={user ? <AppLayout /> : <Navigate to="/" replace />}
           >
-            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/dashboard" element={setupPending?<Navigate to="/setup" replace/>:<Dashboard />} />
+            <Route path="/setup" element={user?<SetupRoute owner={user.uid}/>:<Navigate to="/" replace/>} />
             <Route path="/calendar" element={<CalendarPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/report/:id" element={<ReportPage />} />
