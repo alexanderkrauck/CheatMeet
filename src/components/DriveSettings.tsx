@@ -1,6 +1,17 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { mergeRestoredReport } from "../lib/reportProjection";
-import { FolderOpen, ExternalLink } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  FolderOpen,
+  ExternalLink,
+  HardDrive,
+} from "lucide-react";
 import {
   chooseDriveFolder,
   getRootFolder,
@@ -14,7 +25,13 @@ import {
   findOrCreateRootFolder,
   listDriveReports,
 } from "../lib/drive";
-import { connectGoogle, ensureDriveToken, errorMessage } from "../lib/session";
+import {
+  connectGoogle,
+  driveToken,
+  ensureDriveToken,
+  errorMessage,
+  subscribeDriveSession,
+} from "../lib/session";
 import { getLocal, putLocal, ReportConflictError } from "../lib/local";
 import { uid } from "../lib/reports";
 import {
@@ -22,24 +39,33 @@ import {
   savedMeetingHome,
   loadProviderSettings,
 } from "../lib/providerSettings";
+import "../pages/settings.css";
+
 export default function DriveSettings({
   onImported,
   onSelected,
   defaultSelectionDisabled = false,
   meetingOnly = false,
   selected = false,
+  children,
 }: {
   onImported?: () => void;
   onSelected?: () => void;
   defaultSelectionDisabled?: boolean;
   meetingOnly?: boolean;
   selected?: boolean;
+  children?: ReactNode;
 }) {
   const [folder, setFolder] = useState<DriveFolder | null>(savedDriveFolder);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [googleDefault, setGoogleDefault] = useState(() => !savedMeetingHome());
   const [ready, setReady] = useState(false);
+  const connected = useSyncExternalStore(
+    subscribeDriveSession,
+    () => Boolean(driveToken()),
+    () => false,
+  );
   useEffect(() => {
     let active = true;
     const refresh = () => {
@@ -102,7 +128,9 @@ export default function DriveSettings({
       const user = uid();
       const check = () => {
         if (uid() !== user)
-          throw new Error("Das Google-Konto wurde gewechselt. Bitte die Wiederherstellung erneut starten.");
+          throw new Error(
+            "Das Google-Konto wurde gewechselt. Bitte die Wiederherstellung erneut starten.",
+          );
       };
       const run = async <T,>(operation: () => Promise<T>) => {
         check();
@@ -110,20 +138,33 @@ export default function DriveSettings({
         check();
         return value;
       };
-      const token = (await run(() => ensureDriveToken())) || (await run(() => connectGoogle()));
+      const token =
+        (await run(() => ensureDriveToken())) ||
+        (await run(() => connectGoogle()));
       const root = await run(() => getRootFolder(token));
-      const { reports, warnings } = await run(() => listDriveReports(token, root));
+      const { reports, warnings } = await run(() =>
+        listDriveReports(token, root),
+      );
       let count = 0;
       let skipped = 0;
       for (const report of reports) {
-        const local = await run(() => getLocal(user, report.id, { index: "reports" }));
+        const local = await run(() =>
+          getLocal(user, report.id, { index: "reports" }),
+        );
         const merged = mergeRestoredReport(local, report);
         if (!merged) {
           skipped++;
           continue;
         }
         try {
-          await run(() => putLocal(user, merged, local?.dirty ?? true, local?.report.updatedAt ?? null));
+          await run(() =>
+            putLocal(
+              user,
+              merged,
+              local?.dirty ?? true,
+              local?.report.updatedAt ?? null,
+            ),
+          );
         } catch (error) {
           check();
           if (!(error instanceof ReportConflictError)) throw error;
@@ -142,21 +183,61 @@ export default function DriveSettings({
       setBusy(false);
     }
   }
+  const connectAction = (
+    <button
+      type="button"
+      className={`btn ${connected ? "provider-quiet-button" : "btn-primary"}`}
+      disabled={busy}
+      onClick={() => {
+        setBusy(true);
+        setMessage("");
+        void connectGoogle()
+          .then(() =>
+            setMessage(
+              "Google Drive verbunden. Der Standardspeicher bleibt unverändert.",
+            ),
+          )
+          .catch((e) => setMessage(errorMessage(e)))
+          .finally(() => setBusy(false));
+      }}
+    >
+      Google Drive verbinden
+    </button>
+  );
   if (meetingOnly)
     return (
       <section
-        className="panel drive-settings"
+        className="panel drive-settings provider-card provider-meeting"
         aria-label="Google Drive für dieses Meeting"
       >
-        <h2>Google Drive</h2>
-        <p className="muted">
-          Ordner: <strong>{folder?.name || DEFAULT_FOLDER_NAME}</strong>. Nur
-          den Speicher dieses Meetings wählen; der Standard für künftige
+        <header className="provider-heading">
+          <span className="provider-mark" aria-hidden="true">
+            <HardDrive size={20} />
+          </span>
+          <div>
+            <h2>Google Drive</h2>
+            <p>Speicher für dieses Meeting</p>
+          </div>
+          {selected && (
+            <span className="provider-status is-selected">
+              <Check size={12} aria-hidden="true" /> Gewählt
+            </span>
+          )}
+        </header>
+        <div className="provider-folder">
+          <FolderOpen size={18} aria-hidden="true" />
+          <div>
+            <small>Meeting-Archiv</small>
+            <strong>{folder?.name || DEFAULT_FOLDER_NAME}</strong>
+          </div>
+        </div>
+        <p className="provider-note">
+          Nur den Speicher dieses Meetings wählen; der Standard für künftige
           Meetings bleibt unverändert.
         </p>
         <button
           type="button"
-          className="btn"
+          className={`btn ${selected ? "provider-selected-button" : "btn-primary"}`}
           aria-pressed={selected}
           disabled={busy || !onSelected}
           onClick={() => {
@@ -177,7 +258,7 @@ export default function DriveSettings({
           Google Drive für dieses Meeting wählen
         </button>
         {message && (
-          <p className="notice" role="status">
+          <p className="notice provider-notice" role="status">
             {message}
           </p>
         )}
@@ -185,54 +266,61 @@ export default function DriveSettings({
     );
   return (
     <section
-      className="panel drive-settings"
+      className="panel drive-settings provider-card"
       aria-labelledby="drive-settings-title"
     >
-      <div>
-        <span className="eyebrow">GOOGLE DRIVE</span>
-        <h2 id="drive-settings-title">Google Drive</h2>
-      </div>
-      <p className="muted">
+      <header className="provider-heading">
+        <span className="provider-mark" aria-hidden="true">
+          <HardDrive size={20} />
+        </span>
+        <div>
+          <h2 id="drive-settings-title">Google Drive</h2>
+          <p>Dein Meeting-Archiv</p>
+        </div>
+        <span
+          className={`provider-status${ready && googleDefault ? " is-selected" : ""}`}
+        >
+          {ready && googleDefault ? (
+            <>
+              <Check size={12} aria-hidden="true" /> Standard
+            </>
+          ) : connected ? (
+            "Zugriff verfügbar"
+          ) : (
+            "Zugriff prüfen"
+          )}
+        </span>
+      </header>
+      <p className="provider-description">
         Audio, Transkript und Bericht liegen in deinem Drive. Jedes Meeting
         bekommt einen eigenen Ordner.
       </p>
-      <p className="drive-folder">
-        <FolderOpen size={20} aria-hidden="true" />{" "}
-        <strong>{folder?.name || DEFAULT_FOLDER_NAME}</strong>
+      <div className="provider-folder">
+        <FolderOpen size={18} aria-hidden="true" />
+        <div>
+          <small>Ordner für neue Meetings</small>
+          <strong>{folder?.name || DEFAULT_FOLDER_NAME}</strong>
+        </div>
         {folder && (
           <a
             href={`https://drive.google.com/drive/folders/${encodeURIComponent(folder.id)}`}
             target="_blank"
             rel="noreferrer"
             aria-label="Speicherordner in Google Drive öffnen"
+            className="provider-icon-action"
           >
-            <ExternalLink size={18} />
+            <ExternalLink size={16} aria-hidden="true" />
           </a>
         )}
-      </p>
-      <div className="actions">
+      </div>
+      {!connected && (
+        <div className="provider-primary-actions">{connectAction}</div>
+      )}
+      <div className="provider-primary-actions">
         <button
           type="button"
           className="btn"
-          disabled={busy}
-          onClick={() => {
-            setBusy(true);
-            setMessage("");
-            void connectGoogle()
-              .then(() =>
-                setMessage(
-                  "Google Drive verbunden. Der Standardspeicher bleibt unverändert.",
-                ),
-              )
-              .catch((e) => setMessage(errorMessage(e)))
-              .finally(() => setBusy(false));
-          }}
-        >
-          Google Drive verbinden
-        </button>
-        <button
-          type="button"
-          className="btn"
+          aria-label="Ordner auswählen"
           onClick={() => void select()}
           disabled={busy}
         >
@@ -240,14 +328,44 @@ export default function DriveSettings({
         </button>
         <button
           type="button"
-          className="btn"
-          disabled={busy}
-          onClick={() => void select(true)}
+          className={`btn ${ready && googleDefault ? "provider-selected-button" : "btn-primary"}`}
+          aria-label="Google Drive als Standardspeicher verwenden"
+          disabled={busy || defaultSelectionDisabled}
+          aria-pressed={ready && googleDefault}
+          onClick={() => {
+            setBusy(true);
+            setMessage("");
+            const owner = uid();
+            void (async () => {
+              (await ensureDriveToken()) || (await connectGoogle());
+              if (uid() !== owner)
+                throw new Error(
+                  "Das angemeldete Konto hat sich geändert. Bitte den Standardspeicher erneut wählen.",
+                );
+              await saveMeetingHome(null);
+              if (uid() !== owner)
+                throw new Error("Das angemeldete Konto hat sich geändert.");
+              onSelected?.();
+              setReady(true);
+              setGoogleDefault(true);
+              setMessage(
+                "Google Drive als Standard für neue Meetings gespeichert. Bestehende Meetings bleiben unverändert.",
+              );
+            })()
+              .catch((e) => setMessage(errorMessage(e)))
+              .finally(() => setBusy(false));
+          }}
         >
-          Standardordner verwenden
+          {ready && googleDefault ? (
+            <>
+              <Check size={14} aria-hidden="true" /> Als Standard gewählt
+            </>
+          ) : (
+            "Als Standard verwenden"
+          )}
         </button>
       </div>
-      <p className="muted small">
+      <p className="provider-note">
         {!ready
           ? "Die Anbieterwahl ist noch nicht bestätigt."
           : googleDefault
@@ -255,47 +373,62 @@ export default function DriveSettings({
             : "Auswahl für neue Meetings: OneDrive. Ein Google-Ordner ändert das nicht."}{" "}
         Bestehende Meetings behalten ihren Ordner.
       </p>
-      <button
-        type="button"
-        className="btn"
-        disabled={busy || defaultSelectionDisabled}
-        aria-pressed={ready && googleDefault}
-        onClick={() => {
-          setBusy(true);
-          setMessage("");
-          const owner = uid();
-          void (async () => {
-            (await ensureDriveToken()) || (await connectGoogle());
-            if (uid() !== owner)
-              throw new Error(
-                "Das angemeldete Konto hat sich geändert. Bitte den Standardspeicher erneut wählen.",
-              );
-            await saveMeetingHome(null);
-            if (uid() !== owner)
-              throw new Error("Das angemeldete Konto hat sich geändert.");
-            onSelected?.();
-            setReady(true);
-            setGoogleDefault(true);
-            setMessage(
-              "Google Drive als Standard für neue Meetings gespeichert. Bestehende Meetings bleiben unverändert.",
-            );
-          })()
-            .catch((e) => setMessage(errorMessage(e)))
-            .finally(() => setBusy(false));
-        }}
-      >
-        Google Drive als Standardspeicher verwenden
-      </button>
-      <button
-        type="button"
-        className="btn"
-        disabled={busy}
-        onClick={() => void recover()}
-      >
-        Berichte aus Drive wiederherstellen
-      </button>
+      <details className="provider-advanced">
+        <summary>
+          Weitere Optionen <ChevronDown size={15} aria-hidden="true" />
+        </summary>
+        <div className="provider-advanced-content">
+          {connected && (
+            <div className="provider-operation">
+              <div>
+                <strong>Zugriff verbinden</strong>
+                <p>
+                  Die Freigabe ändert weder deine Anmeldung noch den
+                  Standardspeicher.
+                </p>
+              </div>
+              {connectAction}
+            </div>
+          )}
+          <div className="provider-operation">
+            <div>
+              <strong>App-Ordner verwenden</strong>
+              <p>
+                Verwendet „{DEFAULT_FOLDER_NAME}“ für neue Meetings mit Google
+                Drive.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn provider-quiet-button"
+              disabled={busy}
+              onClick={() => void select(true)}
+            >
+              Standardordner verwenden
+            </button>
+          </div>
+          <div className="provider-operation">
+            <div>
+              <strong>Archiv wiederherstellen</strong>
+              <p>
+                Liest gespeicherte Berichte ein. Neuere oder nicht
+                synchronisierte lokale Fassungen bleiben erhalten.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn provider-quiet-button"
+              disabled={busy}
+              onClick={() => void recover()}
+            >
+              Berichte aus Drive wiederherstellen
+            </button>
+          </div>
+          {children}
+        </div>
+      </details>
       {message && (
-        <p className="notice" role="status">
+        <p className="notice provider-notice" role="status">
           {message}
         </p>
       )}

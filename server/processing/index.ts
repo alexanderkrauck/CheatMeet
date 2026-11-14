@@ -9,7 +9,7 @@ import type { DocStore } from '../mcp/docStore';
 import { runtimeOptions } from './runtime';
 import { toArchive } from '../../src/lib/archive';
 import { withProcessingBudget } from './budget';
-import { microsoftHome, type MicrosoftHome } from '../../shared/storage';
+import { archiveAudioId, microsoftHome, type MicrosoftHome } from '../../shared/storage';
 import { withCalendarFreshness } from '../../shared/calendarNotes';
 export { processingConfigured } from './runtime';
 
@@ -18,6 +18,8 @@ export interface ProcessingJob extends ProcessingJobView {
   owner: string; googleSub: string; key: string; run: string; seq: number;
   refs: { id:string; driveFolderId:string; driveReportId:string; home?:MicrosoftHome };
   revision:string; indexRevision:string; analyze:boolean; retranscribe:boolean; calendarSync:boolean; regenerate?:boolean;
+  /** New explicit passes must own their native reservation, not reuse older ASR output. */
+  requireNewBatch?:boolean;
   preferences:string; step:'prepare'|'analyze'|'export'|'publish'; failures:number; polls:number;
   lease?:string; leaseUntil?:number;
 }
@@ -28,6 +30,10 @@ export interface ProcessingIO {
   export(job:ProcessingJob,report:ReportData):Promise<ReportData>;
   publish(job:ProcessingJob,report:ReportData):Promise<void>;
 }
+export interface RetranscriptionEligibility {
+  state:'available'|'used'|'uncertain'|'busy'|'missing-audio'|'unavailable';
+  message:string;
+}
 export interface ProcessingOptions {
   enabled:()=>boolean; store:DocStore<ProcessingJob>;
   identify:(token:string)=>Promise<{uid:string;googleSub:string}>;
@@ -36,6 +42,8 @@ export interface ProcessingOptions {
   io:ProcessingIO;
   analyze:(text:string,preferences:string)=>Promise<{title:string;summary:string;transcription:string;todos:ReportData['todos'];takeaways:string[]}>;
   batch?:(job:ProcessingJob,report:ReportData)=>Promise<MeetingTranscript|null>;
+  /** Native reservation metadata only; must never poll or submit to the provider. */
+  retranscription?:(owner:string,id:string)=>Promise<RetranscriptionEligibility>;
   now?:()=>number;
   preferences?:(owner:string)=>Promise<string>;
 }
@@ -58,6 +66,24 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
     try{return await o.identify(token);}catch{throw new ProcessingError(401,'Bitte erneut anmelden.');}
   };
   const fail=(res:express.Response,e:unknown)=>res.status(e instanceof ProcessingError?e.status:503).json({error:e instanceof ProcessingError?e.message:'Verarbeitung derzeit nicht verfügbar. Bitte später erneut versuchen.'});
+  const references=(req:express.Request):ProcessingJob['refs']=>{
+    const r=req.body?.report;
+    let home:MicrosoftHome|undefined;
+    if(r?.home!==undefined){
+      try{home=microsoftHome(r.home);}catch{throw new ProcessingError(400,'Ungültiger OneDrive-Speicherort.');}
+      if(!providerAware(req)||!home.folderId||!home.reportId||r.driveFolderId||r.driveReportId||r.rawAudioUrl)throw new ProcessingError(400,'Eindeutige OneDrive-Berichtsreferenzen fehlen.');
+    }
+    if(!r||!validId(req.params.id)||r.id!==req.params.id||!home&&(!validId(r.driveFolderId)||!validId(r.driveReportId)))throw new ProcessingError(400,'Gesicherte Berichtsreferenzen fehlen.');
+    return {id:r.id,driveFolderId:home?.folderId||r.driveFolderId,driveReportId:home?.reportId||r.driveReportId,...(home?{home}:{})};
+  };
+  const assertJobSource=(current:ProcessingJob|null,owner:string,refs:ProcessingJob['refs'])=>{
+    if(current&&(current.owner!==owner||processingSourceKey(current.refs)!==processingSourceKey(refs)))throw new ProcessingError(409,'Der Auftrag gehört zu einem anderen Meeting-Speicherort.',true);
+  };
+  const fullPassEligibility=async(owner:string,report:ReportData):Promise<RetranscriptionEligibility>=>{
+    if(!o.enabled()||!o.batch||!o.retranscription)return {state:'unavailable',message:'Transkription ist nicht eingerichtet.'};
+    if(report.audioDeletedAt||!archiveAudioId(report))return {state:'missing-audio',message:'Gesicherte Audioaufnahme fehlt. Das bisherige Transkript bleibt erhalten.'};
+    return o.retranscription(owner,report.id);
+  };
   const assertSelected=(req:express.Request,j:ProcessingJob)=>{
     if(j.refs.home&&!providerAware(req))throw new ProcessingError(404,'Auftrag nicht gefunden.');
     const source=req.query.source ?? req.body?.source;
@@ -130,8 +156,10 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
                 if(j.polls>=360)throw new ProcessingError(422,'Transkription dauert zu lange. Der bestehende Auftrag bleibt erhalten.',true);
                 patch={state:'transcribing',polls:j.polls+1};delay=30;
               }else{
+                const previousText=report.transcription;
                 report={...report,speech:report.transcriptionOrigin!=='import'&&report.speech?reconcileSpeakers(report.speech,speech):{...speech,speakerReview:'skipped'},transcription:renderTranscript(speech)};
                 if(report.speech)report.transcription=renderTranscript(report.speech);
+                if(report.summary.trim()&&report.transcription!==previousText)report.summaryNeedsRefresh=true;
               }
             }
             if(!delay){
@@ -216,45 +244,64 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
     }
     res.setHeader('Cache-Control','no-store');res.json({job:publicJob(j),...(report?{report}:{})});
   }catch(e){fail(res,e);}});
+  // Read-only POST keeps the pinned home out of URLs and never polls paid ASR.
+  router.post('/processing/:id/retranscription-status',express.json({limit:'12kb'}),async(req,res)=>{try{
+    const a=await auth(req);const refs=references(req);
+    const existing=await o.store.get(jobKey(a.uid,refs.id));
+    assertJobSource(existing,a.uid,refs);
+    const source=await o.io.load({owner:a.uid,googleSub:a.googleSub,refs});
+    const current=await o.store.get(jobKey(a.uid,refs.id));
+    assertJobSource(current,a.uid,refs);
+    const result:RetranscriptionEligibility=current&&processingActive(current)
+      ? {state:'busy',message:'Dieses Meeting wird noch verarbeitet. Bitte das Ende der Verarbeitung abwarten.'}
+      : await fullPassEligibility(a.uid,source.report);
+    res.setHeader('Cache-Control','no-store');res.json(result);
+  }catch(e){fail(res,e);}});
   router.post('/processing/:id',express.json({limit:'12mb'}),async(req,res)=>{try{
     const a=await auth(req);
     if(!o.enabled())throw new ProcessingError(503,'Serververarbeitung ist nicht eingerichtet.');
-    const b=req.body;const r=b?.report;
-    let home:MicrosoftHome|undefined;
-    if(r?.home!==undefined){
-      try{home=microsoftHome(r.home);}catch{throw new ProcessingError(400,'Ungültiger OneDrive-Speicherort.');}
-      if(!providerAware(req)||!home.folderId||!home.reportId||r.driveFolderId||r.driveReportId||r.rawAudioUrl)throw new ProcessingError(400,'Eindeutige OneDrive-Berichtsreferenzen fehlen.');
-    }
-    if(!r||!validId(req.params.id)||r.id!==req.params.id||!home&&(!validId(r.driveFolderId)||!validId(r.driveReportId))||typeof b.analyze!=='boolean'||['retranscribe','calendarSync','regenerate'].some(k=>b[k]!==undefined&&typeof b[k]!=='boolean')||b.preferences!==undefined&&(typeof b.preferences!=='string'||b.preferences.length>20000))throw new ProcessingError(400,'Gesicherte Berichtsreferenzen fehlen.');
-    const refs:ProcessingJob['refs']={id:r.id,driveFolderId:home?.folderId||r.driveFolderId,driveReportId:home?.reportId||r.driveReportId,...(home?{home}:{})};
+    const b=req.body;const refs=references(req);
+    if(typeof b.analyze!=='boolean'||['retranscribe','calendarSync','regenerate'].some(k=>b[k]!==undefined&&typeof b[k]!=='boolean')||b.preferences!==undefined&&(typeof b.preferences!=='string'||b.preferences.length>20000))throw new ProcessingError(400,'Gesicherte Berichtsreferenzen fehlen.');
+    const r=b.report;
     const key=jobKey(a.uid,r.id);const existing=await o.store.get(key);
-    const assertSource=(current:ProcessingJob|null)=>{
-      if(current&&(current.owner!==a.uid||processingSourceKey(current.refs)!==processingSourceKey(refs)))throw new ProcessingError(409,'Der Auftrag gehört zu einem anderen Meeting-Speicherort.',true);
+    const assertSource=(current:ProcessingJob|null)=>assertJobSource(current,a.uid,refs);
+    const sameIntent=(current:ProcessingJob)=>current.analyze===b.analyze
+      &&(current.analyze&&current.retranscribe)===(b.analyze&&b.retranscribe===true)
+      &&(current.analyze&&current.regenerate===true)===(b.analyze&&b.regenerate===true);
+    const assertIntent=(current:ProcessingJob)=>{
+      if(!sameIntent(current))throw new ProcessingError(409,'Dieses Meeting wird bereits mit anderen Optionen verarbeitet. Bitte das Ende der Verarbeitung abwarten.',true);
     };
     assertSource(existing);
-    const reuse=async()=>{
+    const reuse=async(requireIntent=false)=>{
       const current=await o.store.mutate(key,c=>{
         assertSource(c);
         if(!c||c.run!==existing?.run)throw new ProcessingError(409,'Der Auftrag wurde inzwischen geändert. Bitte erneut versuchen.',true);
+        if(requireIntent||processingActive(c))assertIntent(c);
         return undefined;
       },meta);
       return current!;
     };
-    if(existing&&processingActive(existing)){const current=await reuse();await send(current);res.status(202).json({job:publicJob(current)});return;}
+    if(existing&&processingActive(existing)){const current=await reuse(true);await send(current);res.status(202).json({job:publicJob(current)});return;}
     const source=await o.io.load({owner:a.uid,googleSub:a.googleSub,refs});
-    if(existing?.state==='done'&&(existing.analyze||!b.analyze)&&existing.revision===source.revision){res.status(202).json({job:publicJob(await reuse())});return;}
-    if(existing?.state==='done'&&(existing.analyze||!b.analyze)){
+    const replacement=b.analyze&&(b.retranscribe===true||b.regenerate===true);
+    if(!replacement&&existing?.state==='done'&&(existing.analyze||!b.analyze)&&existing.revision===source.revision){res.status(202).json({job:publicJob(await reuse())});return;}
+    if(!replacement&&existing?.state==='done'&&(existing.analyze||!b.analyze)){
       const exported=await o.io.readCheckpoint(existing,'exported');
       const sorted=(v:any):any=>Array.isArray(v)?v.map(sorted):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,x])=>[k,sorted(x)])):v;
       const canonical=(r:ReportData)=>JSON.stringify(sorted(toArchive(r,'')));
       if(exported&&canonical(exported)===canonical(source.report)){res.status(202).json({job:publicJob(await reuse())});return;}
     }
+    const same=existing&&sameIntent(existing)&&['blocked','error','review'].includes(existing.state)&&existing.revision===source.revision&&existing.indexRevision===source.indexRevision;
+    if(b.analyze&&b.retranscribe===true){
+      const eligibility=await fullPassEligibility(a.uid,source.report);
+      const resumeUsed=same&&existing.state!=='review'&&eligibility.state==='used';
+      if(eligibility.state!=='available'&&!resumeUsed)throw new ProcessingError(eligibility.state==='unavailable'?503:eligibility.state==='missing-audio'?422:409,eligibility.message,true);
+    }
     const preferences=typeof b.preferences==='string'?b.preferences:await o.preferences?.(a.uid)||'';
-    const same=existing&&['blocked','error','review'].includes(existing.state)&&existing.revision===source.revision&&existing.indexRevision===source.indexRevision;
-    const fresh:ProcessingJob={reportId:r.id,key,owner:a.uid,googleSub:a.googleSub,refs,revision:source.revision,indexRevision:source.indexRevision,run:randomUUID(),seq:0,state:'queued',message:messages.queued,attempts:0,failures:0,polls:0,step:'prepare',analyze:b.analyze,retranscribe:b.retranscribe===true,calendarSync:b.calendarSync===true,regenerate:b.regenerate===true,preferences,updatedAt:stamp()};
+    const fresh:ProcessingJob={reportId:r.id,key,owner:a.uid,googleSub:a.googleSub,refs,revision:source.revision,indexRevision:source.indexRevision,run:randomUUID(),seq:0,state:'queued',message:messages.queued,attempts:0,failures:0,polls:0,step:'prepare',analyze:b.analyze,retranscribe:b.retranscribe===true,requireNewBatch:b.analyze&&b.retranscribe===true,calendarSync:b.calendarSync===true,regenerate:b.regenerate===true,preferences,updatedAt:stamp()};
     const next=await o.store.mutate(key,c=>{
       assertSource(c);
-      if(c&&processingActive(c))return undefined;
+      if(c&&processingActive(c)){assertIntent(c);return undefined;}
       if(c&&c.run!==existing?.run)throw new ProcessingError(409,'Der Auftrag wurde inzwischen geändert. Bitte erneut versuchen.',true);
       // Same-revision retries retain paid/result checkpoints and immutable run.
       return same&&c?.run===existing.run?{...c,state:'queued',message:messages.queued,error:undefined,failures:0,seq:c.seq+1,lease:undefined,leaseUntil:undefined,updatedAt:stamp()}:fresh;

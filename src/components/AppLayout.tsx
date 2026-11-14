@@ -11,6 +11,7 @@ import {
 import {
   BarChart3,
   CalendarDays,
+  ChevronRight,
   Cloud,
   LayoutGrid,
   LogOut,
@@ -53,6 +54,8 @@ export default function AppLayout() {
   const urlQuery = params.get("q") || "";
   const [query, setQuery] = useState(urlQuery);
   const onOverview = location.pathname === "/dashboard";
+  const area = NAV.find(({ to }) => to === location.pathname)?.label ||
+    (location.pathname === "/setup" ? "Verbindungen" : "Meeting");
   const user = auth.currentUser;
 
   useLayoutEffect(() => {
@@ -130,6 +133,7 @@ export default function AppLayout() {
           <Mic size={17} />
           Meeting aufnehmen
         </Link>
+        <p className="rail-label">Arbeitsbereich</p>
         <nav className="rail-nav" aria-label="Bereiche">
           {NAV.map(({ to, label, icon: Icon }) => (
             <NavLink key={to} to={to}>
@@ -161,6 +165,11 @@ export default function AppLayout() {
       <div className="app-main">
         <header className="topbar no-print">
           <Brand className="topbar-brand" />
+          <div className="workspace-path" aria-label="Aktueller Bereich">
+            <span>Arbeitsbereich</span>
+            <ChevronRight size={12} aria-hidden="true" />
+            <strong>{area}</strong>
+          </div>
           <form
             className="topbar-search"
             role="search"
@@ -188,6 +197,7 @@ export default function AppLayout() {
                 aria-label="Meetings durchsuchen (Strg/⌘+K)"
                 aria-keyshortcuts="Control+k Meta+k"
               />
+              <kbd aria-hidden="true">⌘/Strg K</kbd>
             </label>
           </form>
           <Menu title="Konto" icon={<UserRound size={18} />}>
@@ -212,7 +222,7 @@ export default function AppLayout() {
             Analyse und Cloud-Speichern benötigen Internet.
           </div>
         )}
-        <main className="page" id="inhalt" tabIndex={-1}>
+        <main className={`page${location.pathname.startsWith("/report/") ? " is-report" : ""}`} id="inhalt" tabIndex={-1}>
           <Outlet />
         </main>
         <PeopleDatalist />

@@ -225,6 +225,20 @@ describe("processing pipeline", () => {
     expect(acceptRemoteReport).not.toHaveBeenCalled();
   });
 
+  it.each(['newer', 'dirty', 'removed', 'audio', 'unsynced'])("does not submit paid replacement after the confirmed local report becomes %s", async (change) => {
+    const confirmed = { ...report, updatedAt: 'confirmed', summary: 'Keep this summary', driveFolderId: 'folder', driveReportId: 'json', rawAudioUrl: 'audio', driveSyncedAt: 'synced' };
+    getLocal.mockResolvedValue(change === 'removed' ? undefined : {
+      report: { ...confirmed,
+        ...(change === 'newer' ? { updatedAt: 'later-human-edit', summary: 'New local summary' } : {}),
+        ...(change === 'audio' ? { rawAudioUrl: 'replacement-audio' } : {}),
+        ...(change === 'unsynced' ? { driveSyncedAt: undefined } : {}),
+      }, dirty: change === 'dirty',
+    });
+    await expect(handoffServerProcessing('user-1', confirmed, { analyze: true, retranscribe: true, regenerate: true })).rejects.toMatchObject({ name: 'ReportConflictError' });
+    expect(remote.submit).not.toHaveBeenCalled();
+    expect(putLocal).not.toHaveBeenCalled();
+  });
+
   it("observes the durable final-save revision rather than a stale workflow return revision", async () => {
     const input = { ...report, updatedAt: "2026-11-01T00:00:00.000Z" };
     getLocal.mockResolvedValue({ report: { ...input, updatedAt: "2026-11-01T00:00:00.001Z" }, dirty: true });

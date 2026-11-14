@@ -1,7 +1,7 @@
 import { type MeetingTranscript } from "../../shared/transcription";
 import { transcriptRows } from "../lib/transcriptRows";
 import { useMemo, useState } from "react";
-import { Check, Copy, Search, X } from "lucide-react";
+import { Check, Copy, Play, Search, X } from "lucide-react";
 import TranscriptChat from "./TranscriptChat";
 import LiveSpeakers, { type SpeakerFilter } from "./LiveSpeakers";
 
@@ -23,7 +23,7 @@ function highlight(text: string, query: string) {
   return parts;
 }
 
-/** Final view shares source placement, names and filters with the live view. */
+/** Finished transcript is a reading workspace; capture provenance stays intact. */
 export default function TranscriptTimeline({
   transcript,
   speech,
@@ -33,6 +33,8 @@ export default function TranscriptTimeline({
   editingDisabled,
   onListen,
   onEditTurn,
+  positionMs,
+  playing = false,
   empty = "Kein Transkript vorhanden.",
 }: {
   transcript: string;
@@ -43,6 +45,8 @@ export default function TranscriptTimeline({
   editingDisabled?: boolean;
   onListen?: (atMs: number) => void;
   onEditTurn?: (turnId: string) => void;
+  positionMs?: number;
+  playing?: boolean;
   empty?: string;
 }) {
   const [query, setQuery] = useState("");
@@ -75,14 +79,14 @@ export default function TranscriptTimeline({
 
   if (!rows.length) return <p className="timeline-empty">{empty}</p>;
   return (
-    <div className="final-transcript-panel">
+    <div className="final-transcript-panel transcript-workspace">
       <div className="final-transcript-tools no-print">
         {speech && (
           <LiveSpeakers speech={speech} filter={filter} onFilter={setFilter} />
         )}
         <div className="timeline-tools">
           <label className="timeline-search">
-            <Search size={15} />
+            <Search size={15} aria-hidden="true" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -90,8 +94,12 @@ export default function TranscriptTimeline({
               aria-label="Im Transkript suchen"
             />
             {query && (
-              <button onClick={() => setQuery("")} aria-label="Suche löschen">
-                <X size={14} />
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="Suche löschen"
+              >
+                <X size={14} aria-hidden="true" />
               </button>
             )}
           </label>
@@ -102,9 +110,14 @@ export default function TranscriptTimeline({
           </span>
           <button
             className={`timeline-copy${copied === "failed" ? " is-failed" : ""}`}
+            type="button"
             onClick={copyAll}
           >
-            {copied === true ? <Check size={15} /> : <Copy size={15} />}
+            {copied === true ? (
+              <Check size={15} aria-hidden="true" />
+            ) : (
+              <Copy size={15} aria-hidden="true" />
+            )}
             {copied === true
               ? "Kopiert"
               : copied === "failed"
@@ -113,7 +126,13 @@ export default function TranscriptTimeline({
           </button>
         </div>
       </div>
-      <p className="muted small no-print">
+      {onListen && (
+        <p className="transcript-listen-hint no-print">
+          <Play size={12} aria-hidden="true" /> Jede Zeitmarke spielt die
+          Aufnahme ab dieser Passage.
+        </p>
+      )}
+      <p className="muted small transcript-export-note no-print">
         Kopieren und PDF enthalten das gesamte verfügbare Transkript. Suche und
         Sprecherfilter ändern nur die Bildschirmansicht.
       </p>
@@ -123,6 +142,9 @@ export default function TranscriptTimeline({
           speech={speech}
           startedAt={startedAt}
           filter={filter}
+          variant="document"
+          positionMs={positionMs}
+          playing={playing}
           query={query}
           onRename={onRename}
           onEditing={onEditing}
@@ -147,6 +169,7 @@ export default function TranscriptTimeline({
           transcript={transcript}
           speech={speech}
           startedAt={startedAt}
+          variant="document"
         />
       </div>
     </div>

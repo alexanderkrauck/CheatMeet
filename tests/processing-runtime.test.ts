@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createDriveIO, mergeCalendarDescription } from '../server/processing/drive';
 import { createTaskQueue, verifyProcessingWorker, processingConfigured } from '../server/processing/runtime';
+import * as runtime from '../server/processing/runtime';
+import { Readable } from 'node:stream';
+import { submissionKey, type Submission, type SubmissionStore } from '../server/transcriptionStore';
 import { withProcessingBudget, boundedFetch } from '../server/processing/budget';
 import { toArchive } from '../src/lib/archive';
 import { ProcessingError, type ProcessingJob } from '../server/processing';
@@ -49,6 +52,45 @@ function fakeDrive(noV3Etags=false,laggingV2=false,calendar?:(j:ProcessingJob,r:
   return {io,j,files,calls,f,setIndex:(v:any)=>{index=v;},failAfterWrite:()=>{failAfterSourceWrite=true;},sourcePatches:()=>sourcePatches,creates:()=>creates,index:()=>index};
 }
 afterEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals();});
+it('shares native paid reservations between read-only eligibility and worker submission',async()=>{
+  const factory=runtime.createProcessingTranscription;
+  expect(factory).toBeTypeOf('function');
+  const docs=new Map<string,Submission>();
+  const store:SubmissionStore={get:async k=>docs.get(k)||null,set:async(k,v)=>{docs.set(k,v);},reserve:async(k,v)=>{if(docs.has(k))return false;docs.set(k,v);return true;},retry:async(k,v)=>{if(docs.get(k)?.state!=='retryable')return false;docs.set(k,v);return true;}};
+  const audio=vi.fn(async()=>Readable.from(['fixture audio']));
+  const provider=vi.fn(async(input:any)=>String(input).endsWith('/upload')?Response.json({upload_url:'https://provider.invalid/upload'}):Response.json({id:'private-provider-id'}));
+  const worker=factory({audio},{store,apiKey:'fixture-only',fetchImpl:provider});
+  expect(await worker.retranscription('alice','meeting')).toMatchObject({state:'available'});
+  docs.set(submissionKey('bob','meeting:final'),{state:'submitted',providerId:'other-owner',createdAt:report.date,languages:['de']});
+  expect(await worker.retranscription('alice','meeting')).toMatchObject({state:'available'});
+  expect(provider).not.toHaveBeenCalled();expect(audio).not.toHaveBeenCalled();
+  const j={owner:'alice'} as ProcessingJob;
+  await worker.batch(j,report);
+  expect(await worker.retranscription('alice','meeting')).toMatchObject({state:'used'});
+  expect(provider).toHaveBeenCalledTimes(2);expect(audio).toHaveBeenCalledTimes(1);
+  const key=submissionKey('alice','meeting:final');
+  docs.set(key,{state:'reserved',createdAt:report.date,languages:['de']});
+  expect(await worker.retranscription('alice','meeting')).toMatchObject({state:'uncertain'});
+  await expect(worker.batch(j,report)).rejects.toMatchObject({status:409,blocked:true});
+  expect(provider).toHaveBeenCalledTimes(2);expect(audio).toHaveBeenCalledTimes(1);
+  docs.set(key,{state:'retryable',createdAt:report.date,languages:['de'],failureStage:'submit',upstreamStatus:429});
+  expect(await worker.retranscription('alice','meeting')).toMatchObject({state:'available'});
+  const unconfigured=factory({audio},{store,apiKey:'',fetchImpl:provider});
+  expect(await unconfigured.retranscription('alice','meeting')).toMatchObject({state:'unavailable'});
+});
+it('closes pinned audio if a competing native reservation appears between poll and start',async()=>{
+  let submission:Submission|null=null;
+  const store:SubmissionStore={get:async()=>submission,reserve:async()=>false,retry:async()=>false,set:async()=>{}};
+  const input=Readable.from(['audio']);
+  const audio=vi.fn(async()=>{submission={state:'reserved',languages:['de'],createdAt:report.date};return input;});
+  const provider=vi.fn();
+  const worker=runtime.createProcessingTranscription({audio},{store,apiKey:'fixture-only',fetchImpl:provider});
+  const job={owner:'alice',run:'new-run',requireNewBatch:true,refs:{id:'meeting',driveFolderId:'folder',driveReportId:'json'}} as ProcessingJob;
+  await expect(worker.batch(job,report)).rejects.toMatchObject({status:409,blocked:true});
+  expect(input.destroyed).toBe(true);
+  expect(provider).not.toHaveBeenCalled();
+  expect(submission?.state).toBe('reserved');
+});
 it('uses the provider-aware calendar hook for a Microsoft event archived in Google Drive',async()=>{
   const calendar=vi.fn(async(_j:ProcessingJob,r:ReportData)=>({...r,calendarSyncedAt:'2026-11-13T12:00:00Z'}));
   const h=fakeDrive(false,false,calendar);Object.assign(h.j,await h.io.load(h.j));h.j.calendarSync=true;

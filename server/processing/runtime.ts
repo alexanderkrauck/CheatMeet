@@ -10,7 +10,9 @@ import { validLanguages } from '../../shared/transcription';
 import type { ProcessingJob, ProcessingOptions, Task } from './index';
 import { createDriveIO } from './drive';
 import { createOneDriveIO } from './onedrive';
-import { storageIO } from './storage';
+import { storageIO, type StorageIO } from './storage';
+import { fileSubmissionStore, firestoreSubmissionStore, submissionKey, type Submission, type SubmissionStore } from '../transcriptionStore';
+import { processingSourceKey } from '../../shared/processing';
 import { syncWorkerCalendar } from './calendar';
 import { boundedFetch, remainingProcessingMs } from './budget';
 
@@ -32,10 +34,56 @@ export function createTaskQueue(fetchImpl:typeof fetch=fetch,token=()=>serviceAc
     if(!response.ok&&response.status!==409)throw Error(`Cloud Tasks enqueue failed (${response.status})`);
   };
 }
+/** The worker and capability read share the existing durable final-pass store. */
+export function createProcessingTranscription(io:Pick<StorageIO,'audio'>,options:NonNullable<Parameters<typeof createBatchTranscriptionService>[0]>={}):Required<Pick<ProcessingOptions,'batch'|'retranscription'>> {
+  const store=options.store||(process.env.NODE_ENV==='production'?firestoreSubmissionStore():fileSubmissionStore());
+  const batch=createBatchTranscriptionService({fetchImpl:boundedFetch,...options,store});
+  return {
+    retranscription:async(owner,id)=>{
+      const submission=await store.get(submissionKey(owner,`${id}:final`));
+      if(submission&&submission.state!=='retryable')return !submission.providerId
+        ? {state:'uncertain',message:'Der letzte vollständige Transkriptionsauftrag ist unbestätigt. Kein erneutes Senden; die Originalaufnahme und das bisherige Transkript bleiben erhalten.'}
+        : {state:'used',message:'Der einmalige vollständige Transkriptionsdurchlauf wurde bereits verwendet. Es wird kein weiterer kostenpflichtiger Durchlauf gestartet.'};
+      return (options.apiKey??process.env.ASSEMBLYAI_API_KEY)
+        ? {state:'available',message:'Ein einmaliger kostenpflichtiger Durchlauf der gesamten Aufnahme ist verfügbar.'}
+        : {state:'unavailable',message:'Transkription ist nicht eingerichtet.'};
+    },
+    batch:async(job,report)=>{
+      try{
+        // Bind only new explicit full passes. Historical jobs/import recovery
+        // keep their existing reservation semantics; nothing is migrated/deleted.
+        let service=batch;
+        if(job.requireNewBatch){
+          const source=processingSourceKey(job.refs);
+          type BoundSubmission=Submission&{processingRun?:string;processingSource?:string};
+          const bound=(value:Submission):BoundSubmission=>({...value,processingRun:job.run,processingSource:source});
+          const runStore:SubmissionStore={
+            get:async key=>{
+              const value=await store.get(key) as BoundSubmission|null;
+              if(value&&value.state!=='retryable'&&(value.processingRun!==job.run||value.processingSource!==source))throw new ProcessingError(409,'Der vollständige Transkriptionsdurchlauf ist bereits für einen anderen Auftrag belegt. Es wurde keine neue Transkription gestartet.',true);
+              return value;
+            },
+            reserve:(key,value)=>store.reserve(key,bound(value)),
+            retry:(key,value)=>store.retry(key,bound(value)),
+            set:(key,value)=>store.set(key,bound(value)),
+          };
+          service=createBatchTranscriptionService({fetchImpl:boundedFetch,...options,store:runStore});
+        }
+        const result=await service.poll(job.owner,report.id);
+        if(result.state==='completed')return result.speech;
+        if(result.state==='retryable'){
+          const input=await io.audio(job,report);
+          try{await service.start(job.owner,report.id,validLanguages(report.speech?.languages)?report.speech.languages:['de','en'],input);}
+          finally{input.destroy();}
+        }
+        return null;
+      }catch(e){if(e instanceof ApiError)throw new ProcessingError(e.status,e.message,e.status===409);throw e;}
+    },
+  };
+}
 export function runtimeOptions():ProcessingOptions {
   const projectId=process.env.FIREBASE_PROJECT_ID||config.projectId;
   const io=storageIO(createDriveIO({calendar:syncWorkerCalendar}),createOneDriveIO({calendar:syncWorkerCalendar}));
-  const batch=createBatchTranscriptionService({fetchImpl:boundedFetch});
   return {
     enabled:processingConfigured,
     identify:t=>firebaseAccountFor(t,projectId),verifyWorker:verifyProcessingWorker,enqueue:createTaskQueue(),
@@ -49,16 +97,6 @@ export function runtimeOptions():ProcessingOptions {
       const value=(await response.json()).fields?.summaryPrompt?.stringValue;
       return typeof value==='string'?value.slice(0,20000):'';
     },
-    batch:async(job,report)=>{
-      try{
-      const result=await batch.poll(job.owner,report.id);
-      if(result.state==='completed')return result.speech;
-      if(result.state==='retryable'){
-        const input=await io.audio(job,report);
-        await batch.start(job.owner,report.id,validLanguages(report.speech?.languages)?report.speech.languages:['de','en'],input);
-      }
-      return null;
-      }catch(e){if(e instanceof ApiError)throw new ProcessingError(e.status,e.message,e.status===409);throw e;}
-    },
+    ...createProcessingTranscription(io),
   };
 }

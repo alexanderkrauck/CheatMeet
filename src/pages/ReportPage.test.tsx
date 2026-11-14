@@ -1,4 +1,5 @@
 import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { ReportData } from "../types";
 
@@ -123,7 +124,9 @@ import ReportRoute, { ReportDetail as ReportPage } from "./ReportPage";
 import SpeakerEditor from "../components/SpeakerEditor";
 import TranscriptTimeline from "../components/TranscriptTimeline";
 import DeleteMeeting from "../components/DeleteMeeting";
-import { AudioPreview, CalendarStatus } from "../components/UI";
+import { CalendarStatus } from "../components/UI";
+import MeetingAudioPlayer from "../components/MeetingAudioPlayer";
+import SummaryContent from "../components/SummaryContent";
 import TranscriptChat from "../components/TranscriptChat";
 
 type Element = React.ReactElement<any>;
@@ -135,6 +138,8 @@ function nodes(node: React.ReactNode): Element[] {
 function text(node: React.ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(text).join("");
+  if (React.isValidElement(node) && node.type === SummaryContent)
+    return text(SummaryContent((node as Element).props));
   return React.isValidElement(node)
     ? text((node as Element).props.children)
     : "";
@@ -154,6 +159,72 @@ const fixture = (): ReportData => ({
   rawAudioUrl: "audio",
 });
 let initial: ReportData;
+it("drops cached playback when the saved original-audio source changes without changing the route", async () => {
+  view(); await flush();
+  h.download.mockResolvedValue(new Blob(["old audio"], { type: "audio/wav" }));
+  await nodes(view()).find(n => n.type === MeetingAudioPlayer)!.props.onRequestPlay(0);
+  expect(nodes(view()).find(n => n.type === MeetingAudioPlayer)!.props.blob).toBeInstanceOf(Blob);
+  h.stored!.report = { ...h.stored!.report, rawAudioUrl: "replacement-audio", updatedAt: "replacement" };
+  h.listener?.(); await flush();
+  view(); await flush();
+  expect(nodes(view()).find(n => n.type === MeetingAudioPlayer)!.props.blob).toBeUndefined();
+});
+it.each([['metadata', 'AbortError'], ['timestamp', 'AbortError'], ['metadata', 'Error'], ['timestamp', 'Error']])("ignores stale %s playback rejection after source replacement (%s)", async (entry, name) => {
+  view(); await flush();
+  h.download.mockResolvedValue(new Blob(['old audio'], { type: 'audio/wav' }));
+  await nodes(view()).find(n => n.type === MeetingAudioPlayer)!.props.onRequestPlay(0);
+  let reject!: (error: Error) => void;
+  const player = { currentTime: 0, play: vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; })) };
+  const tree = view();
+  nodes(tree).find(n => n.props.className === 'report-audio no-print')!.props.ref.current = { querySelector: () => player };
+  const audioPlayer = nodes(tree).find(n => n.type === MeetingAudioPlayer)!;
+  const pending = entry === 'metadata' ? audioPlayer.props.onReady(player) : audioPlayer.props.onRequestPlay(5500);
+  expect(player.play).toHaveBeenCalledTimes(1);
+  h.stored!.report = { ...h.stored!.report, rawAudioUrl: 'replacement-audio', updatedAt: 'replacement' };
+  h.listener?.(); await flush(); view(); await flush();
+  reject(Object.assign(new Error('The old source stopped playing'), { name }));
+  await pending; await flush();
+  expect(text(view())).not.toContain('Wiedergabe konnte nicht gestartet werden');
+  if (entry === 'metadata') expect(pending).toBeInstanceOf(Promise);
+});
+it("renders summary headings and lists as readable text without accepting embedded HTML", () => {
+  initial.summary = "## Entscheidung\n\n**Klarer Text**\n\n- Erster Punkt\n- Zweiter <img src=x>";
+  const html = renderToStaticMarkup(view());
+  expect(html).toContain("<h3>Entscheidung</h3>");
+  expect(html).toContain("<strong>Klarer Text</strong>");
+  expect(html).toContain("<li>Erster Punkt</li>");
+  expect(html).toContain("&lt;img src=x&gt;");
+  expect(html).not.toContain("<img src=x>");
+});
+it("does not replace a newer saved report that arrived while paid confirmation was open", async () => {
+  initial.driveFolderId = "folder";
+  h.stored = { report: structuredClone(initial), dirty: false };
+  button("Gesamte Aufnahme neu transkribieren").props.onClick();
+  await flush();
+  h.stored.report = { ...h.stored.report, updatedAt: "newer-human-edit", summary: "Keep the new human summary" };
+  h.listener?.();
+  await flush();
+  const confirmation = nodes(view()).find(n => typeof n.props.onConfirm === "function")!;
+  await confirmation.props.onConfirm();
+  expect(h.handoff).not.toHaveBeenCalled();
+  expect(h.stored.report.summary).toBe("Keep the new human summary");
+});
+it("offers full-audio retranscription on a completed report and hands off explicit paid intent only after confirmation", async () => {
+  initial.driveFolderId = "folder";
+  h.stored = { report: structuredClone(initial), dirty: false };
+  const before = structuredClone(h.stored);
+  button("Gesamte Aufnahme neu transkribieren").props.onClick();
+  expect(h.handoff).not.toHaveBeenCalled();
+  const confirmation = nodes(view()).find(n => typeof n.props.onConfirm === "function");
+  expect(confirmation, "explicit paid confirmation").toBeDefined();
+  await confirmation!.props.onConfirm();
+  expect(h.handoff).toHaveBeenCalledWith("owner", expect.objectContaining({ id: initial.id }), {
+    analyze: true,
+    retranscribe: true,
+    regenerate: true,
+  });
+  expect(h.stored).toEqual(before);
+});
 function view() {
   h.cursor = 0;
   return ReportPage({ report: initial });
@@ -641,9 +712,11 @@ it("restores inline without publishing, lazily offers original playback and hand
   expect(h.save).not.toHaveBeenCalled();
   expect(h.handoff).not.toHaveBeenCalled();
   h.download.mockResolvedValue(new Blob(["audio"], { type: "audio/wav" }));
-  await button("Aufnahme anhören").props.onClick();
+  const player = nodes(view()).find(n => n.type === MeetingAudioPlayer)!;
+  expect(player).toBeDefined();
+  await player.props.onRequestPlay(0);
   expect(h.download).toHaveBeenCalledOnce();
-  expect(nodes(view()).some((n) => n.type === AudioPreview)).toBe(true);
+  expect(nodes(view()).find(n => n.type === MeetingAudioPlayer)!.props.blob).toBeInstanceOf(Blob);
   const deletion = nodes(view()).find((n) => n.type === DeleteMeeting)!;
   const outcome = { removed: true, warnings: ["Cloud index remains"] };
   deletion.props.onWarning("Cloud index remains");

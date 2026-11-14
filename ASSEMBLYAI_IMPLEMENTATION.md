@@ -1,9 +1,9 @@
-# AssemblyAI: keep the live transcript
+# AssemblyAI: live by default, explicit full-audio pass
 
-The user's current decision (2026-09-14) supersedes the earlier two-pass design:
-recorded meetings use their initial/live transcript directly. There is no final
-batch transcription, no live-to-batch identity matching, and no mandatory speaker
-review on completion. This change awaits the user's next AI Studio deployment.
+Recorded meetings use their initial/live transcript directly by default. One
+additional full-audio batch pass can be explicitly selected before analysis or
+started from the finished report. It is never automatic. The durable reservation
+and uncertain-submission guards apply to both entry points.
 
 ## Recording and completion
 
@@ -23,7 +23,8 @@ review on completion. This change awaits the user's next AI Studio deployment.
   maintained do not get reassigned. Regular live Turn updates remain supported.
 - Visible unfinished turns are retained on stream closure, not silently deleted.
   Missing confirmation, dropped frames and connection failures produce a warning
-  that remains visible on the saved report. No later pass repairs these gaps.
+  that remains visible on the saved report. Only an explicitly selected full-audio
+  pass can attempt to repair those gaps; reconnecting never replays dropped audio.
 - `prepareTranscript` checkpoints the live document locally and renders it with
   the existing names, source identities and timestamps. Its `phase: final` means
   the document is ready to save/summarize; it does not mean batch ASR ran, and
@@ -31,9 +32,35 @@ review on completion. This change awaits the user's next AI Studio deployment.
 - The raw audio is backed up to Drive as before. Summarization sends only the
   saved transcript to Gemini. A missing live transcript fails explicitly instead
   of silently uploading the recording for another transcription.
-- The saved report uses the same source-aware conversation layout, source/person
-  filters and inline names. Corrections remain optional and summaries can be
+- The saved report uses speaker-led transcript rows with passage-local playback,
+  source/person filters and inline names. Corrections remain optional and summaries can be
   regenerated from edited text without retranscribing audio.
+
+## Full-audio retranscription after completion
+
+- The finished transcript exposes **Gesamte Aufnahme neu transkribieren**. The
+  confirmation first reads `POST /api/processing/:id/retranscription-status`:
+  archive/index and native reservation metadata only, without polling AssemblyAI,
+  enqueueing a task or changing the report. Used, uncertain, busy, unavailable and
+  missing-audio states do not enable a paid start.
+- Explicit confirmation calls the existing server processing handoff with
+  `analyze: true`, `retranscribe: true`, `regenerate: true`. It replaces the
+  transcript and then regenerates summary, tasks and takeaways; the dialog names
+  that manual edits to these derived fields will be replaced. The confirmation
+  pins its reviewed local revision and archive source, and later human edits
+  still block export through the existing native conditional writes.
+- The existing `transcriptionJobs` reservation remains keyed by owner and
+  `<meetingId>:final`. A new explicit worker pass binds its run/source metadata
+  inside that reservation so it cannot mistake an older job's output for a new
+  transcription. No uncertain reservation is deleted, and repeated accepted
+  requests retain the existing run rather than creating another paid submission.
+- The previous report is not cleared before replacement succeeds. Earmarked
+  live speaker names are reconciled with the full pass. Ambiguous names pause
+  for review; any retained summary is marked stale until text-only regeneration
+  succeeds. Ordinary summary regeneration and save-only never start paid ASR.
+- Browser playback stays lazy, uses the pinned provider/draft audio and revokes
+  its local object URL on source change/unmount. Exact saved millisecond offsets
+  drive passage playback and highlighting; no waveform or progress is invented.
 
 ## Imported audio and compatibility
 
@@ -56,14 +83,14 @@ transcript. Legacy speaker-review/matching utilities remain for old report data.
 
 ## Verification
 
-255 tests in 25 files, typecheck, production build and five PWA checks. Coverage
-includes no ASR call for recorded meetings, source/name preservation, empty/live
-failure handling, concurrent preparation, import replacement, retired endpoint
-rejection and one-time import submission. Browser checks use synthetic streams
-and mocked providers; no audio was resubmitted to AssemblyAI for this change.
+Run the repository's tests, typecheck, production build and emitted PWA checks.
+Focused full-pass coverage lives in `tests/processing-retranscription.test.ts`,
+`tests/processing-runtime.test.ts`, `src/lib/serverProcessing.test.ts` and the
+report/player/dialog tests. Browser acceptance uses synthetic audio and mocked
+provider/paid boundaries, not real customer recordings or proof of provider billing.
 
-Deployment remains user-managed through AI Studio. GitHub automatic deployment
-is disabled. Reopen the app after deployment so the client uses the new flow.
+Deployment follows the current GitHub Actions / Cloud Run flow in `CLAUDE.md`;
+reopen the app after deployment so the client uses the current controls.
 
 Earlier evaluation/design history is retained in STREAMING_RESULTS.md,
 STREAMING_PROPOSAL.md and TRANSCRIPTION_INCIDENT_2026-09-14.md.

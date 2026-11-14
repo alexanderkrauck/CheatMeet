@@ -25,7 +25,7 @@ async function setup(extra: Partial<ProcessingOptions> = {}) {
   };
   const analyze = vi.fn(async (text: string) => ({title:'KI Titel',summary:'Zusammenfassung',transcription:text,todos:[],takeaways:[]}));
   const app = express();
-  app.use('/api', createProcessingRouter({enabled:()=>true,store,enqueue:queue,identify:async t=>({uid:t,googleSub:`sub-${t}`}),verifyWorker:async t=>{if(t!=='worker')throw Error('no');},io,analyze,preferences:async()=>'',...extra}));
+  app.use('/api', createProcessingRouter({enabled:()=>true,store,enqueue:queue,identify:async t=>({uid:t,googleSub:`sub-${t}`}),verifyWorker:async t=>{if(t!=='worker')throw Error('no');},io,analyze,preferences:async()=>'',retranscription:async()=>({state:'available',message:'Ein Durchlauf ist verfügbar.'}),...extra}));
   const server = createServer(app); servers.push(server);
   await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
   const base = `http://127.0.0.1:${(server.address() as any).port}/api`;
@@ -290,7 +290,7 @@ it('uses existing imported text for recovery instead of spending another batch p
 it('pauses speaker-ambiguous live retranscription and resumes reviewed source without another paid pass',async()=>{
   const speech={provider:'assemblyai' as const,phase:'final' as const,languages:['de'],turns:[{id:'batch:0',speaker:'batch:A',text:'Neue Worte',startMs:0,endMs:1000,final:true}],speakerNames:{}};
   const batch=vi.fn(async()=>speech);const h=await setup({batch});
-  h.io.load.mockResolvedValue({report:{...report,transcriptionOrigin:'live',speech:{...speech,phase:'live',turns:[]}},revision:'source-v1',indexRevision:'index-v1'});
+  h.io.load.mockResolvedValue({report:{...report,rawAudioUrl:'audio',transcriptionOrigin:'live',speech:{...speech,phase:'live',turns:[]}},revision:'source-v1',indexRevision:'index-v1'});
   await h.call('/processing/meeting-1',{report,analyze:true,retranscribe:true});
   for(let n=0;n<3;n++)await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
   const review=(await h.call('/processing/meeting-1')).body;

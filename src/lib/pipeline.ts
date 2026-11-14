@@ -5,6 +5,7 @@ import { saveReport } from "./reports";
 import { acceptRemoteReport, deleteDraft, putLocal, putDraft, getDraft, listDrafts, getLocal, ReportConflictError, type LocalReport } from "./local";
 import { processingAvailable, submitServerProcessing, getServerProcessing, discoverServerProcessing, listServerProcessing, type ProcessingOptions } from "./serverProcessing";
 import { processingActive, processingSourceKey, processingStorage, jobStorage, type ProcessingJobView } from "../../shared/processing";
+import { archiveAudioId, archiveSyncedAt } from "../../shared/storage";
 import type { ReportData } from "../types";
 import { errorMessage } from "./session";
 import type { Draft } from "../types";
@@ -130,6 +131,13 @@ export async function handoffServerProcessing(owner: string, report: ReportData,
   const local = await getLocal(owner, report.id, { index: report.home ? "meetings" : "reports" });
   check();
   if (local && processingSourceKey(local.report) !== processingSourceKey(report)) throw sourceError();
+  // A confirmed replacement may not adopt a later local edit. Ordinary upload
+  // handoffs still observe the durable final-save revision below.
+  if (options.analyze && options.retranscribe && options.regenerate &&
+      (!local || local.dirty || local.report.updatedAt !== report.updatedAt ||
+       !archiveSyncedAt(local.report) || local.report.audioDeletedAt ||
+       !archiveAudioId(local.report) || archiveAudioId(local.report) !== archiveAudioId(report)))
+    throw new ReportConflictError();
   const expectedUpdatedAt = local?.report.updatedAt ?? null;
   let result = await submitServerProcessing(report, options);
   check();

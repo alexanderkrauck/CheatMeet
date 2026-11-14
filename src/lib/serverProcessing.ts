@@ -39,6 +39,17 @@ async function request<T>(path: string, body?: object): Promise<T> {
 
 export type ProcessingOptions = { analyze: boolean; regenerate?: boolean; retranscribe?: boolean; calendarSync?: boolean; preferences?: string };
 export type ProcessingResult = { job: ProcessingJobView; report?: ReportData };
+export type RetranscriptionEligibility = {
+  state: 'available' | 'used' | 'uncertain' | 'busy' | 'missing-audio' | 'unavailable';
+  message: string;
+};
+/** Read-only native reservation check; no provider poll or transcription. The
+ * server rechecks eligibility on handoff. Unsaved local edits remain UI-owned. */
+export function getServerRetranscription(report: ReportData): Promise<RetranscriptionEligibility> {
+  const refs = report.home ? { id: report.id, home: report.home }
+    : { id: report.id, driveFolderId: report.driveFolderId, driveReportId: report.driveReportId };
+  return request<RetranscriptionEligibility>(`/${encodeURIComponent(report.id)}/retranscription-status`, { report: refs });
+}
 
 function checkedResult(result: ProcessingResult, id: string, storage: 'google' | 'microsoft', report?: ReportData) {
   if (result.job.reportId !== id || jobStorage(result.job) !== storage || result.report &&

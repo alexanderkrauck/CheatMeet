@@ -7,6 +7,7 @@ import {
   reportIndexCollection,
 } from "../../shared/storage";
 import { withCalendarFreshness } from "../../shared/calendarNotes";
+import { processingSourceKey } from "../../shared/processing";
 import { ensureMicrosoftToken } from "../lib/microsoft";
 import { downloadOneDrive } from "../lib/onedrive";
 import { restoreReportTranscript } from "../lib/restoreTranscript";
@@ -29,9 +30,9 @@ import {
   MoreHorizontal,
   CheckSquare,
   Lightbulb,
+  ShieldCheck,
 } from "lucide-react";
 import {
-  AudioPreview,
   Busy,
   Notice,
   Status,
@@ -84,6 +85,9 @@ import {
 import { processingAvailable } from "../lib/serverProcessing";
 import { reportToMarkdown } from "../lib/markdown";
 import TranscriptTimeline from "../components/TranscriptTimeline";
+import MeetingAudioPlayer from "../components/MeetingAudioPlayer";
+import RetranscriptionDialog from "../components/RetranscriptionDialog";
+import SummaryContent from "../components/SummaryContent";
 import SpeakerReview from "../components/SpeakerReview";
 import SpeakerEditor from "../components/SpeakerEditor";
 import {
@@ -94,6 +98,7 @@ import {
 import { prepareTranscript } from "../lib/prepareTranscript";
 import { downloadDriveFile } from "../lib/drive";
 import { withWebmDuration } from "../lib/webmDuration";
+import "./report-workspace.css";
 import {
   forgetReportEdit,
   hasReportEdits,
@@ -144,6 +149,10 @@ export function ReportDetail({
   const [busy, setBusy] = useState("");
   const [audioBlob, setAudioBlob] = useState<Blob>();
   const [audioLoading, setAudioLoading] = useState(false);
+  const [audioPosition, setAudioPosition] = useState<number>();
+  const [audioPlaying, setAudioPlaying] = useState(false);
+  const [retranscriptionSource, setRetranscriptionSource] = useState<ReportData>();
+  const retranscriptionRequest = useRef(false);
   const [assigning, setAssigning] = useState(false);
   const [focusTurnId, setFocusTurnId] = useState<string>();
   const [inlineEditing, setInlineEditing] = useState(false);
@@ -233,10 +242,12 @@ export function ReportDetail({
     audioRequest.current++;
     setAudioBlob(undefined);
     setAudioLoading(false);
+    setAudioPosition(undefined);
+    setAudioPlaying(false);
     return () => {
       audioRequest.current++;
     };
-  }, [params.id, initialReport?.id]);
+  }, [params.id, initialReport?.id, report && processingSourceKey(report), report && archiveAudioId(report), report?.audioDeletedAt]);
 
   useEffect(() => {
     if (initialReport) return;
@@ -699,13 +710,60 @@ export function ReportDetail({
     }
   }
 
+  async function retranscribe(source: ReportData) {
+    if (busy || running || edited || retranscriptionRequest.current) return;
+    const owner = uid();
+    const stillOwner = () => { try { return uid() === owner; } catch { return false; } };
+    const checkOwner = () => {
+      if (!stillOwner()) throw Error("Das angemeldete Konto hat sich geändert.");
+    };
+    retranscriptionRequest.current = true;
+    setBusy("Volltranskription wird vorbereitet …");
+    setError("");
+    setNotice("");
+    try {
+      const current = await getLocal(owner, source.id, { index: reportIndexCollection(source) });
+      checkOwner();
+      if (!current || current.report.updatedAt !== source.updatedAt ||
+          processingSourceKey(current.report) !== processingSourceKey(source))
+        throw new ReportConflictError();
+      if (current.dirty || !archiveSyncedAt(current.report))
+        throw Error("Bitte den aktuellen Bericht zuerst im Dateiarchiv speichern.");
+      if (current.report.audioDeletedAt || !archiveAudioId(current.report))
+        throw Error("Die Originalaufnahme ist für dieses Meeting nicht mehr verfügbar.");
+      const available = await processingAvailable();
+      checkOwner();
+      if (!available) throw Error("Volltranskription ist auf diesem Server nicht eingerichtet. Deine bisherige Fassung bleibt erhalten.");
+      await handoffServerProcessing(owner, current.report, {
+        analyze: true,
+        retranscribe: true,
+        regenerate: true,
+      });
+      checkOwner();
+    } catch (cause) {
+      if (!stillOwner()) return;
+      if (cause instanceof Error && cause.name === "ReportConflictError") setConflict(true);
+      setError(errorMessage(cause));
+    } finally {
+      retranscriptionRequest.current = false;
+      if (stillOwner()) setBusy("");
+    }
+  }
+
   async function playLoadedAudio() {
     const player = audio.current?.querySelector("audio");
     if (!player) return;
+    const owner = uid();
+    const request = audioRequest.current;
+    const current = () => {
+      try { return uid() === owner && request === audioRequest.current && audio.current?.querySelector("audio") === player; }
+      catch { return false; }
+    };
     try {
       player.currentTime = seekTo.current;
       await player.play();
-    } catch {
+    } catch (cause) {
+      if (!current() || cause instanceof Error && cause.name === "AbortError") return;
       setError(
         "Wiedergabe konnte nicht gestartet werden. Bitte die Wiedergabetaste am Audioplayer verwenden.",
       );
@@ -896,8 +954,19 @@ export function ReportDetail({
       </button>
     </div>
   );
+  const retranscriptionReason = edited
+    ? "Änderungen zuerst speichern oder verwerfen."
+    : running || busy
+      ? "Die laufende Verarbeitung zuerst abschließen lassen."
+      : view.audioDeletedAt
+        ? "Die Aufbewahrungsfrist der Originalaufnahme ist abgelaufen."
+        : !archiveAudioId(view)
+          ? "Die Originalaufnahme muss zuerst im Dateiarchiv gesichert werden."
+          : dirty || !archiveSyncedAt(view)
+            ? "Den aktuellen Bericht zuerst im Dateiarchiv speichern."
+            : "";
   return (
-    <>
+    <div className="meeting-workspace">
       <fieldset
         disabled={!!busy || running}
         style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
@@ -1064,7 +1133,7 @@ export function ReportDetail({
 
         {running ? (
           <div
-            className="analysis-progress panel no-print"
+            className="analysis-progress report-processing no-print"
             role="status"
             aria-live="polite"
           >
@@ -1168,7 +1237,21 @@ export function ReportDetail({
           </section>
         )}
 
+      </fieldset>
+      <div className="report-columns">
+      <fieldset
+        className="report-overview"
+        disabled={!!busy || running}
+        style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+      >
         <div className="report-intel">
+          {running && !view.summary && !view.todos.length && !view.takeaways.length ? (
+            <section className="report-preparing" aria-label="Bericht wird erstellt">
+              <h2><WandSparkles size={15} /> Dein Bericht entsteht</h2>
+              <p className="muted">Das Transkript ist bereits lesbar. Zusammenfassung und nächste Schritte erscheinen hier, sobald sie bereit sind.</p>
+              <div className="report-skeleton" aria-hidden="true"><i /><i /><i /><i /></div>
+            </section>
+          ) : <>
           <section className="is-summary">
             <h2>
               <FileText size={15} /> Zusammenfassung
@@ -1183,7 +1266,7 @@ export function ReportDetail({
                 }
               />
             ) : (
-              <p>{view.summary || "Noch keine Zusammenfassung erstellt."}</p>
+              <SummaryContent text={view.summary || "Noch keine Zusammenfassung erstellt."} />
             )}
           </section>
           <section>
@@ -1267,44 +1350,41 @@ export function ReportDetail({
               <p className="muted">Keine Erkenntnisse erkannt.</p>
             )}
           </section>
-          <ConsentRecordPanel report={view} />
+          </>}
         </div>
       </fieldset>
-
-      <section className="panel no-print" aria-label="Originalaufnahme">
-        {view.audioDeletedAt ? (
-          <p className="muted">
-            Die Originalaufnahme wurde nach der zugesagten Aufbewahrungsfrist
-            gelöscht. Transkript und Zusammenfassung bleiben erhalten.
-          </p>
-        ) : (
-          <button
-            className="btn"
-            onClick={() => listen(0)}
-            disabled={audioLoading}
-          >
-            {audioLoading ? "Originalaufnahme laden …" : "Aufnahme anhören"}
-          </button>
-        )}
-        {audioBlob && !view.audioDeletedAt && (
-          <div
-            ref={audio}
-            onLoadedMetadataCapture={() => void playLoadedAudio()}
-            onErrorCapture={() =>
-              setError(
-                "Die Aufnahme konnte nicht wiedergegeben werden. Bitte den Archivzugriff prüfen.",
-              )
-            }
-          >
-            <AudioPreview blob={audioBlob} durationMs={view.durationMs} />
-          </div>
-        )}
-      </section>
 
       {/* Outside the guard: a running analysis must not grey out the transcript
           the page invites you to keep reading. */}
       <section className="report-transcript">
-        <h2>Transkript</h2>
+        <div className="report-section-head">
+          <h2><FileText size={16} /> Transkript <span className="transcript-kind">{view.speech?.phase === "live" ? "Live" : "Gespeichert"}</span></h2>
+          <button
+            type="button"
+            className="btn btn-ghost no-print"
+            disabled={!!retranscriptionReason}
+            aria-describedby={retranscriptionReason ? "retranscription-reason" : undefined}
+            onClick={() => setRetranscriptionSource(structuredClone(view))}
+          >
+            <RefreshCw size={14} /> Gesamte Aufnahme neu transkribieren
+          </button>
+        </div>
+        {retranscriptionReason && <p className="retranscription-reason no-print" id="retranscription-reason">{retranscriptionReason}</p>}
+        {view.audioDeletedAt ? (
+          <p className="muted audio-expired no-print">Die Originalaufnahme wurde nach der zugesagten Aufbewahrungsfrist gelöscht. Der gespeicherte Text bleibt erhalten.</p>
+        ) : (
+          <div ref={audio} className="report-audio no-print">
+            <MeetingAudioPlayer
+              blob={audioBlob}
+              loading={audioLoading}
+              durationMs={duration}
+              onRequestPlay={listen}
+              onReady={() => playLoadedAudio()}
+              onTimeChange={setAudioPosition}
+              onPlaybackChange={setAudioPlaying}
+            />
+          </div>
+        )}
         {editControls}
         {(transcriptIsElsewhere(view) || view.transcriptStale) && (
           <div className="panel no-print">
@@ -1326,17 +1406,15 @@ export function ReportDetail({
             </p>
           </div>
         )}
-        {view.speech && view.speech.phase !== "final" && (
-          <p className="muted" role="status">
-            Live-Transkript. Es wird direkt für die Zusammenfassung verwendet.
-          </p>
-        )}
+
         {!view.transcriptStale && view.speech ? (
           <>
             <TranscriptTimeline
               transcript={view.transcription}
               speech={view.speech}
               startedAt={view.date}
+              positionMs={audioPosition}
+              playing={audioPlaying}
               onListen={!view.audioDeletedAt ? listen : undefined}
               onEditTurn={editTurn}
               editingDisabled={!!busy || running}
@@ -1385,6 +1463,8 @@ export function ReportDetail({
           <TranscriptTimeline
             transcript={view.transcriptStale ? "" : view.transcription}
             startedAt={view.date}
+            positionMs={audioPosition}
+            playing={audioPlaying}
             onListen={!view.audioDeletedAt ? listen : undefined}
             empty={
               transcriptIsElsewhere(view)
@@ -1396,7 +1476,23 @@ export function ReportDetail({
           />
         )}
       </section>
+      </div>
+      <details className="report-consent">
+        <summary><ShieldCheck size={15} /> Einwilligung und Aufbewahrung <span>{view.consent ? "Dokumentation ansehen" : "Kein Nachweis hinterlegt"}</span></summary>
+        <ConsentRecordPanel report={view} />
+      </details>
       {editControls}
+      {retranscriptionSource && (
+        <RetranscriptionDialog
+          title={retranscriptionSource.title}
+          report={retranscriptionSource}
+          onClose={() => setRetranscriptionSource(undefined)}
+          onConfirm={async () => {
+            setRetranscriptionSource(undefined);
+            await retranscribe(retranscriptionSource);
+          }}
+        />
+      )}
       {assigning && !edited && (
         <AssignEvent
           report={summarise(view)}
@@ -1404,6 +1500,6 @@ export function ReportDetail({
           onWarning={setError}
         />
       )}
-    </>
+    </div>
   );
 }

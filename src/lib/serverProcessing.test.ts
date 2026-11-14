@@ -15,12 +15,43 @@ import {
   resetProcessingConfig,
 } from "./serverProcessing";
 import { processingSourceKey } from '../../shared/processing';
+import * as native from './serverProcessing';
+import type { ReportData } from '../types';
 
 beforeEach(() => {
   mocks.auth.currentUser = { uid: "alice", getIdToken: async () => "identity" };
   mocks.fetch.mockReset();
   vi.stubGlobal("fetch", mocks.fetch);
   resetProcessingConfig();
+});
+it.each([false,true])('reads native full-pass eligibility with only the pinned source (Microsoft=%s)',async microsoft=>{
+  const getEligibility=native.getServerRetranscription;
+  expect(getEligibility).toBeTypeOf('function');
+  const report:ReportData={id:'m1',date:'2026-11-14',title:'Private title',summary:'Private summary',transcription:'Private transcript',todos:[],takeaways:[],
+    ...(microsoft?{home:{provider:'microsoft' as const,connectionId:'c',driveId:'d',rootId:'r',rootName:'Meetings',folderId:'f',reportId:'j',audioId:'a'}}:{driveFolderId:'folder',driveReportId:'json',rawAudioUrl:'audio'})};
+  mocks.fetch.mockResolvedValue(Response.json({state:'available',message:'Ein vollständiger Durchlauf ist verfügbar.'}));
+  expect(await getEligibility(report)).toMatchObject({state:'available'});
+  const [path,init]=mocks.fetch.mock.calls[0];
+  expect(path).toBe('/api/processing/m1/retranscription-status');
+  expect(init.headers['X-CheatMeet-Storage']).toBe('microsoft');
+  expect(JSON.parse(init.body)).toEqual({report:microsoft?{id:'m1',home:report.home}:{id:'m1',driveFolderId:'folder',driveReportId:'json'}});
+  expect(init.body).not.toContain('Private');
+  expect(init.body).not.toContain('"speech"');
+});
+it.each(['token','response','body'] as const)('fences full-pass eligibility across an owner switch during %s',async stage=>{
+  const report={id:'m1',driveFolderId:'folder',driveReportId:'json'} as ReportData;
+  const change=()=>{mocks.auth.currentUser={uid:'bob'};};
+  if(stage==='token')mocks.auth.currentUser.getIdToken=async()=>{change();return 'identity';};
+  mocks.fetch.mockImplementation(async()=>{
+    if(stage==='response')change();
+    return {ok:true,json:async()=>{if(stage==='body')change();return {state:'available',message:'Verfügbar'};}};
+  });
+  await expect(native.getServerRetranscription(report)).rejects.toThrow(/Konto/);
+  if(stage==='token')expect(mocks.fetch).not.toHaveBeenCalled();
+});
+it('surfaces a closed full-pass reservation with its native HTTP status',async()=>{
+  mocks.fetch.mockResolvedValue(Response.json({error:'Der Durchlauf wurde bereits verwendet.'},{status:409}));
+  await expect(native.getServerRetranscription({id:'m1',driveFolderId:'folder',driveReportId:'json'} as ReportData)).rejects.toMatchObject({status:409,message:expect.stringContaining('bereits')});
 });
 it("safely refuses forgetting a job after an owner switch and dispatches the authenticated terminal-job forget API", async () => {
   mocks.fetch.mockResolvedValue(Response.json({ forgotten: true }));

@@ -1,0 +1,911 @@
+/* The settings workspace and the provider cards share a stylesheet so the
+   same controls also work in setup and the meeting-only storage sheet. */
+.settings-page {
+  min-width: 0;
+  width: 100%;
+  color: var(--ink);
+}
+.settings-page .settings-page-heading {
+  margin-bottom: 26px;
+  align-items: flex-end;
+}
+.settings-page-heading h1 {
+  color: var(--ink);
+}
+.settings-page-heading p {
+  margin-top: 7px;
+  font-size: 14px;
+}
+.settings-page-heading > .settings-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.settings-workspace {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  align-items: start;
+  gap: 30px;
+  min-width: 0;
+}
+.settings-section-nav {
+  position: sticky;
+  top: calc(var(--header-h, 62px) + 24px);
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px 0;
+}
+.settings-nav-caption {
+  padding: 0 12px 10px;
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--muted);
+}
+.settings-section-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 38px;
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+}
+.settings-section-link:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.settings-section-link[aria-current="location"] {
+  background: color-mix(in srgb, var(--brand) 8%, white);
+  color: var(--brand);
+}
+.settings-nav-note {
+  margin: 16px 12px 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.settings-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  min-width: 0;
+}
+.settings-content > * {
+  min-width: 0;
+  animation: settings-enter 260ms ease both;
+}
+.settings-content > [id] {
+  scroll-margin-top: calc(var(--header-h, 62px) + 24px);
+}
+.settings-content > .panel {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  padding: 24px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  box-shadow: 0 2px 6px #16203a03;
+}
+.settings-content h2 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.45px;
+  line-height: 1.35;
+}
+.settings-content > .panel > .btn {
+  justify-self: start;
+}
+.settings-content .eyebrow {
+  display: none;
+}
+.settings-content p {
+  max-width: 82ch;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.settings-content .small {
+  font-size: 12px;
+}
+.settings-section-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+}
+.settings-section-heading > div {
+  min-width: 0;
+  flex: 1 1 240px;
+}
+.settings-section-heading p {
+  margin-top: 7px;
+  color: var(--muted);
+}
+.settings-section-heading > .btn {
+  flex-shrink: 0;
+}
+.settings-connections {
+  display: grid;
+  gap: 18px;
+}
+.settings-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+  min-width: 0;
+}
+.settings-page .btn,
+.provider-card .btn {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.settings-page .settings-quiet-button,
+.provider-card .provider-quiet-button {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-soft);
+  box-shadow: none;
+}
+.settings-page .settings-quiet-button:hover,
+.provider-card .provider-quiet-button:hover {
+  background: var(--hover);
+  border-color: var(--line-soft);
+}
+.settings-account-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.settings-page .account-identity {
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+}
+.settings-page .account-identity .avatar {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  overflow: hidden;
+  border-radius: 12px;
+}
+.settings-page .account-identity .avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.settings-page .account-identity strong {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.settings-page .account-identity small {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: 12px;
+}
+.settings-identity-methods {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.settings-identity-method {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+}
+.settings-identity-method > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.settings-identity-method strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.settings-identity-method small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.settings-identity-method .btn {
+  flex-shrink: 0;
+}
+.settings-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+.settings-session-row p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.settings-session-row .btn {
+  flex-shrink: 0;
+}
+.settings-capture-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  gap: 24px;
+}
+.settings-capture-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.settings-capture-grid > div + div {
+  padding-left: 24px;
+  border-left: 1px solid var(--line-soft);
+}
+.settings-content .form-field {
+  min-width: 0;
+}
+.settings-content .field {
+  max-width: 100%;
+}
+.settings-content .confirm-option {
+  align-items: start;
+  padding: 14px;
+  background: var(--hover);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+.settings-content .confirm-option > input {
+  margin-top: 4px;
+  accent-color: var(--brand);
+}
+.settings-content .confirm-option strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.settings-content .confirm-option small {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+.settings-content .choice {
+  padding: 12px;
+  gap: 10px;
+  border-color: var(--line-soft);
+  border-radius: 9px;
+}
+.settings-content .choice.active {
+  box-shadow: none;
+  border-color: color-mix(in srgb, var(--brand) 40%, white);
+}
+.settings-content .choice strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.settings-content .choice small {
+  font-size: 12px;
+}
+.settings-content .mcp-address {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.settings-content .mcp-address code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.settings-content .mcp-list li {
+  min-width: 0;
+  gap: 12px;
+  align-items: start;
+}
+.settings-content .mcp-list li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.settings-content .mcp-list li .btn {
+  flex-shrink: 0;
+}
+.settings-content .consent-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.settings-content .consent-choice button {
+  font-size: 12px;
+  font-weight: 500;
+}
+.settings-content .storage-figures {
+  padding: 14px;
+  background: var(--hover);
+  border-radius: 10px;
+}
+
+/* Component-local styles: do not depend on a .settings-page ancestor. */
+.provider-card.panel,
+.connection-provider-grid > .provider-card.panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 22px;
+  color: var(--ink);
+  background: var(--glass-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  box-shadow: 0 2px 6px #16203a03;
+}
+.provider-card .provider-heading {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+.provider-heading > div {
+  min-width: 0;
+}
+.provider-card .provider-heading h2,
+.provider-card.provider-meeting .provider-heading h2 {
+  display: block;
+  font-size: 16px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: -0.35px;
+  overflow-wrap: anywhere;
+}
+.provider-card .provider-heading p {
+  margin: 1px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.provider-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  background: var(--hover);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  color: var(--ink-soft);
+}
+.provider-mark.is-microsoft {
+  color: var(--brand);
+}
+.provider-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.provider-status.is-selected {
+  background: color-mix(in srgb, var(--brand) 8%, white);
+  color: var(--brand);
+}
+.provider-card .provider-description,
+.provider-card .provider-permission {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.provider-card .provider-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.provider-folder {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 13px;
+  background: var(--hover);
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  color: var(--ink-soft);
+}
+.provider-folder > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.provider-folder small {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.provider-folder strong {
+  font-size: 13px;
+  line-height: 1.55;
+  font-weight: 550;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.provider-icon-action {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 7px;
+  color: var(--muted);
+  transition:
+    background 150ms ease,
+    color 150ms ease;
+}
+.provider-icon-action:hover {
+  color: var(--brand);
+  background: var(--glass-bg);
+}
+.provider-primary-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.provider-card .provider-selected-button {
+  background: color-mix(in srgb, var(--brand) 6%, white);
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand) 15%, white);
+}
+.provider-card .provider-selected-button:hover {
+  background: color-mix(in srgb, var(--brand) 10%, white);
+}
+.provider-advanced {
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+}
+.provider-advanced > summary,
+.provider-account-access > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+  padding: 10px 0 0;
+  color: var(--ink-soft);
+  list-style: none;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.provider-advanced > summary::-webkit-details-marker,
+.provider-account-access > summary::-webkit-details-marker {
+  display: none;
+}
+.provider-advanced > summary > svg,
+.provider-account-access > summary > svg {
+  transition: transform 180ms ease;
+}
+.provider-advanced[open] > summary > svg,
+.provider-account-access[open] > summary > svg {
+  transform: rotate(180deg);
+}
+.provider-advanced > summary:hover {
+  color: var(--brand);
+}
+.provider-advanced-content {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding-top: 18px;
+}
+.provider-advanced[open] .provider-advanced-content,
+.provider-account-access[open] .provider-account-actions {
+  animation: settings-enter 180ms ease;
+}
+.provider-operation {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+.provider-operation + .provider-operation {
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+.provider-operation strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.provider-card .provider-operation p {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.provider-operation > .btn {
+  justify-self: start;
+  text-align: left;
+}
+.provider-card .provider-danger-operation .btn {
+  color: var(--red, #b3261e);
+}
+.provider-accounts {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+}
+.provider-accounts > li {
+  min-width: 0;
+  padding: 12px;
+}
+.provider-accounts > li + li {
+  border-top: 1px solid var(--line-soft);
+}
+.provider-account-row {
+  display: flex;
+  align-items: start;
+  gap: 9px;
+  min-width: 0;
+}
+.provider-account-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  flex: 1;
+}
+.provider-account-row strong {
+  font-size: 12px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.provider-account-row small {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.provider-account-access > summary {
+  min-height: 32px;
+  font-size: 11px;
+  padding-top: 8px;
+}
+.provider-account-actions {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding-top: 10px;
+}
+.provider-card .provider-account-actions p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.provider-account-actions > .btn {
+  justify-self: start;
+}
+.provider-folder-controls {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.provider-folder-controls .form-field {
+  min-width: 0;
+}
+.provider-folder-controls .form-field > span {
+  font-size: 11px;
+  font-weight: 500;
+}
+.provider-card .field {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  font-size: 13px;
+}
+.provider-folder-controls > .btn {
+  justify-self: start;
+}
+.provider-card .provider-selected-account {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.provider-browser {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--hover);
+}
+.provider-browser-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.provider-browser-heading h3 {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.provider-browser-heading .btn {
+  padding: 6px;
+}
+.provider-folder-list {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  max-height: 264px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.provider-folder-list li {
+  min-width: 0;
+}
+.provider-card .provider-folder-list button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+}
+.provider-folder-list button > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.provider-card .provider-folder-list button:hover {
+  background: var(--glass-bg);
+  color: var(--ink);
+}
+.provider-card .provider-notice {
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.provider-notice .btn {
+  margin-top: 10px;
+}
+.provider-card .provider-busy {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.provider-card.provider-meeting.panel {
+  gap: 14px;
+  padding: 18px;
+  border-radius: 12px;
+}
+.provider-meeting > .btn {
+  justify-self: start;
+}
+
+@keyframes settings-enter {
+  from {
+    opacity: 0.45;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (min-width: 1680px) {
+  .settings-content {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .settings-content > .settings-account,
+  .settings-content > .settings-connections,
+  .settings-content > .settings-capture,
+  .settings-content > #zusammenfassung {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 1180px) {
+  .settings-workspace {
+    grid-template-columns: 160px minmax(0, 1fr);
+    gap: 22px;
+  }
+  .settings-provider-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-capture-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .settings-capture-grid > div + div {
+    padding: 18px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--line-soft);
+  }
+}
+@media (max-width: 760px) {
+  .settings-page .settings-page-heading {
+    margin-bottom: 18px;
+  }
+  .settings-page-heading > .settings-scope {
+    display: none;
+  }
+  .settings-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .settings-section-nav {
+    position: static;
+    display: flex;
+    gap: 5px;
+    overflow-x: auto;
+    padding: 2px 2px 10px;
+    scrollbar-width: thin;
+  }
+  .settings-section-link {
+    flex: 0 0 auto;
+    padding: 8px 11px;
+    border: 1px solid var(--line-soft);
+    background: var(--glass-bg);
+    font-size: 12px;
+  }
+  .settings-section-link[aria-current="location"] {
+    border-color: color-mix(in srgb, var(--brand) 20%, white);
+  }
+  .settings-nav-caption,
+  .settings-nav-note {
+    display: none;
+  }
+  .settings-content {
+    gap: 20px;
+  }
+  .settings-content > .panel {
+    padding: 18px;
+    gap: 14px;
+    border-radius: 12px;
+  }
+  .settings-identity-methods {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-section-heading {
+    gap: 12px;
+  }
+}
+@media (max-width: 480px) {
+  .settings-provider-grid {
+    gap: 14px;
+  }
+  .provider-card.panel,
+  .connection-provider-grid > .provider-card.panel {
+    padding: 16px;
+    gap: 14px;
+  }
+  .provider-card .provider-heading {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 9px;
+  }
+  .provider-heading .provider-mark {
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+  }
+  .provider-heading > .provider-status {
+    grid-column: 2;
+    justify-self: start;
+    margin-top: -4px;
+  }
+  .provider-folder {
+    padding: 11px;
+    gap: 8px;
+  }
+  .settings-session-row {
+    align-items: start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .settings-content .mcp-list li {
+    flex-wrap: wrap;
+  }
+  .settings-content .confirm-option {
+    padding: 12px;
+  }
+  .provider-card.provider-meeting.panel {
+    padding: 15px;
+  }
+}
+@media (pointer: coarse) {
+  .settings-section-link,
+  .provider-advanced > summary,
+  .provider-account-access > summary,
+  .provider-card .provider-folder-list button {
+    min-height: 44px;
+  }
+  .settings-content .consent-choice button,
+  .settings-content .meeting-languages > summary,
+  .settings-page .field,
+  .provider-card .field {
+    min-height: 44px;
+  }
+  .provider-icon-action {
+    width: 44px;
+    height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-content > *,
+  .provider-advanced[open] .provider-advanced-content,
+  .provider-account-access[open] .provider-account-actions {
+    animation: none;
+  }
+  .settings-section-link,
+  .provider-icon-action,
+  .provider-advanced > summary > svg,
+  .provider-account-access > summary > svg {
+    transition: none;
+  }
+}
+@media print {
+  .settings-workspace,
+  .settings-content {
+    display: block;
+  }
+  .settings-section-nav,
+  .settings-page-heading > .settings-scope {
+    display: none;
+  }
+  .settings-content > * {
+    margin-bottom: 18px;
+    animation: none;
+    break-inside: avoid;
+  }
+}

@@ -96,15 +96,16 @@
   color: var(--ink);
 }
 .walk-review-intro h1 {
-  font-size: 34px;
-  line-height: 1.17;
-  letter-spacing: -1.3px;
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: -.8px;
   font-weight: 600;
+  color: var(--ink);
 }
 .walk-review-intro p {
   font-size: 13px;
   color: #475569;
-  max-width: 340px;
+  max-width: 68ch;
   line-height: 1.6;
 }
 .walk-folder {
@@ -366,10 +367,10 @@
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  gap: 14px;
+  align-items: flex-start;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 10px;
 }
 .walk-pending {
   border: 1px solid #b5c9e6;
@@ -409,11 +410,7 @@
   font-size: 12px;
   color: #495a74;
 }
-.walk-review-media audio {
-  display: block;
-  width: 100%;
-  height: 40px;
-}
+
 .walk-message {
   flex-shrink: 0;
   font-size: 11px;
@@ -471,7 +468,8 @@
 .walk-overlay {
   position: fixed;
   inset: 0;
-  background: #1e3a8acc;
+  background: #10182780;
+  backdrop-filter: blur(7px);
   z-index: 40;
   display: flex;
   align-items: center;
@@ -482,7 +480,7 @@
   overscroll-behavior: none;
 }
 .walk-sheet {
-  background: #f5f7fa;
+  background: #fff;
   color: #293343;
   border-radius: 16px;
   width: min(100%, 520px);
@@ -492,6 +490,11 @@
   flex-direction: column;
   outline: none;
   box-shadow: 0 20px 80px #070b1244;
+  animation: sheet-enter 180ms ease-out;
+}
+@keyframes sheet-enter {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to { opacity: 1; transform: none; }
 }
 .walk-sheet > header {
   display: flex;
@@ -562,8 +565,21 @@
     padding: 20px 38px;
   }
   .walk-review-intro h1 {
-    font-size: 40px;
+    font-size: 32px;
   }}
+@media (min-width: 900px) {
+  .walk-review .walk-content {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: min-content;
+    align-content: start;
+    align-items: start;
+    gap: 22px 24px;
+  }
+  .walk-review .walk-review-intro { grid-column: 1 / -1; }
+  .walk-review .walk-speaker-assumptions { margin-top: 0; }
+  .walk-review .walk-content > * { min-width: 0; }
+}
 @media (max-height: 740px) {
   /* A phone at 100dvh can legitimately need this. A monitor cannot. */
   .walk-content.is-ready { overflow-y: auto; justify-content: flex-start; }

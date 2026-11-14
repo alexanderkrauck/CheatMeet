@@ -19,7 +19,7 @@ import {
   Volume2,
   MonitorUp,
 } from "lucide-react";
-import { AudioPreview } from "../components/UI";
+import MeetingAudioPlayer from "../components/MeetingAudioPlayer";
 import LiveMeeting from "../components/LiveMeeting";
 import RecordingSheet from "../components/RecordingSheet";
 import { savedDriveFolder } from "../lib/driveSettings";
@@ -885,22 +885,43 @@ export default function RecordPage() {
                 <>
                   <div className="walk-review-intro">
                     <span className="walk-pending">
-                      Noch nicht fertig · Sichern steht aus
+                      Aufnahme beendet · Sichern steht aus
                     </span>
-                    <h1>
-                      Aufnahme fertig.
-                      <br />
-                      Jetzt den Bericht erstellen.
-                    </h1>
+                    <h1>Aufnahme abgeschlossen</h1>
                     <p>
                       {draft.report.transcriptionOrigin === "import"
                         ? "Audio sichern, einmal transkribieren und zusammenfassen."
                         : "Audio sichern und das Live-Transkript zusammenfassen. Deine Namen und Audioquellen bleiben erhalten."}
                     </p>
                   </div>
+                  <div className="walk-review-media">
+                    <div className="walk-review-stats">
+                      <span>
+                        <Mic size={18} />
+                        {formatTime(durationMs)} Aufnahme
+                      </span>
+                    </div>
+                    {draft.audio && (
+                      <MeetingAudioPlayer
+                        blob={draft.audio}
+                        loading={false}
+                        durationMs={durationMs}
+                        onRequestPlay={() => {}}
+                        onReady={() => {}}
+                      />
+                    )}
+                    {failed > 0 && (
+                      <p className="walk-gap">
+                        Das Live-Transkript kann Lücken enthalten. Es wird ohne
+                        automatische erneute Transkription verwendet. Du kannst
+                        unter Transkription einen zusätzlichen Durchlauf wählen.
+                        Die Originalaufnahme wird gesichert.
+                      </p>
+                    )}
+                  </div>
                   {draft.report.transcriptionOrigin !== "import" && (
                     <fieldset className="walk-speaker-assumptions">
-                      <legend>Transkript für die Zusammenfassung</legend>
+                      <legend>Transkription</legend>
                       <label>
                         <input
                           type="checkbox"
@@ -910,15 +931,14 @@ export default function RecordPage() {
                             setCaptureRetranscribe(event.target.checked)
                           }
                         />
-                        Gesamte Aufnahme am Ende erneut transkribieren
+                        Gesamte Aufnahme neu transkribieren
                       </label>
                       <p>
-                        Optionaler zusätzlicher, kostenpflichtiger
-                        AssemblyAI-Durchlauf. Kann Lücken im Live-Transkript
-                        schließen, dauert länger und ersetzt nach Erfolg dessen
-                        Text. Namen werden soweit eindeutig zugeordnet
-                        übernommen; unklare Sprecher kannst du prüfen. Ohne
-                        Häkchen wird das Live-Transkript verwendet.
+                        Optional und kostenpflichtig: ein zusätzlicher AssemblyAI-Durchlauf
+                        kann Lücken schließen. Ohne Auswahl wird das Live-Transkript
+                        verwendet. Du kannst die Volltranskription auch später im fertigen
+                        Bericht starten. Eindeutige Namen bleiben erhalten; unklare
+                        Sprecher kannst du prüfen.
                       </p>
                     </fieldset>
                   )}
@@ -941,28 +961,6 @@ export default function RecordPage() {
                     label="TERMIN"
                     onPick={pickEvent}
                   />
-                  <div className="walk-review-media">
-                    <div className="walk-review-stats">
-                      <span>
-                        <Mic size={18} />
-                        {formatTime(durationMs)} Aufnahme
-                      </span>
-                    </div>
-                    {draft.audio && (
-                      <AudioPreview
-                        blob={draft.audio}
-                        durationMs={durationMs}
-                      />
-                    )}
-                    {failed > 0 && (
-                      <p className="walk-gap">
-                        Das Live-Transkript kann Lücken enthalten. Es wird ohne
-                        automatische erneute Transkription verwendet. Du kannst
-                        oben einen zusätzlichen Durchlauf wählen. Die
-                        Originalaufnahme wird gesichert.
-                      </p>
-                    )}
-                  </div>
                   <button
                     className="walk-folder"
                     onClick={() => setSheet("settings")}
