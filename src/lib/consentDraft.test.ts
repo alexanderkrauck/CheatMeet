@@ -27,6 +27,13 @@ const respond = (status: number, body: unknown) =>
 beforeEach(() => vi.unstubAllGlobals());
 
 describe("draftConsentNotice", () => {
+  it("associates consent phrasing with the current meeting without sending an owner claim", async () => {
+    respond(200, { parts: { opening: "Kurz vorab:" } });
+    await draftConsentNotice(facts, [], { meetingId: "meeting", storage: "microsoft" });
+    const init = vi.mocked(fetch).mock.calls[0][1]!;
+    expect(init.headers).toMatchObject({ "X-CheatMeet-Meeting-ID": "meeting", "X-CheatMeet-Storage": "microsoft" });
+    expect(JSON.parse(init.body as string).owner).toBeUndefined();
+  });
   it("sends the facts and the situation the user described", async () => {
     respond(200, { parts: { opening: "Kurz vorab:" } });
     await draftConsentNotice(facts, ["Sergio von StackFuel, Verkaufsgespräch"]);

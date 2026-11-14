@@ -17,7 +17,8 @@ and user-field comparison; real edits and alternative versions stay protected.
 
 The default uses saved live text. The explicit final-transcription option and
 imports use the existing one-final-pass AssemblyAI reservation. An uncertain ASR
-submission is never automatically sent again. Speaker ambiguity pauses for review.
+submission is never automatically sent again. Speaker ambiguity does not pause
+processing: unmatched voices keep neutral labels and can be named later.
 Google permission loss blocks the job without signing the person out of Firebase.
 
 ## Runtime bindings
@@ -49,6 +50,12 @@ newer user edits and uncertain ASR submissions stop or block explicitly. The wor
 spends at most 200 seconds in an awaited step (one <=120 second Gemini attempt),
 within the current 300 second Cloud Run request limit. Never start an unawaited
 background promise after returning a successful HTTP response.
+
+Analysis, including awaited consumption-accounting writes, leaves the last 20
+seconds of that budget for its durable checkpoint. Accounting REST calls honor
+the same budget; Gemini's remaining timeout is checked again after its durable
+usage begin. An accounting settlement timeout retains a visible pending entry
+instead of discarding a paid response or consuming the checkpoint window.
 
 Drive v3 can omit response ETags. The source loader verifies v2's explicit version
 against v3's before-media version, then conditionally PUTs through v2 with If-Match.

@@ -20,9 +20,9 @@ vi.mock("./MeetingRow", async importOriginal => ({ ...await importOriginal<typeo
 vi.mock("./UI", () => ({ Notice: ({children}: any) => <p role="alert">{children}</p>, Busy: ({text}: any) => <p>{text}</p>, dateLabel: (date: string) => date, dateTimeLabel: (date: string) => date, Status: () => <span>Entwurf</span>, CalendarStatus: () => null }));
 vi.mock("../lib/calendar", () => ({ hasAnyCalendarGrant: () => false, subscribeCalendar: () => () => {} }));
 
-it("labels a saved-only meeting as archived and running work with its real stage", async () => {
+it.each([false,true])("labels saved-only meetings as archived regardless of optional speaker naming (%s)", async (needsReview) => {
   const { default: ActualMeetingRow } = await vi.importActual<typeof import("./MeetingRow")>("./MeetingRow");
-  const report = { id: "saved-only", title: "Nur sichern", date: "2026-11-13", status: "pending", summary: "", speakers: [], needsReview: false, driveSyncedAt: "2026-11-13" } as any;
+  const report = { id: "saved-only", title: "Nur sichern", date: "2026-11-13", status: "pending", summary: "", speakers: [], needsReview, driveSyncedAt: "2026-11-13" } as any;
   progressJobs.jobs = [{ reportId: report.id, stage: "done", message: "Fertig" }];
   let html = renderToStaticMarkup(<MemoryRouter><ActualMeetingRow report={report} /></MemoryRouter>);
   expect(html).toContain("Archiviert · ohne Bericht");
@@ -31,6 +31,14 @@ it("labels a saved-only meeting as archived and running work with its real stage
   html = renderToStaticMarkup(<MemoryRouter><ActualMeetingRow report={report} running /></MemoryRouter>);
   expect(html).toContain("Aufnahme wird gesichert");
   expect(html).not.toContain("Analyse läuft");
+});
+
+it("does not turn optional unnamed speakers into an open task",()=>{
+  progressJobs.jobs=[{reportId:'optional-names',stage:'done'}];
+  const workspace={reports:[{id:'optional-names',title:'Abgeschlossen',status:'completed',needsReview:true}],dirty:[],drafts:[],error:'',draftsError:'',running:new Set(),reload:vi.fn()} as any;
+  try {
+    expect(renderToStaticMarkup(<MemoryRouter><AttentionQueue workspace={workspace}/></MemoryRouter>)).toBe('');
+  } finally { progressJobs.jobs=[]; }
 });
 
 it("identifies same-stage background links by meeting without a second report subscription", () => {

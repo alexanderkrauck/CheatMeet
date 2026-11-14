@@ -76,7 +76,7 @@ Grant changes use native-version compare-and-set, including credential-free tomb
 
 `handleCaptureOwnerChange` fences capture on every auth transition, including sign-out, while retaining the old owner's recoverable draft. PWA reload safety reads private `canReleaseCapture()` state and rechecks at activation; a foreign-masked public snapshot is not reload authority. Report edits/restores/checkpoints use observed local revisions; pending archive edits retain `archiveBaseSyncedAt`, and canonical JSON writes use provider-native conditional I/O. These checks do not make local, index, Markdown and archive writes one distributed transaction.
 
-**Nutzung** (`src/lib/usage.ts`, `src/pages/UsagePage.tsx`) is account-scoped, report-derived activity by Vienna day, Monday-first week and month. It shows known duration coverage and explicit archive/index limitations, not provider invoices, API calls, token usage or inferred costs. No new telemetry collection is introduced.
+**Nutzung** (`server/usage/`, `src/lib/consumption.ts`, `src/pages/UsagePage.tsx`) records actual provider consumption per verified account: one Gemini entry per real SDK attempt, each live source/reconnection separately, and native batch reservations. Production uses the server-only `usageEvents` Firestore ledger; local development uses private `.usage-events/` files. Gemini counters are saved before response parsing; a paid response is never retried merely because accounting settlement failed. Browser-relayed live duration is labelled separately from server-received provider metadata, and missing measurements/history remain unknown. Day/week/month views use Vienna operation start, follow all bounded API pages, and show rate-snapshot USD **estimates**, not invoices. `USAGE_OWNER_UIDS` is an explicit exact-UID operator allowlist, default none; ordinary users only see themselves. Report-derived meeting activity (`src/lib/usage.ts`) remains separate. See `USAGE_IMPLEMENTATION.md` for privacy, indexes, rates and rollout.
 
 **AssemblyAI is the default for new recordings and imports.** See
 `ASSEMBLYAI_IMPLEMENTATION.md` for the full flow and rollout requirements.
@@ -99,8 +99,9 @@ requests retain the live transcript and resume the existing server job. After
 Drive backup, the server streams the saved audio to AssemblyAI without passing
 the Drive credential to the provider. `prepareTranscript.ts` polls the reserved
 job and checkpoints the batch text before analysis. `speakerMatches.ts` carries
-over unambiguous live speaker names and sends ambiguous matches to the existing
-review screen. Imports also use this batch path. "Only save in Drive" never starts
+over unambiguous live speaker names; uncertain matches keep neutral speaker labels.
+Naming is optional and never pauses analysis or opens a mandatory review screen.
+Names can still be corrected in the transcript. Imports also use this batch path. "Only save in Drive" never starts
 paid ASR, even when the option is checked. Report speaker edits do not trigger ASR.
 Only transcript text goes to Gemini for new recordings; there is no automatic
 audio fallback when live transcription is empty.

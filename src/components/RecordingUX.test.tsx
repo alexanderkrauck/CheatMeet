@@ -222,6 +222,7 @@ it("offers only phase-valid actions while recording or paused, even with an audi
   for (const state of ["recording", "paused"]) {
     h.snap.state = state;
     let tree = await ready();
+    expect(nodes(tree).find(n => n.type === "live-meeting")?.props.usage).toEqual({ meetingId: "take", storage: "google" });
     button(tree, "Weitere Optionen").props.onClick(); tree = render();
     expect(text(tree)).not.toContain("ohne Analyse");
     expect(text(tree)).not.toContain("Als Entwurf später fortsetzen");

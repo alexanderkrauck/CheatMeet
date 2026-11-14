@@ -2,7 +2,7 @@ import express from 'express';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ReportData } from '../../src/types';
 import type { MeetingTranscript } from '../../shared/transcription';
-import { needsSpeakerReview, renderTranscript } from '../../shared/transcription';
+import { renderTranscript } from '../../shared/transcription';
 import { reconcileSpeakers } from '../../src/lib/speakerMatches';
 import { processingActive, processingSourceKey, processingStorage, type ProcessingJobView } from '../../shared/processing';
 import type { DocStore } from '../mcp/docStore';
@@ -11,11 +11,13 @@ import { toArchive } from '../../src/lib/archive';
 import { withProcessingBudget } from './budget';
 import { archiveAudioId, microsoftHome, type MicrosoftHome } from '../../shared/storage';
 import { withCalendarFreshness } from '../../shared/calendarNotes';
+import { usageOwnerLabel } from '../usage';
 export { processingConfigured } from './runtime';
 
 export interface Task { key: string; run: string; seq: number }
 export interface ProcessingJob extends ProcessingJobView {
   owner: string; googleSub: string; key: string; run: string; seq: number;
+  usageOwnerLabel?: string;
   refs: { id:string; driveFolderId:string; driveReportId:string; home?:MicrosoftHome };
   revision:string; indexRevision:string; analyze:boolean; retranscribe:boolean; calendarSync:boolean; regenerate?:boolean;
   /** New explicit passes must own their native reservation, not reuse older ASR output. */
@@ -40,7 +42,7 @@ export interface ProcessingOptions {
   verifyWorker:(token:string)=>Promise<void>;
   enqueue:(task:Task,delaySeconds?:number)=>Promise<void>;
   io:ProcessingIO;
-  analyze:(text:string,preferences:string)=>Promise<{title:string;summary:string;transcription:string;todos:ReportData['todos'];takeaways:string[]}>;
+  analyze:(text:string,preferences:string,job:ProcessingJob)=>Promise<{title:string;summary:string;transcription:string;todos:ReportData['todos'];takeaways:string[]}>;
   batch?:(job:ProcessingJob,report:ReportData)=>Promise<MeetingTranscript|null>;
   /** Native reservation metadata only; must never poll or submit to the provider. */
   retranscription?:(owner:string,id:string)=>Promise<RetranscriptionEligibility>;
@@ -167,7 +169,7 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
               await o.io.checkpoint(j,'prepared',report);
             }
           }
-          if(!delay)patch={step:needsSpeakerReview(report.speech)?'export':j.analyze&&(j.regenerate||!report.summary.trim())?'analyze':'export',state:needsSpeakerReview(report.speech)?'exporting':j.analyze&&(j.regenerate||!report.summary.trim())?'analyzing':'exporting'};
+          if(!delay)patch={step:j.analyze&&(j.regenerate||!report.summary.trim())?'analyze':'export',state:j.analyze&&(j.regenerate||!report.summary.trim())?'analyzing':'exporting'};
         }else if(j.step==='analyze'){
           let result=await o.io.readCheckpoint(j,'analyzed');
           if(!result){
@@ -175,7 +177,7 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
             if(!report)throw new ProcessingError(422,'Gesichertes Transkript fehlt.');
             const source=await o.io.load(j);
             if(source.revision!==j.revision||source.indexRevision!==j.indexRevision)throw new ProcessingError(409,'Der Bericht wurde inzwischen geändert.',true);
-            const analysis=await o.analyze(report.transcription,j.preferences);
+            const analysis=await o.analyze(report.transcription,j.preferences,j);
             result=withCalendarFreshness(report,{...report,...analysis,title:report.title.trim()||analysis.title,suggestedTitle:analysis.title,transcription:report.transcription,status:'completed',summaryNeedsRefresh:false,error:'',updatedAt:stamp()});
             await o.io.checkpoint(j,'analyzed',result);
           }
@@ -193,7 +195,7 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
           const report=await o.io.readCheckpoint(j,'exported');
           if(!report)throw new ProcessingError(422,'Export fehlt.');
           await o.io.publish(j,report);
-          patch={state:needsSpeakerReview(report.speech)?'review':'done'};
+          patch={state:'done'};
         }
         });
         patch={...patch!,failures:0,error:undefined};
@@ -298,7 +300,8 @@ export function createProcessingRouter(options:Partial<ProcessingOptions>={}) {
       if(eligibility.state!=='available'&&!resumeUsed)throw new ProcessingError(eligibility.state==='unavailable'?503:eligibility.state==='missing-audio'?422:409,eligibility.message,true);
     }
     const preferences=typeof b.preferences==='string'?b.preferences:await o.preferences?.(a.uid)||'';
-    const fresh:ProcessingJob={reportId:r.id,key,owner:a.uid,googleSub:a.googleSub,refs,revision:source.revision,indexRevision:source.indexRevision,run:randomUUID(),seq:0,state:'queued',message:messages.queued,attempts:0,failures:0,polls:0,step:'prepare',analyze:b.analyze,retranscribe:b.retranscribe===true,requireNewBatch:b.analyze&&b.retranscribe===true,calendarSync:b.calendarSync===true,regenerate:b.regenerate===true,preferences,updatedAt:stamp()};
+    const label=usageOwnerLabel(req,a.uid);
+    const fresh:ProcessingJob={reportId:r.id,key,owner:a.uid,...(label?{usageOwnerLabel:label}:{}),googleSub:a.googleSub,refs,revision:source.revision,indexRevision:source.indexRevision,run:randomUUID(),seq:0,state:'queued',message:messages.queued,attempts:0,failures:0,polls:0,step:'prepare',analyze:b.analyze,retranscribe:b.retranscribe===true,requireNewBatch:b.analyze&&b.retranscribe===true,calendarSync:b.calendarSync===true,regenerate:b.regenerate===true,preferences,updatedAt:stamp()};
     const next=await o.store.mutate(key,c=>{
       assertSource(c);
       if(c&&processingActive(c)){assertIntent(c);return undefined;}

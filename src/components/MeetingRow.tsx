@@ -25,7 +25,7 @@ import {
 
 /** A durable recording without a generated summary is not an unsaved draft. */
 export const isArchivedWithoutReport = (report: ReportSummary) =>
-  report.status === "pending" && !!archiveSyncedAt(report) && !report.summary?.trim() && !report.needsReview && !report.error;
+  report.status === "pending" && !!archiveSyncedAt(report) && !report.summary?.trim() && !report.error;
 
 /**
  * One meeting, rendered the same way wherever meetings are listed. The row is

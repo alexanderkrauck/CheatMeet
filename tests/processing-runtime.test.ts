@@ -91,6 +91,17 @@ it('closes pinned audio if a competing native reservation appears between poll a
   expect(provider).not.toHaveBeenCalled();
   expect(submission?.state).toBe('reserved');
 });
+it('attributes a worker batch submission to the signed-in owner and pinned Microsoft archive',async()=>{
+  const docs=new Map<string,Submission>();
+  const store:SubmissionStore={get:async k=>docs.get(k)||null,set:async(k,v)=>{docs.set(k,v);},reserve:async(k,v)=>{if(docs.has(k))return false;docs.set(k,v);return true;},retry:async()=>false};
+  const usageRecorder={begin:vi.fn(async()=> 'usage-1'),finish:vi.fn(async()=>{}),get:vi.fn(async()=>null)};
+  const provider=vi.fn(async(input:any)=>String(input).endsWith('/upload')?Response.json({upload_url:'https://provider.invalid/upload'}):Response.json({id:'private-provider-id'}));
+  const worker=runtime.createProcessingTranscription({audio:async()=>Readable.from(['synthetic audio'])},{store,apiKey:'fixture-only',fetchImpl:provider,usageRecorder});
+  const job={owner:'alice',usageOwnerLabel:'Verified Alice',refs:{id:'meeting',home:{provider:'microsoft',connectionId:'c',driveId:'d',rootId:'root',rootName:'Meetings'}}} as unknown as ProcessingJob;
+  await worker.batch(job,report);
+  expect(usageRecorder.begin).toHaveBeenCalledWith(expect.objectContaining({owner:'alice',ownerLabel:'Verified Alice',meetingId:'meeting',storage:'microsoft',operation:'batch-transcription'}),expect.any(String));
+});
+
 it('uses the provider-aware calendar hook for a Microsoft event archived in Google Drive',async()=>{
   const calendar=vi.fn(async(_j:ProcessingJob,r:ReportData)=>({...r,calendarSyncedAt:'2026-11-13T12:00:00Z'}));
   const h=fakeDrive(false,false,calendar);Object.assign(h.j,await h.io.load(h.j));h.j.calendarSync=true;

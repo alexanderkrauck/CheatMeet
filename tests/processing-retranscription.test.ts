@@ -324,7 +324,7 @@ it('lets explicit summary regeneration bypass completed canonical reuse without 
   expect((await h.submit({ analyze: true, regenerate: true })).body.job.state).toBe('queued');
   expect((await h.job())!.run).not.toBe(completed.run);
   expect((await h.finish()).state).toBe('done');
-  expect(h.analyze).toHaveBeenCalledWith(original.transcription, '');
+  expect(h.analyze).toHaveBeenCalledWith(original.transcription, '', expect.objectContaining({owner:'alice',reportId:original.id,regenerate:true}));
   expect(h.source().report.transcription).toBe(original.transcription);
   expect(h.provider).not.toHaveBeenCalled();
   expect(h.reservations.size).toBe(0);

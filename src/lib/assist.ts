@@ -1,4 +1,5 @@
 import { auth } from "./firebase";
+import { usageHeaders, type MeetingUsageContext } from "./usageContext";
 import {
   MAX_QUESTION_CHARS,
   validateInsights,
@@ -25,19 +26,29 @@ export const hasInsights = (insights: MeetingInsights) =>
   insights.decisions.length > 0 ||
   insights.terms.length > 0;
 
-async function post(route: string, body: unknown, timeoutMs: number) {
-  const token = await auth.currentUser?.getIdToken();
+async function post(route: string, body: unknown, timeoutMs: number, usage?: MeetingUsageContext) {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Bitte erneut anmelden.");
+  const owner = user.uid;
+  const check = () => {
+    if (auth.currentUser?.uid !== owner) throw new Error("Das angemeldete Konto hat sich geändert.");
+  };
+  const token = await user.getIdToken();
+  check();
   if (!token) throw new Error("Bitte erneut anmelden.");
   const response = await fetch(`/api/${route}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
+      ...usageHeaders(usage),
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
+  check();
   const data = await response.json().catch(() => ({}));
+  check();
   if (!response.ok)
     throw new Error(data.error || `Anfrage fehlgeschlagen (${response.status}).`);
   return data;
@@ -47,6 +58,7 @@ async function post(route: string, body: unknown, timeoutMs: number) {
 export async function askMeeting(
   question: string,
   transcript: string,
+  usage?: MeetingUsageContext,
 ): Promise<string> {
   const data = await post(
     "ask",
@@ -55,6 +67,7 @@ export async function askMeeting(
       transcript: speechOnly(transcript),
     },
     60_000,
+    usage,
   );
   return typeof data.answer === "string" ? data.answer : "";
 }
@@ -62,8 +75,9 @@ export async function askMeeting(
 /** Current open questions, commitments, decisions and jargon. */
 export async function meetingInsights(
   transcript: string,
+  usage?: MeetingUsageContext,
 ): Promise<MeetingInsights> {
   return validateInsights(
-    await post("insights", { transcript: speechOnly(transcript) }, 60_000),
+    await post("insights", { transcript: speechOnly(transcript) }, 60_000, usage),
   );
 }

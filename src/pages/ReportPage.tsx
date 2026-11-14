@@ -88,11 +88,10 @@ import TranscriptTimeline from "../components/TranscriptTimeline";
 import MeetingAudioPlayer from "../components/MeetingAudioPlayer";
 import RetranscriptionDialog from "../components/RetranscriptionDialog";
 import SummaryContent from "../components/SummaryContent";
-import SpeakerReview from "../components/SpeakerReview";
+
 import SpeakerEditor from "../components/SpeakerEditor";
 import {
   renderTranscript,
-  needsSpeakerReview,
   renameSpeaker,
 } from "../../shared/transcription";
 import { prepareTranscript } from "../lib/prepareTranscript";
@@ -516,10 +515,7 @@ export function ReportDetail({
     }
   }
 
-  async function retry(
-    reviewDecision?: "reviewed" | "skipped",
-    refreshSummary = false,
-  ) {
+  async function retry(refreshSummary = false) {
     if (!view || busy || running || edited) return;
     const report = view;
     const owner = uid();
@@ -581,16 +577,6 @@ export function ReportDetail({
           source = await syncSource(source);
           checkOwner();
         }
-        if (reviewDecision && needsSpeakerReview(source.speech)) {
-          source = {
-            ...source,
-            speech: { ...source.speech!, speakerReview: reviewDecision },
-            transcription: renderTranscript(source.speech!),
-            error: "",
-          };
-          source = await syncSource(source);
-          checkOwner();
-        }
         await handoffServerProcessing(owner, source, {
           analyze: true,
           regenerate: refreshSummary && !!source.summary.trim(),
@@ -647,37 +633,6 @@ export function ReportDetail({
       await prepareTranscript(d, t, { expectedUpdatedAt });
       expectedUpdatedAt = d.report.updatedAt ?? null;
       checkOwner();
-      if (reviewDecision && needsSpeakerReview(d.report.speech)) {
-        d.report = {
-          ...d.report,
-          speech: { ...d.report.speech!, speakerReview: reviewDecision },
-          transcription: renderTranscript(d.report.speech!),
-          error: "",
-        };
-        await putDraft(owner, d);
-        checkOwner();
-      }
-      if (needsSpeakerReview(d.report.speech)) {
-        d.report = { ...d.report, ...pendingArchive(d.report), status: "pending", error: "" };
-        const warning = await saveReport(d.report, { expectedUpdatedAt });
-        checkOwner();
-        const saved = await confirmSavedReport(owner, d.report);
-        d.report = saved.report;
-        setReport(d.report);
-        setDirty(saved.dirty);
-        setEdited(undefined);
-        setEditFields(false);
-        const result = await syncReport(d.report, t);
-        checkOwner();
-        setReport(result.report);
-        setDirty(!!result.warning);
-        if (warning) setError(warning);
-        setNotice(
-          result.warning ||
-            "Transkript bereit. Bitte Sprecher prüfen oder Prüfung überspringen.",
-        );
-        return;
-      }
       setBusy("Analysiere...");
       const next = { ...(await analyzeDraft(d, { expectedUpdatedAt })), ...pendingArchive(d.report), summaryNeedsRefresh: false };
       expectedUpdatedAt = d.report.updatedAt ?? null;
@@ -1149,8 +1104,7 @@ export function ReportDetail({
           </div>
         ) : (
           (view.status !== "completed" || view.summaryNeedsRefresh) &&
-          !edited &&
-          !needsSpeakerReview(view.speech) && (
+          !edited && (
             <div className="analysis-recovery panel no-print">
               <div>
                 <h2>
@@ -1166,7 +1120,7 @@ export function ReportDetail({
               </div>
               <button
                 className="btn btn-primary"
-                onClick={() => retry(undefined, !!view.summaryNeedsRefresh)}
+                onClick={() => retry(!!view.summaryNeedsRefresh)}
                 disabled={!!busy || !!edited}
               >
                 <WandSparkles size={18} />{" "}
@@ -1178,64 +1132,6 @@ export function ReportDetail({
           )
         )}
 
-        {!running && needsSpeakerReview(view.speech) && (
-          <section className="panel speaker-review no-print">
-            <h2>Nur offene Zuordnungen</h2>
-            <p>
-              Passende Live-Namen und Audioquellen sind übernommen. Hier bleiben
-              nur unklare Beiträge. Du kannst sie zuordnen oder direkt
-              fortfahren.
-            </p>
-
-            <SpeakerReview
-              speech={view.speech!}
-              onListen={listen}
-              onChange={(speech) =>
-                correctTranscript({
-                  speech,
-                  transcription: renderTranscript(speech),
-                })
-              }
-            />
-            <details className="speaker-advanced">
-              <summary>Weitere Korrekturen</summary>
-              <SpeakerEditor
-                speech={view.speech!}
-                disabled={!!busy || running}
-                onListen={listen}
-                onChange={(speech) =>
-                  correctTranscript({
-                    speech,
-                    transcription: renderTranscript(speech),
-                  })
-                }
-              />
-            </details>
-            <div className="speaker-review-actions">
-              <button
-                className="btn btn-primary"
-                onClick={() => retry("reviewed", !!view.summaryNeedsRefresh)}
-                disabled={!!edited}
-              >
-                Weiter zur Zusammenfassung
-              </button>
-              <button
-                className="btn"
-                disabled={!!edited}
-                onClick={() => retry("skipped", !!view.summaryNeedsRefresh)}
-              >
-                Prüfung überspringen
-              </button>
-            </div>
-            {edited && (
-              <p className="muted">
-                Sprecherkorrekturen zuerst speichern, dann mit der
-                Zusammenfassung fortfahren.
-              </p>
-            )}
-            {editControls}
-          </section>
-        )}
 
       </fieldset>
       <div className="report-columns">
@@ -1427,7 +1323,7 @@ export function ReportDetail({
                 });
               }}
             />
-            {edited && !needsSpeakerReview(view.speech) && (
+            {edited && (
               <details
                 className="speaker-advanced"
                 open={focusTurnId ? true : undefined}

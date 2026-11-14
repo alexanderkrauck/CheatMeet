@@ -588,7 +588,10 @@ it("persists text-only regeneration intent through save/reload and requests it o
   h.handoff.mockClear();
   view();
   await flush();
-  await button("Weiter zur Zusammenfassung").props.onClick();
+  expect(text(view())).not.toContain("Nur offene Zuordnungen");
+  expect(text(view())).not.toContain("Prüfung überspringen");
+  expect(nodes(view()).find(n=>n.type===TranscriptTimeline)?.props.onRename).toBeTypeOf('function');
+  await button("Zusammenfassung aktualisieren").props.onClick();
   expect(h.handoff).toHaveBeenCalledWith(
     "owner",
     expect.anything(),
@@ -617,9 +620,10 @@ it("does not replace a newer human report when browser analysis settles late", a
   expect(text(view())).toContain("Revision conflict");
 });
 
-it("threads successful preparation revisions through analysis, index save and archive upload", async () => {
+it.each([false,true])("threads successful preparation revisions through analysis without a speaker checkpoint (unresolved=%s)", async (unresolved) => {
   h.processing = false;
   initial = { ...fixture(), status: "error" };
+  if(unresolved) initial.speech={provider:'assemblyai',phase:'final',languages:['de'],speakerReview:'pending',speakerNames:{},turns:[{id:'batch:0',speaker:'batch:A',text:'Unbenannter Beitrag',startMs:0,endMs:1000,final:true}]};
   h.stored = { report: initial, dirty: false };
   h.prepare.mockImplementationOnce(async (draft) => {
     draft.report = { ...draft.report, updatedAt: "prepared-revision" };

@@ -5,7 +5,7 @@ import {
   CloudUpload,
   Mic,
   RefreshCw,
-  UserRoundCheck,
+
 } from "lucide-react";
 import { captureSnapshot, subscribeCapture } from "../lib/capture";
 import { reportIndexCollection } from "../../shared/storage";
@@ -30,8 +30,8 @@ const liveDraftId = () => {
 /**
  * Everything that is waiting on the user, in one place. The overview used to
  * spread this across a load error, a sync banner, a draft banner per draft and
- * two states the running-job pill deliberately drops — a failed analysis and a
- * pending speaker review, both of which then existed nowhere in the UI.
+ * failed analyses the running-job pill deliberately drops. Optional speaker
+ * naming is not an unfinished task.
  */
 export default function AttentionQueue({
   workspace,
@@ -51,11 +51,7 @@ export default function AttentionQueue({
     return reportHref(draft.report) !== recording && !processing;
   });
   const failed = reports.filter((r) => (r.status === "error" || jobFor(r.id, r)?.stage === "error") && !running.has(reportHref(r)));
-  // A failed report can also be awaiting speaker review; it is one problem to
-  // the user, and the failure is the one worth acting on.
-  const review = reports.filter(
-    (r) => r.needsReview && r.status !== "error",
-  );
+
   const unsynced = reports.filter((r) => dirty.includes(reportHref(r)));
 
   async function syncAll() {
@@ -150,18 +146,7 @@ export default function AttentionQueue({
         </Link>
       ),
     })),
-    ...review.map((report) => ({
-      key: `review-${reportHref(report)}`,
-      tone: "amber",
-      icon: <UserRoundCheck size={17} />,
-      title: report.title || "Unbenanntes Meeting",
-      detail: "Sprecher bestätigen",
-      action: (
-        <Link className="btn" to={reportHref(report)}>
-          Prüfen
-        </Link>
-      ),
-    })),
+
     ...(unsynced.length
       ? [
           {

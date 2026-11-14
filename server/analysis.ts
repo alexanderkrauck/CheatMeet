@@ -10,6 +10,9 @@ import {
 } from "@google/genai";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import firebaseConfig from "../firebase-applet-config.json";
+import { generateMetered, type GeminiUsageContext } from "./geminiUsage";
+import { getUsageRecorder, usageOwnerLabel } from "./usage";
+import type { UsageOperation, UsageRecorder } from "../shared/usage";
 import { MAX_CONSENT_TURNS } from "../shared/analysis";
 import {
   CONSENT_ORDER,
@@ -65,7 +68,23 @@ type Options = {
   retryAttempts?: number;
   uploadRoot?: string;
   timeoutMs?: number;
+  usage?: UsageRecorder;
+  usageContext?: GeminiUsageContext;
 };
+
+const recorderFor = (options: Options) => options.usage ??
+  (process.env.NODE_ENV === "test" ? undefined : getUsageRecorder());
+function usageContext(req: express.Request, owner: string, operation: UsageOperation, features?: string[]): GeminiUsageContext {
+  const meetingId = req.get("X-CheatMeet-Meeting-ID");
+  return {
+    owner,
+    ownerLabel: usageOwnerLabel(req, owner),
+    operation,
+    ...(meetingId && /^[a-zA-Z0-9_-]{1,100}$/.test(meetingId) ? { meetingId } : {}),
+    storage: req.get("X-CheatMeet-Storage") === "microsoft" ? "microsoft" : "google",
+    ...(features ? { features } : {}),
+  };
+}
 
 class RequestError extends Error {
   constructor(
@@ -107,14 +126,15 @@ export async function analyzeTranscript(transcription: string, preferences = "",
   const attempts = options.retryAttempts ?? 1;
   for (let attempt = 1; ; attempt++) {
     try {
-      const response = await client.models.generateContent({
+      const response = await generateMetered(client, {
         model: analysisModel(), contents: [{ role: "user", parts: [{ text: transcription }] }],
         config: {
+          httpOptions: { timeout: options.timeoutMs ?? 120_000 },
           systemInstruction: analysisInstruction(preferences) + "\nGib das Transkript nicht zurück. Es ist bereits vollständig gespeichert. Erzeuge ausschließlich Titel, Zusammenfassung, Aufgaben und Erkenntnisse.",
           responseMimeType: "application/json",
           responseJsonSchema: { ...reportSchema, properties: Object.fromEntries(Object.entries(reportSchema.properties).filter(([key]) => key !== "transcription")), additionalProperties: false },
         },
-      });
+      }, options.usageContext || { owner: "", operation: "summary" }, recorderFor(options));
       try { return { ...validateAnalysis(JSON.parse(response.text || "")), transcription }; }
       catch { throw new RequestError(502, "Die KI hat keinen vollständigen Bericht geliefert."); }
     } catch (error) {
@@ -148,7 +168,7 @@ export function createAnalysisRouter(options: Options = {}) {
       ? options.createClient()
       : new GoogleGenAI({
           apiKey: process.env.GEMINI_API_KEY!,
-          httpOptions: { timeout: 180_000 },
+          httpOptions: { timeout: 180_000, retryOptions: { attempts: 1 } },
         });
   };
 
@@ -248,7 +268,7 @@ export function createAnalysisRouter(options: Options = {}) {
     read: (body: Record<string, string>) => { prompt: string; schema?: object },
     parse: (text: string) => T,
   ): Promise<T> {
-    await authenticate(req);
+    const owner = await authenticate(req);
     const body = req.body as Record<string, string>;
     const transcript = String(body.transcript || "").trim();
     if (!transcript)
@@ -259,7 +279,7 @@ export function createAnalysisRouter(options: Options = {}) {
     });
     const client = getAi();
     const response = await withRetry(() =>
-      client.models.generateContent({
+      generateMetered(client, {
         model: fastModel(),
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         config: {
@@ -271,7 +291,7 @@ export function createAnalysisRouter(options: Options = {}) {
               }
             : {}),
         },
-      }),
+      }, usageContext(req, owner, req.path === "/ask" ? "ask" : "insights"), recorderFor(options)),
     );
     return parse(response.text || "");
   }
@@ -332,7 +352,7 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
       try {
         const client = getAi();
         const response = await withRetry(() =>
-          client.models.generateContent({
+          generateMetered(client, {
             model: fastModel(),
             contents: [{ role: "user", parts: [{ text: prompt }] }],
             config: {
@@ -340,7 +360,7 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
               responseMimeType: "application/json",
               responseJsonSchema: consentPartsSchema,
             },
-          }),
+          }, usageContext(req, owner, "consent"), recorderFor(options)),
         );
         let parsed: unknown = {};
         try {
@@ -440,7 +460,7 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
     let remote: GeminiFile | undefined;
     let filePath: string | undefined;
     try {
-      await authenticate(req);
+      const owner = await authenticate(req);
       await receive(maxSegmentBytes)(req, res);
       // Record the temporary path before validating, so a rejected upload is
       // still removed from disk.
@@ -455,7 +475,7 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
       const client = ai;
       const raw = (
         await withRetry(() =>
-          client.models.generateContent({
+          generateMetered(client, {
             model: fastModel(),
             contents: [
               {
@@ -477,7 +497,7 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
             // the model loop -- a visible failure when transcribing. Depth is
             // controlled with thinkingLevel instead, kept low for verbatim work.
             config: { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } },
-          }),
+          }, usageContext(req, owner, "legacy-transcribe", ["audio-input"]), recorderFor(options)),
         )
       ).text?.trim();
 
@@ -491,7 +511,7 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
       }
 
       const glued = await withRetry(() =>
-        client.models.generateContent({
+        generateMetered(client, {
           model: fastModel(),
           contents: [
             {
@@ -508,7 +528,7 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
             responseMimeType: "application/json",
             responseJsonSchema: continuationSchema,
           },
-        }),
+        }, usageContext(req, owner, "legacy-stitch"), recorderFor(options)),
       );
 
       let continuation: string;
@@ -569,7 +589,7 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
         );
 
       if (transcription) {
-        const result = await analyzeTranscript(transcription, preferences, { ...options, retryAttempts: options.retryAttempts ?? 3 });
+        const result = await analyzeTranscript(transcription, preferences, { ...options, usageContext: usageContext(req, uid, "summary"), retryAttempts: options.retryAttempts ?? 3 });
         res.json(result);
         return;
       }
@@ -595,7 +615,7 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
       if (!ai) ai = getAi();
       const client = ai;
       const response = await withRetry(() =>
-        client.models.generateContent({
+        generateMetered(client, {
           model: analysisModel(),
           contents: [{ role: "user", parts }],
           config: {
@@ -605,7 +625,7 @@ Gib ein JSON-Objekt mit den Feldern ${CONSENT_ORDER.join(", ")} zurück.`;
             responseMimeType: "application/json",
             responseJsonSchema: reportSchema,
           },
-        }),
+        }, usageContext(req, uid, "summary", ["audio-input"]), recorderFor(options)),
       );
 
       let result;

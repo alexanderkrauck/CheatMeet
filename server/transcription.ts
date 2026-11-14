@@ -4,9 +4,12 @@ import { createReadStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
+import { randomUUID } from "node:crypto";
 import { verifyFirebaseToken } from "./analysis";
 import { MAX_FILE_BYTES, isAudioMimeType } from "../shared/analysis";
 import { batchTranscript, validLanguages } from "../shared/transcription";
+import type { UsageFinish, UsageRecorder, UsageStart } from "../shared/usage";
+import { getUsageRecorder, usageOwnerLabel } from "./usage";
 import {
   fileSubmissionStore,
   firestoreSubmissionStore,
@@ -33,11 +36,20 @@ const REJECTED = new Set([400, 401, 403, 404, 413, 415, 422, 429]);
 type TranscriptionOptions = {
   verifyToken?: typeof verifyFirebaseToken; fetchImpl?: typeof fetch; store?: SubmissionStore;
   apiKey?: string; maxFileBytes?: number; uploadRoot?: string; timeoutMs?: number;
+  usageRecorder?: UsageRecorder;
 };
+
+/** Accounting must not discard a successful result or cause a paid retry. */
+async function settleUsage(recorder: UsageRecorder | undefined, owner: string, id: string | undefined, update: UsageFinish) {
+  if (!recorder || !id) return;
+  try { await recorder.finish(owner, id, update); }
+  catch { console.error(JSON.stringify({ event: 'usage_settlement_failure', provider: 'assemblyai' })); }
+}
 
 /** The single final-pass reservation owner, shared by HTTP imports and durable workers. */
 export function createBatchTranscriptionService(options: TranscriptionOptions = {}) {
   const store = options.store || (process.env.NODE_ENV === 'production' ? firestoreSubmissionStore() : fileSubmissionStore());
+  const recorder = options.usageRecorder ?? (process.env.NODE_ENV === 'test' ? undefined : getUsageRecorder());
   const fetchImpl = options.fetchImpl || fetch;
   const api = async (path: string, init: RequestInit = {}) => {
     const key = options.apiKey ?? process.env.ASSEMBLYAI_API_KEY;
@@ -53,31 +65,71 @@ export function createBatchTranscriptionService(options: TranscriptionOptions = 
       const job = await store.get(submissionKey(owner,`${id}:final`));
       if (!job || job.state === 'retryable') return {state:'retryable' as const};
       if (!job.providerId) throw new ApiError(409,'Der letzte Auftrag ist unbestätigt. Kein erneutes Senden, damit Audio höchstens zweimal transkribiert wird. Die Originalaufnahme bleibt erhalten.');
-      const data = await api(`/transcript/${encodeURIComponent(job.providerId)}`);
-      if (data.status === 'error') throw new ApiError(422,'Der Transkriptionsauftrag ist fehlgeschlagen. Die Originalaufnahme bleibt erhalten; kein automatischer weiterer Durchlauf.');
+      let data;
+      try { data = await api(`/transcript/${encodeURIComponent(job.providerId)}`); }
+      catch (error) {
+        await settleUsage(recorder, owner, job.usageId, {
+          state: 'unknown', evidence: 'unknown', providerRequestId: job.providerId,
+        });
+        throw error;
+      }
+      if (data.status === 'error') {
+        await settleUsage(recorder, owner, job.usageId, {
+          state: 'failed', evidence: 'provider', providerRequestId: job.providerId,
+        });
+        throw new ApiError(422,'Der Transkriptionsauftrag ist fehlgeschlagen. Die Originalaufnahme bleibt erhalten; kein automatischer weiterer Durchlauf.');
+      }
       if (data.status !== 'completed') return {state:'processing' as const};
+      await settleUsage(recorder, owner, job.usageId, {
+        state: 'completed', evidence: 'provider', providerRequestId: job.providerId,
+        // Retain the actual model before business-path validation. Malformed
+        // reported metadata is explicitly unconfirmed, never priced as Pro.
+        ...(data.speech_model_used !== undefined ? { modelVersion:
+          typeof data.speech_model_used === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(data.speech_model_used)
+            ? data.speech_model_used : 'unconfirmed-provider-model' } : {}),
+        ...(typeof data.audio_duration === 'number' && Number.isFinite(data.audio_duration) && data.audio_duration >= 0
+          ? { audioSeconds: data.audio_duration } : {}),
+      });
       if (data.speech_model_used && data.speech_model_used !== 'universal-3-5-pro') throw new ApiError(502,'Der Transkriptionsanbieter hat ein anderes Modell verwendet.');
       return {state:'completed' as const,speech:batchTranscript(data,job.languages)};
     },
-    async start(owner:string,id:string,languages:string[],input:Readable) {
+    async start(owner:string,id:string,languages:string[],input:Readable, context: Pick<UsageStart, 'storage' | 'ownerLabel'> = {}) {
       if (!validLanguages(languages)) throw new ApiError(400,'Bitte die erwarteten Sprachen auswählen.');
       const key=submissionKey(owner,`${id}:final`); const existing=await store.get(key);
       if (existing && existing.state !== 'retryable') return {state:'existing'};
-      const job:Submission={state:'reserved',languages,createdAt:new Date().toISOString()};
+      const job:Submission={state:'reserved',languages,createdAt:new Date().toISOString(),
+        ...(recorder ? { usageId: randomUUID() } : {})};
       if (!(await (existing ? store.retry(key,job):store.reserve(key,job)))) return {state:'existing'};
       let stage:'upload'|'submit'|'checkpoint'='upload'; let stream:Readable|undefined;
+      let providerId: string | undefined;
       try {
         const maxBytes=options.maxFileBytes ?? MAX_FILE_BYTES;
         stream=Readable.from((async function*(){let bytes=0;for await(const chunk of input){bytes+=chunk.length;if(bytes>maxBytes)throw new ApiError(413,'Die Audiodatei ist zu groß.');yield chunk;}if(!bytes)throw new ApiError(400,'Die Audiodatei ist leer.');})());
         const upload=await api('/upload',{method:'POST',headers:{'content-type':'application/octet-stream'},body:stream as any,duplex:'half'} as RequestInit);
         if(typeof upload.upload_url !== 'string')throw new ApiError(502,'Audio-Upload wurde nicht bestätigt.');
+        // Upload failures are not paid transcription attempts. The ledger row
+        // starts only here, using the ID already held by the native reservation.
+        if (recorder && job.usageId) await recorder.begin({
+          owner, ...(context.ownerLabel ? { ownerLabel: context.ownerLabel } : {}),
+          meetingId: id, storage: context.storage ?? 'google', operation: 'batch-transcription',
+          provider: 'assemblyai', kind: 'batch', model: 'universal-3-5-pro', features: ['speaker-labels'],
+        }, job.usageId);
         stage='submit';
         const submitted=await api('/transcript',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({audio_url:upload.upload_url,speech_models:['universal-3-5-pro'],...(languages.length===1?{language_code:languages[0]}:{language_detection:true}),speaker_labels:true,punctuate:true,format_text:true,remove_audio_tags:'all'})});
         if(typeof submitted.id !== 'string')throw new ApiError(502,'Transkriptionsauftrag wurde nicht bestätigt.');
-        stage='checkpoint';await store.set(key,{...job,state:'submitted',providerId:submitted.id});
+        providerId = submitted.id;
+        stage='checkpoint';await store.set(key,{...job,state:'submitted',providerId});
+        await settleUsage(recorder, owner, job.usageId, {
+          state: 'unknown', evidence: 'provider', providerRequestId: providerId,
+        });
         return {state:'processing'};
       }catch(error){
-        if(stage==='upload'||stage==='submit'&&error instanceof ProviderError&&REJECTED.has(error.upstreamStatus))await store.set(key,{...job,state:'retryable',failureStage:stage,...(error instanceof ProviderError?{upstreamStatus:error.upstreamStatus}:{})}).catch(()=>{});
+        const rejected = stage === 'submit' && error instanceof ProviderError && REJECTED.has(error.upstreamStatus);
+        if(stage==='upload'||stage==='submit'&&rejected)await store.set(key,{...job,state:'retryable',failureStage:stage,...(error instanceof ProviderError?{upstreamStatus:error.upstreamStatus}:{})}).catch(()=>{});
+        if (stage !== 'upload') await settleUsage(recorder, owner, job.usageId, {
+          state: rejected ? 'failed' : 'unknown', evidence: rejected || providerId ? 'provider' : 'unknown',
+          ...(providerId ? { providerRequestId: providerId } : {}),
+        });
         if (error && typeof error === 'object') Object.assign(error, { failureStage: stage });
         throw error;
       }finally{stream?.destroy();input.destroy();}
@@ -92,7 +144,8 @@ export function createTranscriptionRouter(options: TranscriptionOptions = {}) {
     (process.env.NODE_ENV === "production"
       ? firestoreSubmissionStore()
       : fileSubmissionStore());
-  const batch = createBatchTranscriptionService({ ...options, store });
+  const recorder = options.usageRecorder ?? (process.env.NODE_ENV === 'test' ? undefined : getUsageRecorder());
+  const batch = createBatchTranscriptionService({ ...options, store, usageRecorder: recorder });
   const providerFetch = options.fetchImpl || fetch;
   const verify = options.verifyToken || verifyFirebaseToken;
   const key = () => options.apiKey ?? process.env.ASSEMBLYAI_API_KEY;
@@ -147,14 +200,16 @@ export function createTranscriptionRouter(options: TranscriptionOptions = {}) {
     "/transcription/token",
     express.json({ limit: "4kb" }),
     async (req, res) => {
+      let uid: string | undefined, usageId: string | undefined;
       try {
-        const uid = await owner(req);
+        uid = await owner(req);
         if (!key())
           throw new ApiError(503, "AssemblyAI ist noch nicht eingerichtet.");
         const id = reportId(req.body.reportId);
-        const { source, session, languages } = req.body;
+        const { source, session, languages, storage = 'google' } = req.body;
         if (
           !["mic", "system"].includes(source) ||
+          !['google', 'microsoft'].includes(storage) ||
           !Number.isSafeInteger(session) ||
           session < 0 ||
           session > 10000 ||
@@ -187,14 +242,26 @@ export function createTranscriptionRouter(options: TranscriptionOptions = {}) {
             409,
             "Diese Live-Verbindung wurde bereits angefordert und wird nicht wiederholt.",
           );
+        const ownerLabel = usageOwnerLabel(req, uid);
+        usageId = await recorder?.begin({
+          owner: uid, ...(ownerLabel ? { ownerLabel } : {}), meetingId: id, storage, operation: 'live-transcription',
+          provider: 'assemblyai', kind: 'streaming', model: 'universal-3-5-pro',
+          source, session, features: ['speaker-labels'],
+        });
         const data = await api(
           "https://streaming.eu.assemblyai.com/v3/token?expires_in_seconds=60&max_session_duration_seconds=10800",
         );
         if (typeof data.token !== "string")
           throw new ApiError(502, "Kein Streaming-Token erhalten.");
         res.setHeader("Cache-Control", "no-store");
-        res.json({ token: data.token });
+        res.json({ token: data.token, ...(usageId ? { usageId } : {}) });
       } catch (error) {
+        if (uid && usageId) {
+          const rejected = error instanceof ProviderError && REJECTED.has(error.upstreamStatus);
+          await settleUsage(recorder, uid, usageId, {
+            state: rejected ? 'failed' : 'unknown', evidence: rejected ? 'provider' : 'unknown',
+          });
+        }
         fail(res, error);
       }
     },
@@ -302,7 +369,7 @@ export function createTranscriptionRouter(options: TranscriptionOptions = {}) {
             );
           input = Readable.fromWeb(media.body as any);
         } else input = createReadStream(req.file!.path);
-        await batch.start(uid, id, languages, input);
+        await batch.start(uid, id, languages, input, { storage: 'google', ownerLabel: usageOwnerLabel(req, uid) });
         res.status(202).json({ state: "processing" });
       } catch (error) {
 

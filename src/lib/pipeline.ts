@@ -11,7 +11,7 @@ import { errorMessage } from "./session";
 import type { Draft } from "../types";
 import { prepareTranscript } from "./prepareTranscript";
 import { auth } from "./firebase";
-import { needsSpeakerReview } from "../../shared/transcription";
+
 import { syncReportToCalendar } from "./calendarSync";
 import { calendarSyncEnabled } from "./meetingDefaults";
 import { ensureDriveToken } from "./session";
@@ -470,15 +470,6 @@ export function startProcessing({
         });
       }
       assertOwner();
-      if (needsSpeakerReview(current.report.speech)) {
-        await checkpoint({ ...current.report, status: "pending", error: "" });
-        assertOwner();
-        const result = await syncCurrent();
-        assertOwner();
-        update("review", "Sprecher prüfen oder Prüfung überspringen.", { warning: result.warning || warning });
-        return;
-      }
-
       if (analyze) {
         update("analyzing", "Bericht wird erstellt …", { warning });
         let analysed: ReportData;

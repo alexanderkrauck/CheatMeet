@@ -55,8 +55,8 @@ and uncertain-submission guards apply to both entry points.
   transcription. No uncertain reservation is deleted, and repeated accepted
   requests retain the existing run rather than creating another paid submission.
 - The previous report is not cleared before replacement succeeds. Earmarked
-  live speaker names are reconciled with the full pass. Ambiguous names pause
-  for review; any retained summary is marked stale until text-only regeneration
+  live speaker names are reconciled with the full pass. Ambiguous names remain
+  optional transcript corrections and never pause processing; any retained summary is marked stale until text-only regeneration
   succeeds. Ordinary summary regeneration and save-only never start paid ASR.
 - Browser playback stays lazy, uses the pinned provider/draft audio and revokes
   its local object URL on source change/unmount. Exact saved millisecond offsets

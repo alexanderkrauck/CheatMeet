@@ -35,6 +35,16 @@ async function setup(extra: Partial<ProcessingOptions> = {}) {
   };
   return {store,queue,io,analyze,call,artifacts};
 }
+it.each(['alice','bob'])('stores only the verified bearer owner label for later worker usage (%s subject)',async sub=>{
+  const h=await setup({identify:async()=>({uid:'alice',googleSub:'sub-alice'})});
+  const token='qa.'+Buffer.from(JSON.stringify({sub,name:'Verified Alice'})).toString('base64url')+'.synthetic';
+  const result=await h.call('/processing/meeting-1',{report,analyze:true,ownerLabel:'Untrusted label',usageOwnerLabel:'Untrusted label'},token);
+  expect(result.status).toBe(202);
+  const j=await h.store.get((await import('../server/processing')).jobKey('alice',report.id));
+  expect((j as any)?.usageOwnerLabel).toBe(sub==='alice'?'Verified Alice':undefined);
+  expect(result.body.job.usageOwnerLabel).toBeUndefined();
+});
+
 it.each(['microsoft', 'google-folder', 'google-json', 'microsoft-root'] as const)('rejects concurrent distinct %s same-ID sources inside native mutation', async kind => {
   const h = await setup();
   const home = {provider:'microsoft' as const,connectionId:'c',driveId:'d',rootId:'root',rootName:'Meetings',folderId:'f',reportId:'j'};
@@ -237,7 +247,7 @@ it('accepts durable text-only processing, checkpoints each step and hydrates fin
     expect((await h.call('/processing/worker',task,'worker')).status).toBe(200);
     if((await h.call('/processing/meeting-1')).body.job.state==='done') break;
   }
-  expect(h.analyze).toHaveBeenCalledWith(report.transcription,'');
+  expect(h.analyze).toHaveBeenCalledWith(report.transcription,'',expect.objectContaining({owner:'alice',reportId:report.id,refs:expect.objectContaining({id:report.id})}));
   const final=await h.call('/processing/meeting-1');
   expect(final.body.job.state).toBe('done');
   expect(final.body.report.summary).toBe('Zusammenfassung');
@@ -277,7 +287,7 @@ it('recovers the archived speech document when its derived transcript string is 
   const h=await setup();h.io.load.mockResolvedValue({report:{...report,transcription:'',speech:{provider:'assemblyai',phase:'final',languages:['de'],turns:[{id:'batch:0',speaker:'batch:A',text:'Gesicherte Worte',startMs:0,endMs:1000,final:true}],speakerNames:{},speakerReview:'skipped'}},revision:'source-v1',indexRevision:'index-v1'});
   await h.call('/processing/meeting-1',{report,analyze:true});
   for(let n=0;n<2;n++)await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
-  expect(h.analyze).toHaveBeenCalledWith(expect.stringContaining('Gesicherte Worte'),'');
+  expect(h.analyze).toHaveBeenCalledWith(expect.stringContaining('Gesicherte Worte'),'',expect.objectContaining({owner:'alice',reportId:report.id}));
 });
 it('uses existing imported text for recovery instead of spending another batch pass',async()=>{
   const batch=vi.fn(async()=>null);const h=await setup({batch});
@@ -287,15 +297,18 @@ it('uses existing imported text for recovery instead of spending another batch p
   expect(batch).not.toHaveBeenCalled();
   expect((await h.call('/processing/meeting-1')).body.job.state).toBe('analyzing');
 });
-it('pauses speaker-ambiguous live retranscription and resumes reviewed source without another paid pass',async()=>{
+it('summarizes speaker-ambiguous retranscription without requiring names or another paid pass',async()=>{
   const speech={provider:'assemblyai' as const,phase:'final' as const,languages:['de'],turns:[{id:'batch:0',speaker:'batch:A',text:'Neue Worte',startMs:0,endMs:1000,final:true}],speakerNames:{}};
   const batch=vi.fn(async()=>speech);const h=await setup({batch});
   h.io.load.mockResolvedValue({report:{...report,rawAudioUrl:'audio',transcriptionOrigin:'live',speech:{...speech,phase:'live',turns:[]}},revision:'source-v1',indexRevision:'index-v1'});
   await h.call('/processing/meeting-1',{report,analyze:true,retranscribe:true});
-  for(let n=0;n<3;n++)await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
-  const review=(await h.call('/processing/meeting-1')).body;
-  expect(review.job.state).toBe('review');expect(review.report.speech.speakerReview).toBe('pending');
-  expect(h.analyze).not.toHaveBeenCalled();expect(batch).toHaveBeenCalledTimes(1);
+  for(let n=0;n<4;n++)await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
+  const result=(await h.call('/processing/meeting-1')).body;
+  expect(result.job.state).toBe('done');
+  expect(result.report.speech.speakerReview).toBe('pending');
+  expect(result.report.summary).toBe('Zusammenfassung');
+  expect(h.analyze).toHaveBeenCalledWith(expect.stringContaining('Neue Worte'),'',expect.objectContaining({owner:'alice',reportId:report.id}));
+  expect(batch).toHaveBeenCalledTimes(1);
 });
 it('bounds transient failures, blocks invalid grants and accepts explicit same-run recovery',async()=>{
   const h=await setup();await h.call('/processing/meeting-1',{report,analyze:true});
@@ -339,7 +352,7 @@ it('defaults omitted preferences from the server, but respects an explicit empty
   expect(preferences).toHaveBeenCalledWith('alice');
   await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
   await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
-  expect(h.analyze).toHaveBeenCalledWith(report.transcription,'Server-Präferenz');
+  expect(h.analyze).toHaveBeenCalledWith(report.transcription,'Server-Präferenz',expect.objectContaining({owner:'alice',reportId:report.id}));
 });
 it('preserves reviewed final import speech without reading the paid batch job again',async()=>{
   const batch=vi.fn(async()=>null);const h=await setup({batch});

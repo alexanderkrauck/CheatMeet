@@ -1,6 +1,7 @@
 {
   "firestore": {
     "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json",
     "database": "ai-studio-cheatmeet-c8257751-dd98-4e6c-940c-cef077d124e4"
   }
 }

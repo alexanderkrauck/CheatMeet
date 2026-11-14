@@ -14,7 +14,7 @@ import { storageIO, type StorageIO } from './storage';
 import { fileSubmissionStore, firestoreSubmissionStore, submissionKey, type Submission, type SubmissionStore } from '../transcriptionStore';
 import { processingSourceKey } from '../../shared/processing';
 import { syncWorkerCalendar } from './calendar';
-import { boundedFetch, remainingProcessingMs } from './budget';
+import { boundedFetch, remainingProcessingMs, withProcessingHeadroom } from './budget';
 
 export const processingConfigured=()=>Boolean(process.env.PROCESSING_QUEUE&&process.env.PROCESSING_WORKER_URL&&process.env.PROCESSING_SERVICE_ACCOUNT&&(process.env.GOOGLE_OAUTH_CLIENT_SECRET||microsoftConfigured()));
 const googleKeys=createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
@@ -73,7 +73,7 @@ export function createProcessingTranscription(io:Pick<StorageIO,'audio'>,options
         if(result.state==='completed')return result.speech;
         if(result.state==='retryable'){
           const input=await io.audio(job,report);
-          try{await service.start(job.owner,report.id,validLanguages(report.speech?.languages)?report.speech.languages:['de','en'],input);}
+          try{await service.start(job.owner,report.id,validLanguages(report.speech?.languages)?report.speech.languages:['de','en'],input,{storage:job.refs?.home?'microsoft':'google',ownerLabel:job.usageOwnerLabel});}
           finally{input.destroy();}
         }
         return null;
@@ -88,7 +88,7 @@ export function runtimeOptions():ProcessingOptions {
     enabled:processingConfigured,
     identify:t=>firebaseAccountFor(t,projectId),verifyWorker:verifyProcessingWorker,enqueue:createTaskQueue(),
     store:firestoreDocStore<ProcessingJob>({collection:'processingJobs',projectId,databaseId:config.firestoreDatabaseId||'(default)',fetchImpl:fetch,token:()=>serviceAccountToken(fetch)}),
-    io,analyze:(text,prefs)=>analyzeTranscript(text,prefs,{retryAttempts:1,timeoutMs:remainingProcessingMs(120000)}),
+    io,analyze:(text,prefs,job)=>withProcessingHeadroom(20000,()=>analyzeTranscript(text,prefs,{retryAttempts:1,timeoutMs:remainingProcessingMs(120000),usageContext:{owner:job.owner,ownerLabel:job.usageOwnerLabel,meetingId:job.reportId,storage:job.refs.home?'microsoft':'google',operation:'summary'}})),
     preferences:async(owner)=>{
       const database=encodeURIComponent(config.firestoreDatabaseId||'(default)');
       const response=await boundedFetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/${database}/documents/users/${encodeURIComponent(owner)}/settings/preferences`,{headers:{Authorization:`Bearer ${await serviceAccountToken(boundedFetch)}`},signal:AbortSignal.timeout(10000)});

@@ -9,6 +9,8 @@ export interface Submission {
   failureStage?: "upload" | "submit";
   upstreamStatus?: number;
   providerId?: string;
+  /** Stable ledger identity for this submission attempt; absent on historical jobs. */
+  usageId?: string;
   languages: string[];
   createdAt: string;
 }

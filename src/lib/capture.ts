@@ -771,6 +771,7 @@ export async function beginRecording(decision: ConsentDecision | null) {
       snapshot.draft.report.id,
       snapshot.draft.report.speech?.languages || defaultLanguages(),
       { ...snapshot.draft.report.singleSpeakerSources },
+      snapshot.draft.report.home ? "microsoft" : "google",
     );
 
     rec.ondataavailable = (event) => {

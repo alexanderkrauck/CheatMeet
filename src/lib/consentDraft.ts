@@ -5,6 +5,7 @@ import {
   type ConsentParts,
 } from "../../shared/consent";
 import { auth } from "./firebase";
+import { usageHeaders, type MeetingUsageContext } from "./usageContext";
 
 /**
  * Asks the model to phrase the notice for this situation.
@@ -16,6 +17,7 @@ import { auth } from "./firebase";
 export async function draftConsentNotice(
   facts: ConsentFacts,
   instructions: string[],
+  usage?: MeetingUsageContext,
 ): Promise<ConsentParts> {
   const user = auth.currentUser;
   if (!user) throw new Error("Bitte erneut anmelden.");
@@ -31,6 +33,7 @@ export async function draftConsentNotice(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
+      ...usageHeaders(usage),
     },
     body: JSON.stringify({
       facts: {

@@ -8,6 +8,7 @@ import { createMicrosoftUploadRouter } from './server/microsoftUploads';
 import { createTranscriptionRouter } from "./server/transcription";
 import { createMcpRoutes } from "./server/mcp/routes";
 import { createProcessingRouter, processingConfigured } from "./server/processing";
+import { createUsageRouter } from "./server/usage";
 
 async function startServer() {
   const app = express();
@@ -27,6 +28,7 @@ async function startServer() {
   app.use("/api", createTranscriptionRouter());
   app.use("/api", createAnalysisRouter());
   app.use("/api", createProcessingRouter());
+  app.use("/api", createUsageRouter());
   app.get("/api/health", (_req, res) =>
     res.json({
       status: "ok",

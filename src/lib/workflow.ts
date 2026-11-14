@@ -23,8 +23,9 @@ import { refreshArchiveIndex } from "./archiveDrive";
 import { withWebmDuration } from "./webmDuration";
 import type { Draft, ReportData } from "../types";
 import { prepareTranscript } from "./prepareTranscript";
-import { needsSpeakerReview } from "../../shared/transcription";
+
 import { withCalendarFreshness } from "../../shared/calendarNotes";
+import { usageHeaders } from "./usageContext";
 
 // An operation belongs to the account that started it, including across tab sign-outs.
 export function ownedOperation() {
@@ -98,8 +99,7 @@ async function summaryPreferences(owner: string): Promise<string> {
 export async function analyzeDraft(draft: Draft, options: { expectedUpdatedAt?: string | null } = {}): Promise<ReportData> {
   const { owner, run } = ownedOperation();
   await run(() => prepareTranscript(draft, undefined, options));
-  if (needsSpeakerReview(draft.report.speech))
-    throw new Error("Bitte zuerst die Sprecher prüfen oder die Prüfung überspringen.");
+
   const transcription = draft.report.transcription?.trim() || "";
   // Empty/failed live capture must never fall back to sending audio for ASR.
   if (draft.report.speech?.phase === "final" && !transcription) {
@@ -128,7 +128,7 @@ export async function analyzeDraft(draft: Draft, options: { expectedUpdatedAt?: 
   const response = await run(() =>
     fetch("/api/analyze", {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, ...usageHeaders({ meetingId: draft.report.id, storage: draft.report.home ? "microsoft" : "google" }) },
       body: formData,
       signal: AbortSignal.timeout(300_000),
     }),

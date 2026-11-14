@@ -329,3 +329,157 @@ it("keeps two confirmed single speakers separate by source", async () => {
   });
   expect(changed.mock.calls.at(-1)![0].turns.map((t: any) => t.speaker)).toEqual(["mic:single", "system:single"]);
 });
+
+const usageCalls = () => vi.mocked(fetch).mock.calls
+  .filter(([url]) => String(url).startsWith('/api/usage/live/'))
+  .map(([url, init]) => ({ url, init, body: JSON.parse(String(init?.body)) }));
+const trackedFetch = (deliver: () => Promise<Response> = async () => Response.json({ ok: true })) => vi.mocked(fetch).mockImplementation(async (url, init) => {
+  if (url === '/api/transcription/token') {
+    const request = JSON.parse(String(init?.body));
+    return Response.json({ token: 'temporary', usageId: `usage-${request.source}-${request.session}` });
+  }
+  return deliver();
+});
+const trackedBegin = (socket: Socket, id: string) => socket.message({
+  type: 'Begin', id, configuration: { model: 'universal-3-5-pro', mode: 'max_accuracy' },
+});
+
+it('relays each actual source Begin and Termination independently, never meeting time or sent-audio estimates', async () => {
+  trackedFetch();
+  live = startAssemblyLive({ mic: {} as MediaStream, system: {} as MediaStream }, () => clock,
+    vi.fn(), 'meeting', ['de'], {}, 'microsoft');
+  await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  expect(usageCalls()).toEqual([]); // A token is not an opened session.
+  expect(vi.mocked(fetch).mock.calls.map(([, init]) => JSON.parse(String(init?.body)).storage))
+    .toEqual(['microsoft', 'microsoft']);
+  trackedBegin(sockets[0], 'provider-mic');
+  trackedBegin(sockets[1], 'provider-system');
+  await vi.waitFor(() => expect(usageCalls()).toHaveLength(2));
+  expect(usageCalls().map(call => ({ url: call.url, body: call.body }))).toEqual([
+    { url: '/api/usage/live/usage-mic-0', body: { stage: 'begin', providerRequestId: 'provider-mic' } },
+    { url: '/api/usage/live/usage-system-1', body: { stage: 'begin', providerRequestId: 'provider-system' } },
+  ]);
+  clock = 999999; // Elapsed meeting time must not become provider usage.
+  const finished = live.finish();
+  await vi.waitFor(() => expect(sockets[0].sent).toHaveLength(1));
+  sockets[0].message({ type: 'Termination', session_duration_seconds: 12.5, audio_duration_seconds: 2 });
+  sockets[1].message({ type: 'Termination', session_duration_seconds: 11, audio_duration_seconds: 3.5 });
+  await finished;
+  await vi.waitFor(() => expect(usageCalls()).toHaveLength(4));
+  expect(usageCalls().slice(2).map(call => call.body)).toEqual([
+    { stage: 'end', providerRequestId: 'provider-mic', sessionSeconds: 12.5, audioSeconds: 2 },
+    { stage: 'end', providerRequestId: 'provider-system', sessionSeconds: 11, audioSeconds: 3.5 },
+  ]);
+  expect(usageCalls().every(call => (call.init?.headers as any).Authorization === 'Bearer test-identity')).toBe(true);
+});
+
+it.each(['disconnect', 'drop', 'begin-timeout', 'finish-timeout'])(
+  'keeps usage unknown without invented durations when a tracked socket ends by %s', async reason => {
+    trackedFetch();
+    vi.useFakeTimers();
+    live = startAssemblyLive({ mic: {} as MediaStream }, () => clock, vi.fn(), 'meeting', ['de']);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(1);
+    if (reason !== 'begin-timeout') trackedBegin(sockets[0], 'provider-mic');
+    if (reason === 'disconnect') sockets[0].close();
+    if (reason === 'drop') live.dropSource!('mic');
+    if (reason === 'begin-timeout') await vi.advanceTimersByTimeAsync(15001);
+    if (reason === 'finish-timeout') {
+      const finished = live.finish();
+      await vi.advanceTimersByTimeAsync(10001);
+      await finished;
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    const interrupted = usageCalls().filter(call => call.body.stage === 'interrupted');
+    expect(interrupted.map(call => ({ url: call.url, body: call.body }))).toEqual([{
+      url: '/api/usage/live/usage-mic-0',
+      body: { stage: 'interrupted', ...(reason === 'begin-timeout' ? {} : { providerRequestId: 'provider-mic' }) },
+    }]);
+    expect(usageCalls().some(call => call.body.stage === 'end')).toBe(false);
+  },
+);
+
+it('retains an unsolicited terminal receipt across reconnect, late close, source drop and sign-out', async () => {
+  trackedFetch();
+  vi.useFakeTimers();
+  live = startAssemblyLive({ mic: {} as MediaStream }, () => clock, vi.fn(), 'meeting', ['de']);
+  await vi.advanceTimersByTimeAsync(0);
+  trackedBegin(sockets[0], 'provider-first');
+  sockets[0].message({ type: 'Termination', session_duration_seconds: 9, audio_duration_seconds: 1 });
+  sockets[0].close();
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(sockets).toHaveLength(2);
+  trackedBegin(sockets[1], 'provider-second');
+  await vi.advanceTimersByTimeAsync(0);
+  const first = usageCalls().filter(call => String(call.url).endsWith('usage-mic-0'));
+  expect(first.map(call => call.body)).toEqual([
+    { stage: 'begin', providerRequestId: 'provider-first' },
+    { stage: 'end', providerRequestId: 'provider-first', sessionSeconds: 9, audioSeconds: 1 },
+  ]);
+  expect(usageCalls().filter(call => call.body.stage === 'begin').map(call => call.url))
+    .toEqual(['/api/usage/live/usage-mic-0', '/api/usage/live/usage-mic-1']);
+  live.dropSource!('mic');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(usageCalls().at(-1)).toMatchObject({ url: '/api/usage/live/usage-mic-1',
+    body: { stage: 'interrupted', providerRequestId: 'provider-second' } });
+  auth.currentUser = null;
+  live.tick();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(usageCalls().filter(call => String(call.url).endsWith('usage-mic-0'))).toHaveLength(2);
+});
+
+it.each([
+  { event: {}, counts: {} },
+  { event: { session_duration_seconds: '12', audio_duration_seconds: -1 }, counts: {} },
+  { event: { session_duration_seconds: 0, audio_duration_seconds: 0 }, counts: { sessionSeconds: 0, audioSeconds: 0 } },
+])('omits unknown or invalid termination counts rather than manufacturing zero ($event)', async ({ event, counts }) => {
+  trackedFetch();
+  live = startAssemblyLive({ mic: {} as MediaStream }, () => clock, vi.fn(), 'meeting', ['de']);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  trackedBegin(sockets[0], 'provider-mic');
+  sockets[0].message({ type: 'Termination', ...event });
+  await vi.waitFor(() => expect(usageCalls()).toHaveLength(2));
+  expect(usageCalls()[1].body).toEqual({ stage: 'end', providerRequestId: 'provider-mic', ...counts });
+  expect(usageCalls().some(call => call.body.stage === 'interrupted')).toBe(false);
+});
+
+it.each(['network', 'rejected', 'pending'] as const)('never couples transcript delivery or finish to a %s receipt', async outcome => {
+  trackedFetch(async () => {
+    if (outcome === 'network') throw Error('receipt unavailable');
+    if (outcome === 'pending') return new Promise<Response>(() => {});
+    return Response.json({ error: 'fixture' }, { status: 503 });
+  });
+  live = startAssemblyLive({ mic: {} as MediaStream }, () => clock, vi.fn(), 'meeting', ['de']);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  trackedBegin(sockets[0], 'provider-mic');
+  nodes[0].port.onmessage!({ data: { pcm: new ArrayBuffer(3200), contextTime: 1 } });
+  sockets[0].message({ type: 'Turn', turn_order: 0, end_of_turn: true,
+    words: [{ text: 'Unabhängiges Transkript', start: 0, end: 100, speaker: 'A' }] });
+  expect(live.transcript).toContain('Unabhängiges Transkript');
+  const finished = live.finish();
+  await vi.waitFor(() => expect(sockets[0].sent).toHaveLength(2));
+  sockets[0].message({ type: 'Termination', session_duration_seconds: 5, audio_duration_seconds: 1 });
+  expect(await finished).toContain('Unabhängiges Transkript');
+  expect(live.failedSegments).toBe(0);
+  expect(sockets).toHaveLength(1);
+});
+
+it('pins receipt token delivery to the original owner across an asynchronous token refresh', async () => {
+  trackedFetch();
+  let release!: (token: string) => void;
+  auth.currentUser.getIdToken = vi.fn()
+    .mockResolvedValueOnce('test-identity')
+    .mockImplementationOnce(() => new Promise<string>(resolve => { release = resolve; }));
+  live = startAssemblyLive({ mic: {} as MediaStream }, () => clock, vi.fn(), 'meeting', ['de']);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  trackedBegin(sockets[0], 'provider-alice');
+  expect(release).toBeTypeOf('function');
+  auth.currentUser = { uid: 'bob', getIdToken: vi.fn(async () => 'bob-token') };
+  release('alice-refreshed-token');
+  await Promise.resolve(); await Promise.resolve();
+  live.tick();
+  nodes[0].port.onmessage!({ data: { pcm: new ArrayBuffer(3200), contextTime: 1 } });
+  expect(usageCalls()).toEqual([]);
+  expect(auth.currentUser.getIdToken).not.toHaveBeenCalled();
+  expect(sockets[0].sent.filter(value => typeof value !== 'string')).toHaveLength(0);
+});

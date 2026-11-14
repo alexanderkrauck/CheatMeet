@@ -118,6 +118,7 @@ it("checkpoints the final transcript before summarizing, and ignores the summary
   mocks.fetch.mockImplementation(async (url, init) => {
     if (url === "/api/analyze") {
       expect(saved).toBe(true);
+      expect(init.headers).toMatchObject({ "X-CheatMeet-Meeting-ID": "meeting", "X-CheatMeet-Storage": "google" });
       expect(init.body.get("audio")).toBeNull();
       expect(init.body.get("transcription")).toBe(
         "[0:00] (Sprecher 1) Keine Zusage.",
@@ -226,9 +227,9 @@ it("retries a server-confirmed unused pass but still performs just one accepted 
   ]);
   expect(d.report.speech?.speakerReview).toBe("skipped");
 });
-it("a deliberate skipped review permits the final text summary without any new ASR call", async () => {
+it.each(['pending','skipped'] as const)("speaker naming stays optional for %s final text without any new ASR call", async (speakerReview) => {
   const d = draft();
-  d.report.speech = { ...final().speech, speakerReview: "skipped" } as any;
+  d.report.speech = { ...final().speech, speakerReview } as any;
   d.report.transcription = "Finaler Text";
   mocks.fetch.mockResolvedValue(
     Response.json({

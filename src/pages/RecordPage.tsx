@@ -441,7 +441,7 @@ export default function RecordPage() {
       const parts = await draftConsentNotice(consentFactsNow, [
         ...consentChat,
         instruction,
-      ]);
+      ], { meetingId: draft.report.id, storage: draft.report.home ? "microsoft" : "google" });
       if (ownsSession() && request === draftRequest.current && requestFacts === latestFactsKey.current) {
         partsFactsKey.current = requestFacts;
         setConsentParts(parts);
@@ -880,6 +880,7 @@ export default function RecordPage() {
                   paused={state === "paused"}
                   timer={formatTime(durationMs)}
                   startedAt={draft.report.date}
+                  usage={{ meetingId: draft.report.id, storage: draft.report.home ? "microsoft" : "google" }}
                 />
               ) : (
                 <>

@@ -17,6 +17,7 @@ import { setCaptureHint, setCaptureSpeakerName } from "../lib/capture";
 import LiveSpeakers, { type SpeakerFilter } from "./LiveSpeakers";
 import { startInsightRefresh } from "../lib/insightRefresh";
 import { renderTranscript } from "../../shared/transcription";
+import type { MeetingUsageContext } from "../lib/usageContext";
 
 interface Exchange {
   question: string;
@@ -61,6 +62,7 @@ export default function LiveMeeting({
   paused,
   timer,
   startedAt,
+  usage,
 }: {
   transcript: string;
   speech?: MeetingTranscript;
@@ -68,6 +70,7 @@ export default function LiveMeeting({
   paused: boolean;
   timer: string;
   startedAt?: string;
+  usage?: MeetingUsageContext;
 }) {
   const [tab, setTab] = useState<"transcript" | "assist">("transcript");
   const [insights, setInsights] = useState<MeetingInsights>(emptyInsights);
@@ -96,7 +99,7 @@ export default function LiveMeeting({
   useEffect(() => {
     return startInsightRefresh({
       read: () => latest.current,
-      request: meetingInsights,
+      request: text => meetingInsights(text, usage),
       thinking: setThinking,
       received: (next) => {
         setInsights(next);
@@ -105,7 +108,7 @@ export default function LiveMeeting({
       },
       failed: () => setInsightError(true),
     });
-  }, [startedAt]);
+  }, [startedAt, usage?.meetingId, usage?.storage]);
 
   async function ask(event: React.FormEvent) {
     event.preventDefault();
@@ -116,7 +119,7 @@ export default function LiveMeeting({
     setAsking(true);
     setThread((previous) => [...previous, { question: asked, answer: "" }]);
     try {
-      const answer = await askMeeting(asked, latest.current);
+      const answer = await askMeeting(asked, latest.current, usage);
       setThread((previous) =>
         previous.map((item, index) =>
           index === previous.length - 1

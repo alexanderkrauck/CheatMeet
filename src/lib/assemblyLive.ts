@@ -55,6 +55,7 @@ export function startAssemblyLive(
   reportId: string,
   languages: string[],
   singleSpeakerSources: Partial<Record<"mic" | "system", boolean>> = {},
+  storage: 'google' | 'microsoft' = 'google',
 ): LiveTranscription {
   const user = auth.currentUser;
   const owner = user?.uid;
@@ -133,6 +134,26 @@ export function startAssemblyLive(
     if (dropped.has(source) || stopped || paused || !owned() || epoch !== generation) return;
     const requestedAt = now();
     let context: AudioContext | undefined, socket: WebSocket | undefined;
+    let usageId: string | undefined, providerRequestId: string | undefined;
+    let usageEnded = false;
+    // Provider messages are relayed as browser evidence, never billing proof.
+    // Delivery is deliberately detached from the audio/transcript lifecycle.
+    const receipt = (stage: 'begin' | 'end' | 'interrupted', durations: {
+      audioSeconds?: number; sessionSeconds?: number;
+    } = {}) => {
+      if (!usageId || !owned()) return;
+      const id = usageId;
+      const body = JSON.stringify({ stage, ...(providerRequestId ? { providerRequestId } : {}), ...durations });
+      void (async () => {
+        const token = await user?.getIdToken();
+        if (!token || !owned()) return;
+        await fetch(`/api/usage/live/${encodeURIComponent(id)}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body, keepalive: true, signal: AbortSignal.timeout(10000),
+        });
+      })().catch(() => {});
+    };
     let closed = false,
       begun = false,
       terminating = false,
@@ -186,6 +207,9 @@ export function startAssemblyLive(
     const dispose = () => {
       if (closed) return;
       closed = true;
+      // An issued token / disconnected session has no defensible zero-duration
+      // estimate. Never downgrade a Termination receipt during disposal/retry.
+      if (!usageEnded) receipt('interrupted');
       watchers.delete(watch);
       connections = connections.filter((entry) => entry !== handle);
       contexts = contexts.filter((entry) => entry !== context);
@@ -295,11 +319,13 @@ export function startAssemblyLive(
           source,
           session: sequence,
           languages,
+          storage,
         }),
         signal: AbortSignal.timeout(15000),
       });
       if (!response.ok) throw new TokenError(response.status);
       const data = await response.json();
+      if (typeof data.usageId === 'string') usageId = data.usageId;
       if (!owned() || epoch !== generation || closed) {
         dispose();
         return;
@@ -332,6 +358,8 @@ export function startAssemblyLive(
           const event = JSON.parse(data);
           lastMessageAt = now();
           if (event.type === "Begin") {
+            if (typeof event.id === 'string') providerRequestId = event.id;
+            receipt('begin');
             if (
               event.configuration?.model !== "universal-3-5-pro" ||
               event.configuration?.mode !== "max_accuracy"
@@ -398,6 +426,13 @@ export function startAssemblyLive(
               });
             }, 10740 * 1000);
           } else if (event.type === "Termination") {
+            usageEnded = true;
+            const seconds = (value: unknown): value is number =>
+              typeof value === 'number' && Number.isFinite(value) && value >= 0;
+            receipt('end', {
+              ...(seconds(event.session_duration_seconds) ? { sessionSeconds: event.session_duration_seconds } : {}),
+              ...(seconds(event.audio_duration_seconds) ? { audioSeconds: event.audio_duration_seconds } : {}),
+            });
             // Ours (terminating) ends quietly; one the provider decided on is an outage.
             if (terminating) dispose();
             else interrupted("termination");

@@ -133,6 +133,14 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+it.each(['google','microsoft'] as const)("attributes live connections to the pinned %s archive, not the current default",async(storage)=>{
+  capture.setCaptureHome(storage==='microsoft'?{provider:'microsoft',connectionId:'c',driveId:'d',rootId:'root',rootName:'Meetings'}:null);
+  await capture.armCapture(true,async()=>{},'mic');
+  await capture.beginRecording({...DECISION,storageService:storage==='microsoft'?'Microsoft OneDrive':'Google Drive'});
+  expect(capture.captureSnapshot().state).toBe('recording');
+  expect(vi.mocked(startAssemblyLive).mock.calls.at(-1)?.[6]).toBe(storage);
+});
+
 it("keeps retranscription opt-in on the finished draft and clears it on a replacement import", async () => {
   expect(capture.captureSnapshot().draft.retranscribe).not.toBe(true);
   await startRecording(true, async () => {}, "mic");
