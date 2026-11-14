@@ -19,7 +19,7 @@ vi.mock("react-router-dom", () => ({ Link: ({ to, children }: { to: string; chil
 vi.mock("../lib/session", () => ({ errorMessage: String }));
 vi.mock("../lib/consumption", async (original) => ({
   ...(await original<typeof import("../lib/consumption")>()),
-  useConsumption: (range: unknown, scope: string) => { h.requests.push({ range, scope }); return { ...h.view, scope }; },
+  useConsumption: (range: unknown, ...extra: unknown[]) => { h.requests.push({ range, ...(extra.length ? { scope: extra[0] } : {}) }); return h.view; },
 }));
 vi.mock("../components/UI", () => ({
   Busy: ({ text }: { text: string }) => <div role="status">{text}</div>,
@@ -42,7 +42,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-11-14T10:00:00Z"));
   h.slots = []; h.cursor = 0; h.requests = []; h.user = { uid: "alice" }; h.reports.mockClear();
   h.reportRows = [{ id: "qa-meeting", date: "2026-11-14T09:00:00Z", durationMs: 60_000, summary: "QA" }];
-  h.view = { owner: "alice", scope: "mine", events: [event("one")], loaded: true, loading: false, partial: false, error: "", forbidden: false, canViewAll: false, pagesLoaded: 1, trackingSince: "2026-11-14T00:00:00Z", historyComplete: false, reload: vi.fn() };
+  h.view = { owner: "alice", events: [event("one")], loaded: true, loading: false, partial: false, error: "", pagesLoaded: 1, trackingSince: "2026-11-14T00:00:00Z", historyComplete: false, reload: vi.fn() };
 });
 afterEach(() => vi.useRealTimers());
 const render = () => { h.cursor = 0; return renderToStaticMarkup(<UsagePage />); };
@@ -89,46 +89,46 @@ it("uses known own titles and provider-qualified report links, with full stable 
   expect(h.reports).toHaveBeenCalledOnce();
 });
 
-it("allows an operator to choose all only after server authorization and shows account metadata without report content", () => {
-  expect(render()).not.toContain("Alle Konten");
+it("never offers cross-account controls even if legacy privilege flags are injected", () => {
   h.view.canViewAll = true;
-  press("Alle Konten");
-  h.view.events = [event("mine"), { ...event("foreign", { owner: "bob", ownerLabel: "Bob Example" }), title: "PRIVATE-REPORT-TITLE", transcription: "PRIVATE-TRANSCRIPT" }];
-  h.reportRows = [{ ...h.reportRows[0], id: "fixture-meeting", title: "LOCAL-TITLE-DO-NOT-LOOK-UP-IN-ALL" }];
-  h.reports.mockClear();
+  h.view.scope = "all";
+  h.view.events = [event("mine"), { ...event("FOREIGN-RECEIPT", { owner: "bob", ownerLabel: "Bob Example", model: "FOREIGN-MODEL" }), title: "PRIVATE-REPORT-TITLE", transcription: "PRIVATE-TRANSCRIPT" }];
+  h.reportRows = [{ ...h.reportRows[0], id: "fixture-meeting", title: "OWN-MEETING-TITLE" }];
   const html = render();
-  expect(h.requests.at(-1)?.scope).toBe("all");
-  expect(html).toContain("Kontenübersicht");
-  expect(html).toContain("Bob Example");
+  expect(html).not.toContain("Alle Konten");
+  expect(html).not.toContain("Verbrauchsumfang");
+  expect(html).not.toContain("Kontenübersicht");
+  expect(html).not.toContain("Betreiberansicht");
+  expect(h.requests.at(-1)).not.toHaveProperty("scope");
+  expect(html).not.toContain("Bob Example");
+  expect(html).not.toContain("FOREIGN-MODEL");
+  expect(html).not.toContain("FOREIGN-RECEIPT");
   expect(html).not.toContain("PRIVATE-REPORT-TITLE");
   expect(html).not.toContain("PRIVATE-TRANSCRIPT");
-  expect(html).not.toContain("LOCAL-TITLE-DO-NOT-LOOK-UP-IN-ALL");
-  expect(html).not.toContain("Meeting-Aktivität");
-  expect(h.reports).not.toHaveBeenCalled();
+  expect(html).toContain("OWN-MEETING-TITLE");
+  expect(html).toContain("1 erfasster Vorgang");
+  expect(html).toContain("Meeting-Aktivität");
+  expect(h.reports).toHaveBeenCalledOnce();
 });
 
-it("hides operator rows immediately after role revocation and returns safely to mine", () => {
-  h.view.canViewAll = true;
-  press("Alle Konten");
+it("preserves a denied own-read error and retry without an alternative account mode", () => {
   h.view.events = [event("foreign", { owner: "bob", ownerLabel: "Bob Example" })];
-  h.view.forbidden = true; h.view.canViewAll = false; h.view.error = "Keine Berechtigung für diese Ansicht.";
+  h.view.loaded = false; h.view.error = "Keine Berechtigung für diese Ansicht.";
   const html = render();
   expect(html).not.toContain("Bob Example");
   expect(html).not.toContain("Alle Konten");
   expect(html).not.toContain("Kontenübersicht");
   expect(html).toContain("Keine Berechtigung");
-  press("Nur meinen Verbrauch anzeigen");
-  render();
-  expect(h.requests.at(-1)?.scope).toBe("mine");
+  press("Erneut versuchen");
+  expect(h.view.reload).toHaveBeenCalledOnce();
+  expect(h.requests.at(-1)).not.toHaveProperty("scope");
 });
 
-it("never flashes stale foreign rows or privileges when the account changes, and resets all to mine", () => {
-  h.view.canViewAll = true;
-  press("Alle Konten");
+it("never flashes stale foreign rows when the account changes", () => {
   h.view.events = [event("private-old", { model: "PRIVATE-OLD-MODEL" })];
   h.user = { uid: "carla" };
   const html = render();
-  expect(h.requests.at(-1)?.scope).toBe("mine");
+  expect(h.requests.at(-1)).not.toHaveProperty("scope");
   expect(html).not.toContain("PRIVATE-OLD-MODEL");
   expect(html).not.toContain("Alle Konten");
   expect(html).not.toContain("Kontenübersicht");
@@ -139,10 +139,33 @@ it("keeps empty historical consumption unknown rather than displaying a zero-dol
   h.view.trackingSince = null;
   const html = render();
   expect(html).toContain("Keine erfassten Vorgänge im Zeitraum");
-  expect(html).toContain("Beginn der Erfassung unbekannt");
+  expect(html).toContain("Ältester Vorgang noch unbekannt");
   expect(html).toContain("Unbekannt");
   expect(html).not.toContain("0,0000 USD");
   expect(html).not.toContain("consumption-models");
+});
+
+it("shows recovered historical costs without claiming continuous tracking began at the oldest row", () => {
+  h.slots = ["month", "2026-09-14"];
+  h.view.trackingSince = "2026-09-14T14:36:03.653Z";
+  h.view.events = [event("recovered-batch", {
+    provider: "assemblyai", kind: "batch", operation: "batch-transcription", model: "universal-3-5-pro",
+    startedAt: "2026-09-14T14:36:03.653Z", tokens: undefined, audioSeconds: 60,
+    cost: { usd: 60 / 3600 * 0.23, currency: "USD", rateId: "fixture-historical-current-rate-reconstruction",
+      rateSource: "https://example.invalid/pricing", rateCheckedAt: "2026-11-14",
+      reason: "Nachträglich rekonstruiert; zum geprüften Tarif geschätzt, kein damaliger Rechnungsbetrag." },
+  })];
+  const html = render();
+  expect(html).toContain("Historie unvollständig");
+  expect(html).toContain("Ältester vorhandener Vorgang");
+  expect(html).not.toContain("Erfassung laut Protokoll ab");
+  expect(html).toContain("Rekonstruierte Kosten sind Schätzungen");
+  expect(html).toContain("Nachträglich rekonstruiert");
+  expect(html).toContain("kein damaliger Rechnungsbetrag");
+  expect(html).not.toContain("Tarif-Snapshots zum Vorgangsbeginn");
+  expect(html).toContain("am Vorgang gespeicherten Tarif-Snapshot");
+  expect(html).toContain("60 s");
+  expect(html).toContain("USD");
 });
 
 it("marks partial pagination and failed loading explicitly, without turning unknown receipts into zero", () => {
@@ -176,7 +199,7 @@ it("calls out invalid operation dates even when no valid row can be placed in th
 
 it("sends Vienna day/week/month operation-start ranges with an exclusive end and keeps navigation functional", () => {
   press("Tag"); render();
-  expect(h.requests.at(-1)).toMatchObject({ scope: "mine", range: { start: "2026-11-14", end: "2026-11-15" } });
+  expect(h.requests.at(-1)).toEqual({ range: expect.objectContaining({ start: "2026-11-14", end: "2026-11-15" }) });
   press("Vorheriger Tag"); render();
   expect(h.requests.at(-1)).toMatchObject({ range: { start: "2026-11-13", end: "2026-11-14" } });
   press("Heute"); press("Woche"); render();
@@ -225,10 +248,10 @@ it("presents measured token categories and USD estimates as primary usage, with 
   expect(html).toContain("321");
   expect(html).toContain("0,0042");
   expect(html).toContain("USD");
-  expect(html).toContain("Historische Nutzung unbekannt");
+  expect(html).toContain("Historie unvollständig");
   expect(html).toContain("Meeting-Aktivität");
   expect(html.indexOf("Gemini-Tokens")).toBeLessThan(html.indexOf("Meeting-Aktivität"));
-  expect(h.requests[0]).toEqual({ scope: "mine", range: { start: "2026-11-01", end: "2026-12-01", days: expect.any(Array) } });
+  expect(h.requests[0]).toEqual({ range: { start: "2026-11-01", end: "2026-12-01", days: expect.any(Array) } });
 });
 
 it("puts days with activity first instead of burying them behind a month of zero rows", () => {

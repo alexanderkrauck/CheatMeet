@@ -35,13 +35,13 @@ it('reads a settled durable event through the authenticated own-account API afte
   const recorder = createUsageRecorder(fileUsageStore(root), { now: () => Date.parse('2026-11-14T12:00:00.000Z') });
   const id = await recorder.begin({ owner: 'alice', operation: 'summary', provider: 'gemini', kind: 'tokens', model: 'not-yet-priced' }, 'attempt-1');
   await recorder.finish('alice', id, { state: 'completed', evidence: 'provider', tokens: { input: 12, output: 3, thinking: null, cached: null, total: 15 } });
-  const base = await serve({ store: fileUsageStore(root), verifyToken, ownerUids: [] });
+  const base = await serve({ store: fileUsageStore(root), verifyToken });
   const response = await fetch(`${base}/usage?start=2026-11-14&end=2026-11-15`, { headers: headers() });
   expect(response.status).toBe(200);
   expect(response.headers.get('cache-control')).toBe('no-store');
   expect(await response.json()).toEqual({
     events: [expect.objectContaining({ id, owner: 'alice', state: 'completed', tokens: { input: 12, output: 3, thinking: null, cached: null, total: 15 }, cost: expect.objectContaining({ usd: null }) })],
-    canViewAll: false, scope: 'mine', nextCursor: null,
+    nextCursor: null,
     trackingSince: '2026-11-14T12:00:00.000Z', historyComplete: false,
   });
   expect((await fetch(`${base}/usage?start=2026-11-14&end=2026-11-15`)).status).toBe(401);
@@ -51,23 +51,35 @@ it('exposes the default recorder singleton without performing provider or ledger
   expect(getUsageRecorder()).toBe(getUsageRecorder());
 });
 
-it('restricts all-account metadata to exact allowlisted UIDs and rejects owner/scope overrides', async () => {
+it('rejects cross-account reads for a formerly allowlisted identity even with injected legacy privileges', async () => {
   const store = memoryUsageStore();
   const recorder = createUsageRecorder(store, { now: () => Date.parse('2026-11-14T12:00:00.000Z') });
-  for (const owner of ['alice', 'bob']) await recorder.begin({ owner, operation: 'ask', provider: 'gemini', kind: 'tokens', model: 'gemini-3.8-flash' }, `${owner}-request`);
-  const base = await serve({ store, verifyToken, ownerUids: ['operator'] });
-  const query = `${base}/usage?start=2026-11-14&end=2026-11-15`;
-  const own = await (await fetch(query, { headers: headers() })).json();
-  expect(own.events.map((event: any) => event.owner)).toEqual(['alice']);
-  expect(own.canViewAll).toBe(false);
-  expect((await fetch(`${query}&scope=all`, { headers: headers() })).status).toBe(403);
-  expect((await fetch(`${query}&owner=bob`, { headers: headers() })).status).toBe(400);
-  expect((await fetch(`${query}&scope=administrator`, { headers: headers('operator') })).status).toBe(400);
-  const all = await fetch(`${query}&scope=all`, { headers: headers('operator') });
-  expect(all.status).toBe(200);
-  expect(await all.json()).toMatchObject({ canViewAll: true, scope: 'all', events: [expect.objectContaining({ owner: 'alice' }), expect.objectContaining({ owner: 'bob' })] });
-  const notExact = await serve({ store, verifyToken, ownerUids: ['oper', 'operator@example.test', '*'] });
-  expect((await fetch(`${notExact}/usage?start=2026-11-14&end=2026-11-15&scope=all`, { headers: headers('operator') })).status).toBe(403);
+  for (const owner of ['alice', 'bob', 'operator']) await recorder.begin({ owner, operation: 'ask', provider: 'gemini', kind: 'tokens', model: 'gemini-3.8-flash' }, `${owner}-request`);
+  vi.stubEnv('USAGE_OWNER_UIDS', 'operator');
+  try {
+    // Unknown runtime options cannot resurrect the removed privilege either.
+    for (const legacyOptions of [{}, { ownerUids: ['operator'] }]) {
+      const base = await serve({ store, verifyToken, ...legacyOptions });
+      const query = `${base}/usage?start=2026-11-14&end=2026-11-15`;
+      const read = vi.spyOn(store, 'query');
+      const tracking = vi.spyOn(store, 'trackingSince');
+      for (const override of ['scope=all', 'scope=mine', 'scope=administrator', 'owner=bob', 'ownerUid=bob']) {
+        expect((await fetch(`${query}&${override}`, { headers: headers('operator') })).status).toBe(400);
+      }
+      expect(read).not.toHaveBeenCalled();
+      expect(tracking).not.toHaveBeenCalled();
+      const own = await fetch(query, { headers: headers('operator') });
+      expect(own.status).toBe(200);
+      expect(await own.json()).toEqual({
+        events: [expect.objectContaining({ id: 'operator-request', owner: 'operator' })],
+        nextCursor: null, trackingSince: '2026-11-14T12:00:00.000Z', historyComplete: false,
+      });
+      expect(read).toHaveBeenCalledWith(expect.objectContaining({ owner: 'operator' }));
+      expect(tracking).toHaveBeenCalledWith('operator');
+      read.mockRestore();
+      tracking.mockRestore();
+    }
+  } finally { vi.unstubAllEnvs(); }
 });
 
 it.each([
@@ -79,17 +91,17 @@ it.each([
 ])('rejects invalid civil date/range/cursor input before reading storage: %s', async query => {
   const store = memoryUsageStore();
   const read = vi.spyOn(store, 'query');
-  const base = await serve({ store, verifyToken, ownerUids: [] });
+  const base = await serve({ store, verifyToken });
   expect((await fetch(`${base}/usage?${query}`, { headers: headers() })).status).toBe(400);
   expect(read).not.toHaveBeenCalled();
 });
 
-it('paginates all 503 rows without duplicates and binds cursors to identity, scope and exact date filters', async () => {
+it('paginates all 503 own rows without duplicates and binds cursors to identity and exact date filters', async () => {
   const store = memoryUsageStore();
   const recorder = createUsageRecorder(store, { now: () => Date.parse('2026-11-14T23:30:00.000Z') });
   for (let n = 0; n < 503; n++) await recorder.begin({ owner: 'alice', operation: 'ask', provider: 'gemini', kind: 'tokens', model: 'unpriced' }, `page-${String(n).padStart(4, '0')}`);
   await recorder.begin({ owner: 'bob', operation: 'ask', provider: 'gemini', kind: 'tokens', model: 'unpriced' }, 'foreign');
-  const base = await serve({ store, verifyToken, ownerUids: ['operator'] });
+  const base = await serve({ store, verifyToken });
   const query = `${base}/usage?start=2026-11-15&end=2026-11-16`;
   const events = [];
   let cursor: string | null = null;
@@ -107,6 +119,10 @@ it('paginates all 503 rows without duplicates and binds cursors to identity, sco
   expect(sizes).toEqual([250, 250, 3]);
   expect(new Set(events.map(event => event.id)).size).toBe(503);
   expect(events.every(event => event.owner === 'alice')).toBe(true);
+  const decoded = JSON.parse(Buffer.from(firstCursor, 'base64url').toString('utf8'));
+  expect(decoded).toEqual({ v: 1, uid: 'alice', start: '2026-11-15', end: '2026-11-16', after: { date: '2026-11-15', id: 'page-0249' } });
+  const forged = Buffer.from(JSON.stringify({ ...decoded, scope: 'all', owner: 'bob' })).toString('base64url');
+  expect((await fetch(`${query}&cursor=${forged}`, { headers: headers() })).status).toBe(400);
   expect((await fetch(`${query}&cursor=${firstCursor}`, { headers: headers('bob') })).status).toBe(400);
   expect((await fetch(`${query}&scope=all&cursor=${firstCursor}`, { headers: headers('operator') })).status).toBe(400);
   expect((await fetch(`${base}/usage?start=2026-11-14&end=2026-11-16&cursor=${firstCursor}`, { headers: headers() })).status).toBe(400);
@@ -117,7 +133,7 @@ it('projects stored rows into closed content-free metadata instead of trusting a
   const recorder = createUsageRecorder(backing, { now: () => Date.parse('2026-11-14T12:00:00.000Z') });
   const id = await recorder.begin({ owner: 'alice', operation: 'ask', provider: 'gemini', kind: 'tokens', model: 'unpriced' });
   await backing.mutate(id, current => ({ ...current!, prompt: 'private', transcript: 'private', summary: 'private', tokens: { input: 1, output: null, thinking: null, cached: null, total: null, content: 'private' }, cost: { usd: null, currency: 'USD', secret: 'private' } } as any));
-  const base = await serve({ store: backing, verifyToken, ownerUids: [] });
+  const base = await serve({ store: backing, verifyToken });
   const response = await fetch(`${base}/usage?start=2026-11-14&end=2026-11-15`, { headers: headers() });
   expect(response.status).toBe(200);
   expect(JSON.stringify(await response.json())).not.toContain('private');
@@ -125,7 +141,7 @@ it('projects stored rows into closed content-free metadata instead of trusting a
 
 it('returns a content-free unavailable response rather than empty success on a failed ledger query', async () => {
   const store: UsageStore = { ...memoryUsageStore(), query: async () => { throw new Error('capability=https://private.test?token=private'); } };
-  const base = await serve({ store, verifyToken, ownerUids: [] });
+  const base = await serve({ store, verifyToken });
   const response = await fetch(`${base}/usage?start=2026-11-14&end=2026-11-15`, { headers: headers() });
   expect(response.status).toBe(503);
   expect(await response.text()).not.toContain('private');
@@ -147,7 +163,7 @@ async function liveFixture() {
   const store = memoryUsageStore();
   const recorder = createUsageRecorder(store, { now: () => Date.parse('2026-11-14T12:00:00.000Z') });
   const id = await recorder.begin(liveInput, 'live-1');
-  const base = await serve({ store, recorder, verifyToken, ownerUids: ['operator'] });
+  const base = await serve({ store, recorder, verifyToken });
   const receipt = (body: object, uid = 'alice', usageId = id) => fetch(`${base}/usage/live/${usageId}`, {
     method: 'POST', headers: { ...headers(uid), 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
@@ -183,7 +199,7 @@ it('leaves an interrupted or count-less session unpriced and can later accept it
   expect(await recorder.get('alice', other)).toMatchObject({ state: 'completed', evidence: 'browser', cost: { usd: null } });
 });
 
-it('rejects unauthenticated, alien, operator-on-alien and nonstreaming receipts without touching the row', async () => {
+it('rejects unauthenticated, foreign and nonstreaming receipts without touching the row', async () => {
   const { recorder, id, base, receipt } = await liveFixture();
   const initial = await recorder.get('alice', id);
   for (const uid of ['bad-token', 'bob', 'operator']) expect((await receipt({ stage: 'end', sessionSeconds: 10 }, uid)).status).toBe(uid === 'bad-token' ? 401 : 404);
@@ -218,15 +234,15 @@ it('handles malformed and oversized receipt JSON within its own route without ex
 it('rejects a canonical but impossible civil cursor date before invoking any store query', async () => {
   const store = memoryUsageStore();
   const query = vi.spyOn(store, 'query');
-  const base = await serve({ store, verifyToken, ownerUids: [] });
-  const cursor = Buffer.from(JSON.stringify({ v: 1, uid: 'alice', scope: 'mine', start: '2026-02-01', end: '2026-03-01', after: { date: '2026-02-30', id: 'valid-id' } })).toString('base64url');
+  const base = await serve({ store, verifyToken });
+  const cursor = Buffer.from(JSON.stringify({ v: 1, uid: 'alice', start: '2026-02-01', end: '2026-03-01', after: { date: '2026-02-30', id: 'valid-id' } })).toString('base64url');
   expect((await fetch(`${base}/usage?start=2026-02-01&end=2026-03-01&cursor=${cursor}`, { headers: headers() })).status).toBe(400);
   expect(query).not.toHaveBeenCalled();
 });
 
 it('accepts actual leap dates and an inclusive 32-day maximum while keeping end exclusive', async () => {
   const store = memoryUsageStore();
-  const base = await serve({ store, verifyToken, ownerUids: [] });
+  const base = await serve({ store, verifyToken });
   for (const range of ['start=2028-02-29&end=2028-03-01', 'start=2026-11-01&end=2026-12-03']) {
     const response = await fetch(`${base}/usage?${range}`, { headers: headers() });
     expect(response.status).toBe(200);
@@ -251,7 +267,7 @@ it.each(['timestamp', 'source-url', 'oversized-reason'] as const)('fails closed 
       ...(poison === 'oversized-reason' ? { reason: `private${'x'.repeat(1000)}` } : {}),
     },
   }));
-  const base = await serve({ store, verifyToken, ownerUids: [] });
+  const base = await serve({ store, verifyToken });
   const response = await fetch(`${base}/usage?start=2026-11-14&end=2026-11-15`, { headers: headers() });
   expect(response.status).toBe(503);
   expect(await response.text()).not.toContain('private');

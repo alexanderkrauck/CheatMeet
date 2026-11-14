@@ -42,7 +42,7 @@ const listen = async (tracked = true, verified?: { token: string; owner: string 
     apiKey: 'test-key', store, fetchImpl: provider, ...(tracked ? { usageRecorder: recorder } : {}),
     verifyToken,
   }));
-  if (ledger) app.use('/api', usage.createUsageRouter({ store: ledger, recorder, verifyToken, ownerUids: [] }));
+  if (ledger) app.use('/api', usage.createUsageRouter({ store: ledger, recorder, verifyToken }));
   server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server!.once('listening', resolve));
   base = `http://127.0.0.1:${(server.address() as any).port}/api/transcription`;

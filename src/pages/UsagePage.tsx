@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { AudioLines, BarChart3, ChevronLeft, ChevronRight, Clock3, Coins, FileAudio, FileText, Sparkles } from "lucide-react";
 import { Busy, Notice } from "../components/UI";
 import { auth } from "../lib/firebase";
-import { aggregateConsumption, useConsumption, type ConsumptionAggregate, type ConsumptionGroup, type ConsumptionMeasure, type ConsumptionScope } from "../lib/consumption";
+import { aggregateConsumption, useConsumption, type ConsumptionAggregate, type ConsumptionGroup, type ConsumptionMeasure } from "../lib/consumption";
 import type { UsageEvent, UsageOperation } from "../../shared/usage";
 import { dayKeyLabel, formatDuration, plural, type ReportSummary } from "../lib/meetingMeta";
 import { reportHref } from "../lib/reports";
@@ -46,24 +46,17 @@ const stamp = (value: string) => Number.isFinite(Date.parse(value)) ? new Intl.D
 export default function UsagePage() {
   const [period, setPeriod] = useState<UsagePeriod>("month");
   const [anchor, setAnchor] = useState(() => viennaDay(new Date())!);
-  const [selection, setSelection] = useState<{ owner: string | null; scope: ConsumptionScope }>({ owner: null, scope: "mine" });
   const range = useMemo(() => usageRange(period, anchor), [period, anchor]);
   const owner = auth.currentUser?.uid ?? null;
-  const scope = selection.owner === owner ? selection.scope : "mine";
-  const view = useConsumption(range, scope);
-  const owned = !!owner && view.owner === owner && view.scope === scope;
-  const canViewAll = owned && view.canViewAll && !view.forbidden;
-  const permitted = owned && !view.forbidden && (scope === "mine" || canViewAll);
-  const events = useMemo(() => permitted ? view.events.filter((event) => scope === "all" || event.owner === owner) : [], [permitted, scope, view.events, owner]);
+  const view = useConsumption(range);
+  const owned = !!owner && view.owner === owner;
+  const events = useMemo(() => owned ? view.events.filter((event) => event.owner === owner) : [], [owned, view.events, owner]);
   const consumption = useMemo(() => aggregateConsumption(events, range), [events, range]);
   const title = period === "month"
     ? dayKeyLabel(range.start, { month: "long", year: "numeric" })
     : period === "day" ? dayKeyLabel(range.start)
     : `${dayKeyLabel(range.start)} – ${dayKeyLabel(range.days[range.days.length - 1])}`;
   const move = (delta: number) => setAnchor(usageRange(period, anchor, delta).start);
-  const chooseScope = (next: ConsumptionScope) => {
-    if (auth.currentUser?.uid === owner && (next === "mine" || canViewAll)) setSelection({ owner, scope: next });
-  };
 
   return (
     <div className="usage-page" aria-busy={!!owner && (!owned || view.loading)}>
@@ -98,25 +91,21 @@ export default function UsagePage() {
       </section>
 
       <div className="usage-context">
-        {canViewAll ? <div className="usage-period usage-audience" role="group" aria-label="Verbrauchsumfang">
-          <button type="button" aria-pressed={scope === "mine"} onClick={() => chooseScope("mine")}>Mein Verbrauch</button>
-          <button type="button" aria-pressed={scope === "all"} onClick={() => chooseScope("all")}>Alle Konten</button>
-        </div> : <span className="usage-tag">Mein Verbrauch</span>}
+        <span className="usage-tag">Mein Verbrauch</span>
         <p>Zeitraum nach Vorgangsbeginn in Europe/Vienna, nicht nach Meeting-Datum.</p>
         {owned && <button type="button" className="btn" disabled={view.loading} onClick={view.reload}>Verbrauch aktualisieren</button>}
       </div>
       <aside className="usage-history" aria-labelledby="usage-history-heading">
-        <h2 id="usage-history-heading">Historische Nutzung unbekannt</h2>
+        <h2 id="usage-history-heading">Historie unvollständig</h2>
         <p>{owned && view.trackingSince && viennaDay(view.trackingSince)
-          ? `Erfassung laut Protokoll ab ${dayKeyLabel(viennaDay(view.trackingSince)!)}. ` : "Beginn der Erfassung unbekannt. "}
-          Frühere oder nicht erfasste Vorgänge fehlen. Ein leerer Zeitraum bedeutet nicht 0 USD Gesamtkosten.</p>
+          ? `Ältester vorhandener Vorgang: ${dayKeyLabel(viennaDay(view.trackingSince)!)}. ` : "Ältester Vorgang noch unbekannt. "}
+          Nicht alle früheren Vorgänge sind erfasst. Rekonstruierte Kosten sind Schätzungen und gekennzeichnet.
+          Ein leerer Zeitraum bedeutet nicht 0 USD Gesamtkosten.</p>
       </aside>
       {!owner ? <Notice kind="info">Bitte anmelden, um deinen Verbrauch zu sehen.</Notice> : <>
-        {owned && view.error && <Notice>{view.error}{view.forbidden && scope === "all"
-          ? <button type="button" className="btn" onClick={() => chooseScope("mine")}>Nur meinen Verbrauch anzeigen</button>
-          : <button type="button" className="btn" onClick={view.reload}>Erneut versuchen</button>}</Notice>}
+        {owned && view.error && <Notice>{view.error}<button type="button" className="btn" onClick={view.reload}>Erneut versuchen</button></Notice>}
         {(!owned || view.loading) && <Busy text="Verbrauchsprotokoll laden …" />}
-        {permitted && view.loaded && <>
+        {owned && view.loaded && <>
           {view.partial && <p className="usage-data-note" role="status">Vorläufige Teilsumme · {view.pagesLoaded} {view.pagesLoaded === 1 ? "Seite" : "Seiten"} geladen.
             Weitere Vorgänge sind noch nicht vollständig geladen.</p>}
           <section className="usage-cards usage-consumption-cards" aria-label="Gemessener Verbrauch im gewählten Zeitraum">
@@ -150,16 +139,13 @@ export default function UsagePage() {
           {consumption.evidence.browser > 0 && <p className="usage-relay-note">Browser-relay: Provider-Meldungen wurden vom angemeldeten Browser übermittelt,
             nicht serverseitig als Abrechnung verifiziert.</p>}
           {consumption.excludedInvalidDates > 0 && <Notice kind="info">{plural(consumption.excludedInvalidDates, "Vorgang ohne gültigen Beginn wurde", "Vorgänge ohne gültigen Beginn wurden")} nicht in Zeitraum-Summen aufgenommen.</Notice>}
-          {consumption.requests > 0 ? <>
-            {scope === "all" && canViewAll && <AccountsOverview data={consumption} />}
-            <ConsumptionBreakdowns data={consumption} title={title} onDay={(key) => { setAnchor(key); setPeriod("day"); }} />
-          </> : !view.partial && <div className="usage-empty"><Sparkles size={26} aria-hidden="true" />
+          {consumption.requests > 0 ? <ConsumptionBreakdowns data={consumption} title={title} onDay={(key) => { setAnchor(key); setPeriod("day"); }} />
+            : !view.partial && <div className="usage-empty"><Sparkles size={26} aria-hidden="true" />
             <h2>Keine erfassten Vorgänge im Zeitraum</h2><p className="muted">Wähle einen anderen Zeitraum. Fehlende historische Messungen werden nicht als kostenlose Nutzung gewertet.</p></div>}
           {!view.partial && <p className="usage-load-note">Alle {consumption.requests} erfassten Vorgänge geladen · {view.pagesLoaded} {view.pagesLoaded === 1 ? "Seite" : "Seiten"}.</p>}
-          {scope === "all" && <RateBasis events={consumption.events} />}
         </>}
       </>}
-      {owned && scope === "mine" && <MineUsageDetails key={owner} owner={owner} data={permitted && view.loaded ? consumption : null}
+      {owned && <MineUsageDetails key={owner} owner={owner} data={view.loaded ? consumption : null}
         range={range} title={title} onDay={(key) => { setAnchor(key); setPeriod("day"); }} />}
     </div>
   );
@@ -242,20 +228,6 @@ function MeetingRollups({ data, reports }: { data: ConsumptionAggregate; reports
   </section>;
 }
 
-function AccountsOverview({ data }: { data: ConsumptionAggregate }) {
-  const label = (account: ConsumptionGroup) => account.ownerLabel || `Konto ${account.owner?.slice(0, 10)}`;
-  return <section className="usage-breakdown usage-accounts" aria-labelledby="consumption-accounts">
-    <div className="usage-section-head"><div><h2 id="consumption-accounts">Kontenübersicht</h2>
-      <p className="muted">{data.accounts.length} Konten mit erfassten Vorgängen · nur Nutzungsmetadaten, keine Meeting-Inhalte</p></div><span className="usage-tag">Betreiberansicht</span></div>
-    <RollupTable rows={data.accounts} caption="Verbrauch nach Konto" label={(account) => <>{label(account)}<small>Konto-ID: {account.owner}</small></>} />
-    <div className="usage-account-evidence">{data.accounts.map((account) => <details className="usage-meeting" key={account.key}>
-      <summary><span><strong>Nachweise · {label(account)}</strong><small>{account.requests} Vorgänge · Konto-ID: {account.owner}</small></span>
-        <span className="usage-meeting-cost">{money(account.cost.value)}<small>{coverage(account.cost)}</small></span></summary>
-      <div className="usage-requests">{account.events.map((event) => <RequestEvidence key={event.id} event={event} />)}</div>
-    </details>)}</div>
-  </section>;
-}
-
 function RateSource({ source }: { source?: string }) {
   let allowed = false;
   try { allowed = ["https:", "http:"].includes(new URL(source ?? "").protocol); } catch { /* unknown source is not a link */ }
@@ -297,7 +269,8 @@ function RateBasis({ events }: { events: UsageEvent[] }) {
   }
   return <details className="usage-rates">
     <summary>Tarife &amp; Kostengrundlage<span>USD-Schätzungen, keine Rechnungen</span></summary>
-    <div><p>Es gelten die beim Abschluss gespeicherten Tarif-Snapshots zum Vorgangsbeginn. Spätere Preisänderungen werden nicht rückwirkend auf diese Werte angewandt.
+    <div><p>Die Schätzung verwendet den am Vorgang gespeicherten Tarif-Snapshot. Nachträgliche Rekonstruktionen sind eigens gekennzeichnet.
+      Spätere Preisänderungen werden nicht rückwirkend auf diese Werte angewandt.
       Rabatte, Gutschriften, Steuern, Hosting und Speicher sowie Währungsumrechnung sind nicht enthalten.</p>
       <p>Cache zählt nicht zusätzlich zum Input. Thinking gehört zum abrechenbaren Output. Streaming-Verbindungszeit und Batch-Audio sind getrennte Mengen;
         parallele Quellen und Neuverbindungen zählen separat. Add-ons sind nur berücksichtigt, soweit im gespeicherten Tarif erfasst.</p>

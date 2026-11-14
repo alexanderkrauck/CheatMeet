@@ -53,8 +53,6 @@
 .usage-context > p { flex: 1 1 250px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .usage-context > .btn { flex-shrink: 0; min-height: 40px; }
 .usage-tag { display: inline-flex; align-items: center; min-height: 30px; padding: 4px 10px; border: 1px solid #d4dff8; border-radius: 7px; background: var(--brand-wash); color: var(--brand-ink); font-size: 11px; font-weight: 650; }
-.usage-audience { flex-shrink: 0; }
-.usage-audience button { padding-inline: 12px; font-size: 12px; }
 .usage-consumption-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
 .usage-consumption-cards .usage-card { min-width: 0; padding: 18px; }
 .usage-consumption-cards .usage-card > div { align-items: center; }
@@ -95,7 +93,6 @@
 .usage-money { color: var(--brand-ink); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
 .usage-money small { color: var(--muted); }
 .usage-ledger-table tbody button { min-height: 44px; }
-.usage-accounts { margin: 22px 0; border-color: #c7d6f4; }
 .usage-meeting { border-top: 1px solid var(--line-soft); }
 .usage-own-meetings { margin-top: 18px; }
 .usage-meeting summary a { color: var(--brand-ink); text-decoration: underline; text-underline-offset: 3px; }
@@ -196,8 +193,6 @@
   .usage-context { gap: 9px; }
   .usage-context > .btn { min-height: 44px; margin-left: auto; white-space: normal; }
   .usage-period button { min-height: 44px; padding-inline: 14px; }
-  .usage-audience { flex: 1 1 100%; justify-content: center; }
-  .usage-audience button { flex: 1; }
   .usage-token-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 0; }
   .usage-token-grid > div { padding: 0 12px; }
   .usage-token-grid > div:nth-child(odd) { padding-left: 0; border-left: 0; }

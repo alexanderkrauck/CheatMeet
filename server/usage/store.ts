@@ -8,7 +8,7 @@ import { boundedFetch } from '../processing/budget';
 
 export type UsagePosition = { date: string; id: string };
 export type UsageQuery = {
-  owner?: string;
+  owner: string;
   start: string;
   end: string;
   after?: UsagePosition;
@@ -19,7 +19,7 @@ export interface UsageStore {
   /** Atomic CAS; callbacks may run again on contention and must be pure. */
   mutate(id: string, fn: (current: UsageEvent | null) => UsageEvent | undefined): Promise<UsageEvent | null>;
   query(input: UsageQuery): Promise<{ events: UsageEvent[]; next: UsagePosition | null }>;
-  trackingSince(owner?: string): Promise<string | null>;
+  trackingSince(owner: string): Promise<string | null>;
 }
 
 const dateFormatter = new Intl.DateTimeFormat('en-CA', {
@@ -44,9 +44,14 @@ export function validUsageRange(start: unknown, end: unknown): boolean {
   const span = Date.parse(end) - Date.parse(start);
   return Number.isFinite(span) && span > 0 && span <= 32 * 86_400_000;
 }
+function validateOwner(owner: string) {
+  if (typeof owner !== 'string' || !owner.trim().length || owner.length > 128 || /[\u0000-\u001f\u007f]/.test(owner)) {
+    throw new Error('Ungültige Verbrauchsabfrage.');
+  }
+}
 function validateQuery(input: UsageQuery) {
+  validateOwner(input.owner);
   if (!validUsageRange(input.start, input.end) || !Number.isInteger(input.limit) || input.limit < 1 || input.limit > 500
-    || (input.owner !== undefined && (typeof input.owner !== 'string' || !input.owner.length || input.owner.length > 128))
     || (input.after && (typeof input.after.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.after.id)
       || input.after.date < input.start || input.after.date >= input.end || !validUsageDate(input.after.date)))) {
     throw new Error('Ungültige Verbrauchsabfrage.');
@@ -57,16 +62,17 @@ function page(events: UsageEvent[], input: UsageQuery) {
   validateQuery(input);
   const matching = events.filter(event => {
     const key = position(event);
-    return (input.owner === undefined || input.owner === event.owner)
+    return input.owner === event.owner
       && key.date >= input.start && key.date < input.end
       && (!input.after || compare(key, input.after) > 0);
   }).sort((a, b) => compare(position(a), position(b)));
   const selected = matching.slice(0, input.limit);
   return { events: copy(selected), next: matching.length > input.limit ? position(selected.at(-1)!) : null };
 }
-const earliest = (events: UsageEvent[], owner?: string): string | null =>
-  events.filter(event => owner === undefined || event.owner === owner)
-    .map(event => event.startedAt).sort()[0] ?? null;
+function earliest(events: UsageEvent[], owner: string): string | null {
+  validateOwner(owner);
+  return events.filter(event => event.owner === owner).map(event => event.startedAt).sort()[0] ?? null;
+}
 
 /** Dedicated test/fixture backend. Production never selects this factory. */
 export function memoryUsageStore(): UsageStore {
@@ -134,7 +140,7 @@ export function fileUsageStore(root: string): UsageStore {
       return run;
     },
     query: async input => { validateQuery(input); return page(await all(), input); },
-    trackingSince: async owner => earliest(await all(), owner),
+    trackingSince: async owner => { validateOwner(owner); return earliest(await all(), owner); },
   };
 }
 
@@ -209,28 +215,29 @@ export function firestoreUsageStore(options: FirestoreUsageOptions = {}): UsageS
     },
     async query(input) {
       validateQuery(input);
-      const filters: object[] = input.owner === undefined ? [] : [ownerFilter(input.owner)];
-      filters.push(
+      const filters = [
+        ownerFilter(input.owner),
         { fieldFilter: { field: { fieldPath: 'accountingDate' }, op: 'GREATER_THAN_OR_EQUAL', value: { stringValue: input.start } } },
         { fieldFilter: { field: { fieldPath: 'accountingDate' }, op: 'LESS_THAN', value: { stringValue: input.end } } },
-      );
+      ];
       const events = await runQuery({
         from: [{ collectionId: 'usageEvents' }], where: { compositeFilter: { op: 'AND', filters } },
         orderBy: [{ field: { fieldPath: 'accountingDate' }, direction: 'ASCENDING' }, { field: { fieldPath: '__name__' }, direction: 'ASCENDING' }],
         limit: input.limit + 1,
         ...(input.after ? { startAt: { before: false, values: [{ stringValue: input.after.date }, { referenceValue: name(input.after.id) }] } } : {}),
       });
-      if (events.length > input.limit + 1 || events.some(event => (input.owner !== undefined && event.owner !== input.owner)
+      if (events.length > input.limit + 1 || events.some(event => event.owner !== input.owner
         || usageDate(event.startedAt) < input.start || usageDate(event.startedAt) >= input.end)) throw new Error('Ungültiger Abfrageumfang.');
       const selected = events.slice(0, input.limit);
       return { events: selected, next: events.length > input.limit ? position(selected.at(-1)!) : null };
     },
     async trackingSince(owner) {
+      validateOwner(owner);
       const events = await runQuery({ from: [{ collectionId: 'usageEvents' }],
-        ...(owner !== undefined ? { where: ownerFilter(owner) } : {}),
+        where: ownerFilter(owner),
         orderBy: [{ field: { fieldPath: 'startedAt' }, direction: 'ASCENDING' }], limit: 1,
       });
-      if (events.length > 1 || (owner !== undefined && events.some(event => event.owner !== owner))) throw new Error('Ungültiger Abfrageumfang.');
+      if (events.length > 1 || events.some(event => event.owner !== owner)) throw new Error('Ungültiger Abfrageumfang.');
       return events[0]?.startedAt ?? null;
     },
   };

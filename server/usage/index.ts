@@ -172,7 +172,7 @@ export function usageOwnerLabel(req: express.Request, verifiedUid: string): stri
 }
 
 const bearer = (req: express.Request): string | undefined => /^Bearer (\S+)$/i.exec(req.get('authorization') ?? '')?.[1];
-type CursorContext = { uid: string; scope: 'mine' | 'all'; start: string; end: string };
+type CursorContext = { uid: string; start: string; end: string };
 function encodeCursor(context: CursorContext, after: UsagePosition): string {
   return Buffer.from(JSON.stringify({ v: 1, ...context, after })).toString('base64url');
 }
@@ -183,8 +183,8 @@ function decodeCursor(value: unknown, context: CursorContext): UsagePosition | u
     const decoded = Buffer.from(value as string, 'base64url');
     if (decoded.toString('base64url') !== value) invalid();
     const cursor = JSON.parse(decoded.toString('utf8'));
-    if (!cursor || Object.keys(cursor).sort().join(',') !== 'after,end,scope,start,uid,v' || cursor.v !== 1
-      || cursor.uid !== context.uid || cursor.scope !== context.scope || cursor.start !== context.start || cursor.end !== context.end
+    if (!cursor || Object.keys(cursor).sort().join(',') !== 'after,end,start,uid,v' || cursor.v !== 1
+      || cursor.uid !== context.uid || cursor.start !== context.start || cursor.end !== context.end
       || !cursor.after || Object.keys(cursor.after).sort().join(',') !== 'date,id'
       || typeof cursor.after.date !== 'string' || cursor.after.date < context.start || cursor.after.date >= context.end
       || !validUsageDate(cursor.after.date)) invalid();
@@ -201,7 +201,6 @@ type RouterOptions = {
   store?: UsageStore;
   recorder?: UsageRecorder;
   verifyToken?: (token: string) => Promise<string>;
-  ownerUids?: string[];
   now?: () => number;
 };
 export function createUsageRouter(options: RouterOptions = {}) {
@@ -209,7 +208,6 @@ export function createUsageRouter(options: RouterOptions = {}) {
   const store = options.store ?? getDefaultStore();
   const recorder = options.recorder ?? createUsageRecorder(store, { now: options.now });
   const now = options.now ?? Date.now;
-  const allowedOwners = new Set(options.ownerUids ?? (process.env.USAGE_OWNER_UIDS ?? '').split(',').map(value => value.trim()).filter(Boolean));
   const verify = options.verifyToken ?? (async (token: string) => (await import('../analysis')).verifyFirebaseToken(token));
   const authenticate = async (req: express.Request, res: express.Response): Promise<string | null> => {
     res.setHeader('Cache-Control', 'no-store');
@@ -223,18 +221,13 @@ export function createUsageRouter(options: RouterOptions = {}) {
     const uid = await authenticate(req, res);
     if (uid === null) return;
     try {
-      if (Object.keys(req.query).some(key => !['start', 'end', 'scope', 'cursor'].includes(key))) invalid();
+      if (Object.keys(req.query).some(key => !['start', 'end', 'cursor'].includes(key))) invalid();
       const { start, end } = req.query;
       if (!validUsageRange(start, end)) invalid();
-      const scope = req.query.scope ?? 'mine';
-      if (scope !== 'mine' && scope !== 'all') invalid();
-      const canViewAll = allowedOwners.has(uid);
-      if (scope === 'all' && !canViewAll) throw new UsageError(403, 'Keine Berechtigung für die Gesamtübersicht.');
-      const context: CursorContext = { uid, scope: scope as 'mine' | 'all', start: start as string, end: end as string };
+      const context: CursorContext = { uid, start: start as string, end: end as string };
       const after = decodeCursor(req.query.cursor, context);
-      const owner = scope === 'mine' ? uid : undefined;
       const [result, trackingSince] = await Promise.all([
-        store.query({ owner, start: context.start, end: context.end, after, limit: 250 }), store.trackingSince(owner),
+        store.query({ owner: uid, start: context.start, end: context.end, after, limit: 250 }), store.trackingSince(uid),
       ]);
       let events: UsageEvent[];
       try {
@@ -242,8 +235,8 @@ export function createUsageRouter(options: RouterOptions = {}) {
         if (trackingSince !== null) timestamp(trackingSince);
       } catch { throw new Error('Ungültiger Verbrauchsspeicher.'); }
       // Filters are always reconstructed from verified identity, never granted by a cursor.
-      if (events.some(event => owner !== undefined && event.owner !== owner)) throw new Error('Abfrageumfang');
-      res.json({ events, canViewAll, scope, nextCursor: result.next ? encodeCursor(context, result.next) : null,
+      if (events.some(event => event.owner !== uid)) throw new Error('Abfrageumfang');
+      res.json({ events, nextCursor: result.next ? encodeCursor(context, result.next) : null,
         trackingSince, historyComplete: false });
     } catch (error) { unavailable(res, error); }
   });

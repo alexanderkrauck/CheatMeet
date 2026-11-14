@@ -10,7 +10,7 @@ The server records one `usageEvents` entry per real Gemini SDK attempt, issued l
 - **Live AssemblyAI:** microphone and system audio, plus each reconnect, have distinct events. Token issuance is not proof that a connection ran. The browser relays `Begin` and `Termination`, including provider session ID and separate session/audio seconds. These are explicitly **browser-relayed**, not server-verified invoice measurements. A lost termination, tab closure, or account change can leave unknown usage. The recorder's wall-clock meeting duration is never substituted.
 - **Batch AssemblyAI:** a usage ID is saved with the existing native paid reservation before submission. Existing result polling settles that same entry from provider `audio_duration` and reported `speech_model_used`; polling and restarts do not invent additional paid runs. Unsupported reported models retain measured seconds but stay unpriced; malformed reported models use an explicit unconfirmed marker, not the requested model's tariff. Confirmed safe retries get distinct usage IDs. Uncertain submissions keep their native reservation closed. Historical reservations without a usage ID are not fabricated or resubmitted for accounting.
 
-Attribution uses the verified Firebase UID. Optional meeting ID and archive namespace are metadata, not authority. Worker jobs retain an optional bounded name/email label derived from the matching, verified bearer token; they do not accept a submitted account label. No transcript, prompt, question, summary, audio, credential, signed download URL, or meeting title belongs in the ledger. Own-account UI may resolve a locally available meeting label; the operator API remains usage metadata only.
+Attribution uses the verified Firebase UID. Optional meeting ID and archive namespace are metadata, not authority. Worker jobs retain an optional bounded name/email label derived from the matching, verified bearer token; they do not accept a submitted account label. No transcript, prompt, question, summary, audio, credential, signed download URL, or meeting title belongs in the ledger. Own-account UI may resolve a locally available meeting label; the API returns usage metadata only to the owning account.
 
 ## Durability and failures
 
@@ -24,14 +24,12 @@ Worker accounting REST calls share the current processing deadline. Analysis and
 
 ## Access and queries
 
-- `GET /api/usage?start=YYYY-MM-DD&end=YYYY-MM-DD&scope=mine|all&cursor=...` uses operation-start accounting days in **Europe/Vienna**, with an exclusive end and a bounded range of at most 32 days. Each response is a bounded page; clients follow `nextCursor`, deduplicate, cancel on changes, and label partial results. Reads never call an AI/transcription provider.
-- `mine` is the default. Supplying a different owner does not grant access.
-- `all` requires an exact verified Firebase UID in **`USAGE_OWNER_UIDS`**, a comma-separated server environment allowlist. It defaults to no operators; neither email domain nor browser claims grant operator access. The response's `canViewAll` controls the optional UI, but the server enforces it independently. Keep this environment value server-side; do not add it to Vite configuration. Use verified account UIDs, not Google subject IDs, Microsoft IDs, email addresses, or sample values.
+- `GET /api/usage?start=YYYY-MM-DD&end=YYYY-MM-DD&cursor=...` uses operation-start accounting days in **Europe/Vienna**, with an exclusive end and a bounded range of at most 32 days. Each response is a bounded page; clients follow `nextCursor`, deduplicate, cancel on changes, and label partial results. Reads never call an AI/transcription provider.
+- Every account can read **only its own usage**, pinned to the verified Firebase UID. There is no operator/admin exception, account selector, privilege flag, or environment-based grant. Unsupported query keys, including any `scope` or owner override, return HTTP 400 before storage is read.
+- Responses contain `events`, `nextCursor`, `trackingSince`, and `historyComplete: false`, without permission/mode fields. Cursors are bound to the verified identity and exact date range; they never grant authority. Store queries and tracking-start reads require a nonempty bounded owner at both the type and runtime boundaries, always filter by that owner, and have no global-read branch. The client rejects foreign rows regardless of any injected legacy privilege fields and fences pending responses on account changes.
 - `POST /api/usage/live/:id` accepts only authenticated own-session receipts. Clients cannot create authoritative usage rows or submit owner, model, price, or cost. Receipt failure does not block transcript delivery.
 
 `firestore.indexes.json`, bound in `firebase.json`, declares the owner/accounting-day and owner/start-time indexes. **Local implementation does not deploy them.** On a separately authorized release, apply these indexes to the same configured named database and wait until ready before relying on production queries. The existing runtime identity must retain its server-held Firestore permissions. No collection migration or fabricated backfill is required.
-
-The cross-account view is available only after the deployment has explicitly configured `USAGE_OWNER_UIDS`. An empty allowlist is an intentional secure default, not a reason to auto-promote the first user.
 
 ## Costs, rates and limits
 
@@ -43,7 +41,13 @@ The cross-account view is available only after the deployment has explicitly con
 - Unknown models, unsupported features, inconsistent token counters, missing measurements, and legacy multimodal input without modality counts stay unpriced. Their known consumption is still displayed.
 - Estimates exclude discounts, credits, tax, FX, hosting, storage, and any unmeasured fees. USD estimates are **not** invoices, per-user charges, or reconstructed historical totals. Actual invoice reconciliation is not implemented.
 
-The day/week/month views show known subtotals with coverage, model and operation breakdowns, per-meeting own-account details, and an authorized account overview. An empty period means no recorded events in the selected range, not proof of zero historical spend. Account/range/scope changes fence pending responses and hide stale foreign data before effects run.
+The day/week/month views show known subtotals with coverage, model and operation breakdowns, per-meeting own-account details, and inspectable request/rate evidence. An empty period means no recorded events in the selected range, not proof of zero historical spend. Account/range changes fence pending responses and hide stale foreign data before effects run. Existing ledger history and stored rate snapshots are retained unchanged; removing cross-account access does not backfill missing measurements or reprice earlier events.
+
+### Bounded recovery of older usage
+
+An authorized one-off recovery may add actual historical provider metadata only when the existing UID-keyed native submission reservation proves the owning account, provider request ID and real submission time. Confirm the provider's actual model, duration and enabled features; never use meeting duration as billed usage or resubmit audio. Use stable identities and the native ledger store's create-if-absent/CAS, checking for an already recorded provider request rather than duplicating it or replacing an immutable price snapshot. No browser-authoritative import or operator API is added.
+
+If a historical invoice/rate is unavailable, a cost reconstructed at a currently verified rate must explicitly say so in its stored rate ID and reason. This is not evidence of the historical charge. Missing earlier Gemini/streaming usage remains unknown; project/account billing aggregates cannot be assigned to one CheatMeet UID. `historyComplete` stays false, and `trackingSince` denotes the oldest available row, not proof that continuous collection began then.
 
 ## Verification boundaries
 

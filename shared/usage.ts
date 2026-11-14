@@ -61,8 +61,6 @@ export type UsageEvent = UsageStart & {
 
 export type UsagePageData = {
   events: UsageEvent[];
-  canViewAll: boolean;
-  scope: 'mine' | 'all';
   nextCursor: string | null;
   trackingSince: string | null;
   historyComplete: false;

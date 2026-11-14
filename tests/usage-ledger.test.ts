@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createUsageRecorder } from '../server/usage';
-import { fileUsageStore, firestoreUsageStore, memoryUsageStore } from '../server/usage/store';
+import { fileUsageStore, firestoreUsageStore, memoryUsageStore, type UsageQuery } from '../server/usage/store';
 import type { UsageStart } from '../shared/usage';
 
 const start: UsageStart = { owner: 'alice', operation: 'summary', provider: 'gemini', kind: 'tokens', model: 'unpriced-model', meetingId: 'meeting-1' };
@@ -151,6 +151,23 @@ it('sends bounded indexed Firestore owner/date filters and a native exclusive pa
   expect(first.orderBy[0].field.fieldPath).toBe('startedAt');
 });
 
+it.each(['memory', 'file', 'firestore'])('rejects an unbound owner at runtime before any %s query or tracking read', async backend => {
+  const fixture = firestoreFixture();
+  const root = backend === 'file' ? await mkdtemp(path.join(tmpdir(), 'cheatmeet-usage-owner-')) : null;
+  if (root) roots.push(root);
+  const store = root ? fileUsageStore(root) : backend === 'firestore' ? fixture.store() : memoryUsageStore();
+  await createUsageRecorder(store, { now: () => Date.parse('2026-11-14T12:00:00.000Z') }).begin(start, 'durable');
+  fixture.fetchImpl.mockClear();
+  for (const owner of [undefined, null, '', '   ', 42, [], {}, 'x'.repeat(129), 'alice\n']) {
+    const input = { start: '2026-11-14', end: '2026-11-15', limit: 250, ...(owner === undefined ? {} : { owner }) };
+    await expect(store.query(input as UsageQuery)).rejects.toThrow('Ungültige Verbrauchsabfrage.');
+    await expect(store.trackingSince(owner as string)).rejects.toThrow('Ungültige Verbrauchsabfrage.');
+  }
+  expect(fixture.fetchImpl).not.toHaveBeenCalled();
+  expect((await store.query({ owner: 'alice', start: '2026-11-14', end: '2026-11-15', limit: 250 })).events.map(event => event.owner)).toEqual(['alice']);
+  expect(await store.trackingSince('alice')).toBe('2026-11-14T12:00:00.000Z');
+});
+
 it('bounds every store query, filters owner and Vienna day before paginating, and never silently truncates', async () => {
   const store = memoryUsageStore();
   for (let n = 0; n < 6; n++) {
@@ -163,8 +180,8 @@ it('bounds every store query, filters owner and Vienna day before paginating, an
   const second = await store.query({ owner: 'alice', start: '2026-10-25', end: '2026-10-26', limit: 2, after: first.next! });
   expect(second.events.map(event => event.id)).toEqual(['attempt-2', 'attempt-3']);
   expect(second.next).toBeNull();
-  await expect(store.query({ start: '2026-10-25', end: '2026-10-26', limit: 0 })).rejects.toThrow();
-  await expect(store.query({ start: '2026-10-25', end: '2026-10-26', limit: 501 })).rejects.toThrow();
+  await expect(store.query({ owner: 'alice', start: '2026-10-25', end: '2026-10-26', limit: 0 })).rejects.toThrow();
+  await expect(store.query({ owner: 'alice', start: '2026-10-25', end: '2026-10-26', limit: 501 })).rejects.toThrow();
 });
 
 it('accepts Firestore canonical timestamps with omitted zero fractions without corrupting the original event timestamp', async () => {

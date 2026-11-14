@@ -4,7 +4,6 @@ import type { UsageEvent, UsagePageData, UsageTokens } from "../../shared/usage"
 import { viennaDay, type UsageRange } from "./usage";
 import { auth } from "./firebase";
 
-export type ConsumptionScope = "mine" | "all";
 type Identity = { uid: string; getIdToken(): Promise<string> };
 export interface ConsumptionSnapshot extends UsagePageData { pagesLoaded: number }
 export class ConsumptionLoadError extends Error {
@@ -16,7 +15,6 @@ export class ConsumptionLoadError extends Error {
 export interface ConsumptionRequest {
   owner: string;
   range: UsageRange;
-  scope: ConsumptionScope;
   currentUser?: () => Identity | null;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
@@ -37,8 +35,6 @@ export interface ConsumptionTotals {
 export interface ConsumptionGroup extends ConsumptionTotals {
   key: string;
   events: UsageEvent[];
-  owner?: string;
-  ownerLabel?: string;
   meetingId?: string;
   storage?: UsageEvent["storage"];
   provider?: UsageEvent["provider"];
@@ -51,7 +47,6 @@ export interface ConsumptionAggregate extends ConsumptionTotals {
   models: ConsumptionGroup[];
   operations: ConsumptionGroup[];
   meetings: ConsumptionGroup[];
-  accounts: ConsumptionGroup[];
   excludedInvalidDates: number;
 }
 const measure = (): ConsumptionMeasure => ({ value: null, known: 0, total: 0 });
@@ -87,7 +82,7 @@ function addEvent(target: ConsumptionTotals, event: UsageEvent) {
 
 export function aggregateConsumption(events: readonly UsageEvent[], range: UsageRange): ConsumptionAggregate {
   const days = range.days.map((key) => ({ ...emptyTotals(), key, events: [] } as ConsumptionGroup));
-  const result: ConsumptionAggregate = { ...emptyTotals(), events: [], days, models: [], operations: [], meetings: [], accounts: [], excludedInvalidDates: 0 };
+  const result: ConsumptionAggregate = { ...emptyTotals(), events: [], days, models: [], operations: [], meetings: [], excludedInvalidDates: 0 };
   const unique = new Map<string, UsageEvent>();
   for (const event of events) {
     const key = JSON.stringify([event.owner, event.id]);
@@ -98,13 +93,12 @@ export function aggregateConsumption(events: readonly UsageEvent[], range: Usage
   const models = new Map<string, ConsumptionGroup>();
   const operations = new Map<string, ConsumptionGroup>();
   const meetings = new Map<string, ConsumptionGroup>();
-  const accounts = new Map<string, ConsumptionGroup>();
   const group = (groups: Map<string, ConsumptionGroup>, key: string, metadata: Partial<ConsumptionGroup>) => {
     let entry = groups.get(key);
     if (!entry) { entry = { ...emptyTotals(), key, events: [], ...metadata }; groups.set(key, entry); }
     return entry;
   };
-  // Newest metadata wins; labels remain accounting metadata, never report titles.
+  // Newest receipts first; meeting titles are resolved separately from own reports.
   for (const event of [...unique.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.id.localeCompare(b.id))) {
     const key = viennaDay(event.startedAt);
     if (!key) { result.excludedInvalidDates++; continue; }
@@ -114,18 +108,15 @@ export function aggregateConsumption(events: readonly UsageEvent[], range: Usage
     const model = group(models, JSON.stringify([event.provider, event.model]), { provider: event.provider, model: event.model });
     const operation = group(operations, event.operation, { operation: event.operation });
     const meeting = group(meetings, JSON.stringify([event.owner, event.storage ?? null, event.meetingId ?? null]), {
-      owner: event.owner, storage: event.storage, meetingId: event.meetingId,
+      storage: event.storage, meetingId: event.meetingId,
     });
-    const account = group(accounts, event.owner, { owner: event.owner, ownerLabel: event.ownerLabel });
-    if (!account.ownerLabel && event.ownerLabel) account.ownerLabel = event.ownerLabel;
     addEvent(result, event);
-    for (const target of [day, model, operation, meeting, account]) { addEvent(target, event); target.events.push(event); }
+    for (const target of [day, model, operation, meeting]) { addEvent(target, event); target.events.push(event); }
   }
   const sorted = (groups: Map<string, ConsumptionGroup>) => [...groups.values()].sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
   result.models = sorted(models);
   result.operations = sorted(operations);
   result.meetings = sorted(meetings);
-  result.accounts = sorted(accounts);
   return result;
 }
 
@@ -135,19 +126,14 @@ interface ConsumptionLoadState {
   data: ConsumptionSnapshot | null;
   loading: boolean;
   error: string;
-  forbidden: boolean;
-  canViewAll: boolean;
 }
 export interface ConsumptionView {
   owner: string | null;
-  scope: ConsumptionScope;
   events: UsageEvent[];
   loading: boolean;
   loaded: boolean;
   partial: boolean;
   error: string;
-  forbidden: boolean;
-  canViewAll: boolean;
   pagesLoaded: number;
   trackingSince: string | null;
   historyComplete: false;
@@ -156,47 +142,39 @@ export interface ConsumptionView {
 const subscribeIdentity = (listener: () => void) => onAuthStateChanged(auth, () => listener());
 const identitySnapshot = () => auth.currentUser;
 
-export function useConsumption(range: UsageRange, scope: ConsumptionScope = "mine"): ConsumptionView {
+export function useConsumption(range: UsageRange): ConsumptionView {
   const identity = useSyncExternalStore(subscribeIdentity, identitySnapshot, identitySnapshot);
   const [epoch, setEpoch] = useState(0);
   const reload = useCallback(() => setEpoch((value) => value + 1), []);
-  const key = JSON.stringify([range.start, range.end, scope, epoch]);
+  const key = JSON.stringify([range.start, range.end, epoch]);
   const [state, setState] = useState<ConsumptionLoadState>({
-    identity: null, key: "", data: null, loading: false, error: "", forbidden: false, canViewAll: false,
+    identity: null, key: "", data: null, loading: false, error: "",
   });
   useEffect(() => {
     const controller = new AbortController();
     if (!identity) return () => controller.abort();
     const current = () => !controller.signal.aborted && auth.currentUser === identity;
-    setState((previous) => ({
-      identity, key, data: null, loading: true, error: "", forbidden: false,
-      canViewAll: previous.identity === identity && previous.canViewAll,
-    }));
+    setState({ identity, key, data: null, loading: true, error: "" });
     const accept = (data: ConsumptionSnapshot, loading: boolean) => {
-      if (current()) setState({ identity, key, data, loading, error: "", forbidden: false, canViewAll: data.canViewAll });
+      if (current()) setState({ identity, key, data, loading, error: "" });
     };
-    void loadConsumption({ owner: identity.uid, range, scope, signal: controller.signal, onPage: (data) => accept(data, true) })
+    void loadConsumption({ owner: identity.uid, range, signal: controller.signal, onPage: (data) => accept(data, true) })
       .then((data) => accept(data, false))
       .catch((cause) => {
         if (!current() || cause instanceof ConsumptionLoadError && cause.code === "cancelled") return;
         const failure = cause instanceof ConsumptionLoadError ? cause : new ConsumptionLoadError("Verbrauch konnte nicht geladen werden.", "load");
-        setState((previous) => ({
-          identity, key, data: failure.snapshot, loading: false, error: failure.message, forbidden: failure.code === "forbidden",
-          canViewAll: failure.code === "load" && previous.identity === identity && previous.canViewAll,
-        }));
+        setState({ identity, key, data: failure.snapshot, loading: false, error: failure.message });
       });
     return () => controller.abort();
-  }, [identity, range.start, range.end, scope, epoch]);
+  }, [identity, range.start, range.end, epoch]);
   // Fence in render, not only in an effect: the old account/query can never flash.
   const visible = !!identity && state.identity === identity && state.key === key;
   const data = visible ? state.data : null;
   const loading = !!identity && (!visible || state.loading);
   const error = visible ? state.error : "";
   return {
-    owner: identity?.uid ?? null, scope, events: data?.events ?? [], loading, loaded: !!data,
+    owner: identity?.uid ?? null, events: data?.events ?? [], loading, loaded: !!data,
     partial: !!data && (loading || !!error || data.nextCursor !== null), error,
-    forbidden: visible && state.forbidden,
-    canViewAll: !!identity && state.identity === identity && state.canViewAll,
     pagesLoaded: data?.pagesLoaded ?? 0, trackingSince: data?.trackingSince ?? null, historyComplete: false, reload,
   };
 }
@@ -239,7 +217,7 @@ export async function loadConsumption(options: ConsumptionRequest): Promise<Cons
       const token = await user.getIdToken();
       owned();
       if (!token) throw new ConsumptionLoadError("Bitte erneut anmelden.", "unauthorized");
-      const query = new URLSearchParams({ start: options.range.start, end: options.range.end, scope: options.scope });
+      const query = new URLSearchParams({ start: options.range.start, end: options.range.end });
       if (cursor !== null) query.set("cursor", cursor);
       const response = await (options.fetchImpl ?? fetch)(`/api/usage?${query}`, {
         method: "GET", headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal: options.signal,
@@ -250,13 +228,12 @@ export async function loadConsumption(options: ConsumptionRequest): Promise<Cons
       if (!response.ok) throw new Error("Verbrauch konnte nicht geladen werden.");
       const page = await response.json() as UsagePageData;
       owned();
-      if (!page || page.scope !== options.scope || typeof page.canViewAll !== "boolean" || page.historyComplete !== false ||
+      if (!page || page.historyComplete !== false ||
         !(page.trackingSince === null || typeof page.trackingSince === "string") || !Array.isArray(page.events) ||
         !(page.nextCursor === null || typeof page.nextCursor === "string" && page.nextCursor.length > 0) ||
-        page.events.some((event) => !validEvent(event) || options.scope === "mine" && event.owner !== options.owner)) {
+        page.events.some((event) => !validEvent(event) || event.owner !== options.owner)) {
         throw new Error("Ungültige Verbrauchsantwort.");
       }
-      if (options.scope === "all" && !page.canViewAll) throw new ConsumptionLoadError("Keine Berechtigung für die Betreiberansicht.", "forbidden");
       if (page.nextCursor !== null && cursors.has(page.nextCursor)) throw new Error("Wiederholte Seite.");
       if (page.nextCursor !== null) cursors.add(page.nextCursor);
       for (const event of page.events) {
@@ -265,7 +242,7 @@ export async function loadConsumption(options: ConsumptionRequest): Promise<Cons
         if (!previous || Date.parse(event.updatedAt) > Date.parse(previous.updatedAt)) unique.set(key, event);
       }
       const trackingSince = [result?.trackingSince, page.trackingSince].filter((value): value is string => !!value).sort()[0] ?? null;
-      result = { ...page, trackingSince, events: [...unique.values()], pagesLoaded: ++pagesLoaded };
+      result = { nextCursor: page.nextCursor, historyComplete: false, trackingSince, events: [...unique.values()], pagesLoaded: ++pagesLoaded };
       owned();
       options.onPage?.(result);
       owned();
