@@ -1,7 +1,8 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Mic, Pause, Play, RefreshCw, Square } from "lucide-react";
 import { liveStatus, shareNotice } from "../lib/liveStatus";
+import { auth } from "../lib/firebase";
 import {
   captureSnapshot,
   pauseCapture,
@@ -24,7 +25,28 @@ const clock = (ms: number) =>
 export default function RecordingBar() {
   const snap = useSyncExternalStore(subscribeCapture, captureSnapshot);
   const location = useLocation();
-  const live = snap.state === "recording" || snap.state === "paused";
+  const owned = snap.owner === auth.currentUser?.uid;
+  const live = owned && (snap.state === "recording" || snap.state === "paused");
+  const bar = useRef<HTMLDivElement>(null);
+  const visible = live && !location.pathname.startsWith("/record");
+  useEffect(() => {
+    const element = bar.current;
+    if (!visible || !element || typeof ResizeObserver === "undefined") return;
+    const style = document.documentElement.style;
+    const measure = () => {
+      const headerHeight = document.querySelector(".topbar")?.getBoundingClientRect().height || 0;
+      style.setProperty("--recording-clearance", `${Math.ceil(element.getBoundingClientRect().bottom - headerHeight + 12)}px`);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => { observer.disconnect(); window.removeEventListener("resize", measure); style.removeProperty("--recording-clearance"); };
+  }, [visible]);
+  const act = (action: () => void) => {
+    const current = captureSnapshot();
+    if (current.owner === auth.currentUser?.uid && current.draft.report.id === snap.draft.report.id) action();
+  };
 
   useEffect(() => {
     if (!live) return;
@@ -37,12 +59,15 @@ export default function RecordingBar() {
     return () => window.removeEventListener("beforeunload", guard);
   }, [live]);
 
-  if (!live || location.pathname.startsWith("/record")) return null;
+  if (!visible) return null;
   const paused = snap.state === "paused";
   const status = liveStatus(snap.liveConnection, snap.state);
   const reading = shareNotice(snap.liveShare, snap.state);
   return (
-    <div className="recording-bar no-print" role="status" aria-live="polite">
+    <div ref={bar} className="recording-bar no-print" role="region" aria-label="Laufende Aufnahme">
+      <span className="sr-only" role="status" aria-live="polite">
+        {paused ? "Aufnahme pausiert" : "Aufnahme läuft"}{status?.text ? ` · ${status.text}` : ""}{reading ? ` · ${reading}` : ""}
+      </span>
       <Link to={`/record?draft=${snap.draft.report.id}`}>
         <span className={`recording-dot ${paused ? "is-paused" : ""}`} />
         <Mic size={15} />
@@ -59,17 +84,17 @@ export default function RecordingBar() {
         </span>
       </Link>
       {status?.canRestart && (
-        <button onClick={restartLive} aria-label="Live-Transkript neu starten">
+        <button onClick={() => act(restartLive)} aria-label="Live-Transkript neu starten">
           <RefreshCw size={15} />
         </button>
       )}
       <button
-        onClick={pauseCapture}
+        onClick={() => act(pauseCapture)}
         aria-label={paused ? "Aufnahme fortsetzen" : "Aufnahme pausieren"}
       >
         {paused ? <Play size={16} /> : <Pause size={16} />}
       </button>
-      <button onClick={stopCapture} aria-label="Meeting abschließen">
+      <button onClick={() => act(stopCapture)} aria-label="Meeting abschließen">
         <Square size={15} />
       </button>
     </div>

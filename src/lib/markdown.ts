@@ -92,17 +92,19 @@ export function reportToMarkdown(report: ReportData): string {
   ];
   if (Number.isFinite(report.durationMs))
     lines.push(`Aufnahmedauer: ${time(report.durationMs!)}`);
-  if (report.rawAudioUrl)
+  const folder = archiveFolderLink(report);
+  if (folder) lines.push("", `[Dateiarchiv in ${report.home ? "OneDrive" : "Google Drive"}](${folder.replace(/[\s<>()]/g, char => encodeURIComponent(char).replace(/[()]/g, p => `%${p.charCodeAt(0).toString(16).toUpperCase()}`))})`);
+  if (!report.home && report.rawAudioUrl)
     lines.push(
       "",
       `[Originalaufnahme in Google Drive](${driveLink(report.rawAudioUrl)})`,
     );
-  if (report.driveTranscriptId)
+  if (!report.home && report.driveTranscriptId)
     lines.push(
       "",
       `[Vollständiges Transkript](${driveLink(report.driveTranscriptId)})`,
     );
-  if (report.driveConsentId)
+  if (!report.home && report.driveConsentId)
     lines.push("", `[Einwilligung](${driveLink(report.driveConsentId)})`);
   
   lines.push("", "## Zusammenfassung", "", escapeText(report.summary));

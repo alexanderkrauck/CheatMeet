@@ -12,7 +12,9 @@ vi.mock("jose", async importOriginal => {
   const { publicKey } = await firebaseKey;
   return { ...actual, createRemoteJWKSet: () => publicKey };
 });
-import { createMicrosoftAuthRouter, createMicrosoftAuthService, firebaseAccountFor, microsoftConfigured, type MicrosoftAuthDocument, type MicrosoftClient } from "./microsoftAuth";
+import { createMicrosoftAuthRouter, createMicrosoftAuthService, firebaseAccountFor as verifyFirebaseAccountFor, microsoftConfigured, type MicrosoftAuthDocument, type MicrosoftClient } from "./microsoftAuth";
+import { memoryStore, uidGrantKey } from "./tokenStore";
+const firebaseAccountFor = (token: string, projectId: string) => verifyFirebaseAccountFor(token, projectId, memoryStore());
 
 const servers: Server[] = [];
 afterEach(async () => { await Promise.all(servers.splice(0).map(s => new Promise<void>(r => s.close(() => r())))); vi.unstubAllEnvs(); });
@@ -90,7 +92,14 @@ it("refuses a cached token when Graph Files scope is absent", async () => {
 
 it("validates real signed Firebase identities independently of Google and rejects wrong claims/signatures", async () => {
   expect(await firebaseAccountFor(await firebaseToken(), "test-project")).toEqual({ uid: "firebase-microsoft-owner", googleSub: "" });
-  expect(await firebaseAccountFor(await firebaseToken({ firebase: { identities: { "google.com": ["google-sub"] } } }), "test-project")).toMatchObject({ googleSub: "google-sub" });
+  const grants = memoryStore();
+  await grants.set(uidGrantKey("firebase-microsoft-owner"), "fixture-owner-refresh");
+  expect(await verifyFirebaseAccountFor(await firebaseToken(), "test-project", grants)).toEqual({uid:"firebase-microsoft-owner",googleSub:uidGrantKey("firebase-microsoft-owner")});
+  const googleIdentity = await firebaseToken({ firebase: { identities: { "google.com": ["google-sub"] } } });
+  expect(await verifyFirebaseAccountFor(googleIdentity, "test-project", null)).toMatchObject({ googleSub: "google-sub" });
+  expect(await firebaseAccountFor(googleIdentity, "test-project")).toMatchObject({ googleSub: uidGrantKey("firebase-microsoft-owner") });
+  const legacy = memoryStore(); await legacy.set("google-sub", "fixture-legacy-refresh");
+  expect(await verifyFirebaseAccountFor(googleIdentity, "test-project", legacy)).toMatchObject({ googleSub: "google-sub" });
   await expect(firebaseAccountFor(await firebaseToken(), "wrong-project")).rejects.toThrow();
   for (const changes of [{ sub: "" }, { sub: "x".repeat(129) }, { auth_time: undefined }, { auth_time: Date.now()/1000 + 500 }, { iat: Date.now()/1000 + 500 }, { exp: 1 }])
     await expect(firebaseAccountFor(await firebaseToken(changes), "test-project")).rejects.toThrow();
@@ -245,6 +254,29 @@ it("preserves a pinned connection ID on reauthorization of the same account with
   await service.disconnect("alice", original.connectionId);
   await f.callback(await f.begin());
   expect(await service.list("alice")).toEqual([original]);
+});
+
+it("preserves explicit Outlook intent and connection order on files-only renewal only with actual Calendar scopes", async () => {
+  const f = await fixture();
+  const service = createMicrosoftAuthService(f.options);
+  const connect = async (calendar: boolean, homeAccountId: string, grantedCalendar: boolean) => {
+    const start = await f.begin(calendar);
+    const result = await f.exchange.getMockImplementation()!({});
+    f.exchange.mockResolvedValueOnce({ ...result, account: { ...result.account, homeAccountId }, scopes: ["Files.ReadWrite", ...(grantedCalendar ? ["Calendars.ReadWrite"] : [])] });
+    expect((await f.callback(start)).status).toBe(200);
+  };
+  await connect(true, "work", true);
+  await connect(true, "personal", true);
+  const original = await service.list("alice");
+  await connect(false, "work", true);
+  expect(await service.list("alice")).toEqual(original);
+  expect(f.authUrl.mock.calls.at(-1)![0].scopes).not.toContain("https://graph.microsoft.com/Calendars.ReadWrite");
+  await connect(false, "work", false);
+  expect(await service.list("alice")).toEqual([{ ...original[0], calendar: false }, original[1]]);
+  await connect(false, "work", true);
+  expect(await service.list("alice")).toEqual(original);
+  await connect(false, "new-files-only", true);
+  expect((await service.list("alice"))[2].calendar).toBe(false);
 });
 
 it("retries cache contention rather than misreporting concurrent valid token requests as revoked", async () => {

@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
-import {archiveFolderLink,archiveSyncedAt} from "../../shared/storage";
+import {archiveFolderLink,archiveSyncedAt,reportIndexCollection} from "../../shared/storage";
 import {hasAnyCalendarGrant,subscribeCalendar} from "../lib/calendar";
 import { CalendarPlus, CloudUpload, ExternalLink, MoreHorizontal } from "lucide-react";
 import Menu from "./Menu";
@@ -15,12 +15,17 @@ import {
   type ReportSummary,
 } from "../lib/meetingMeta";
 import { getLocal } from "../lib/local";
-import { saveReport, uid } from "../lib/reports";
+import { jobFor } from "../lib/pipeline";
+import { reportHref, saveReport, uid } from "../lib/reports";
 import {
   errorMessage,
   hasCalendarGrant,
   subscribeDriveSession,
 } from "../lib/session";
+
+/** A durable recording without a generated summary is not an unsaved draft. */
+export const isArchivedWithoutReport = (report: ReportSummary) =>
+  report.status === "pending" && !!archiveSyncedAt(report) && !report.summary?.trim() && !report.needsReview && !report.error;
 
 /**
  * One meeting, rendered the same way wherever meetings are listed. The row is
@@ -71,6 +76,7 @@ export default function MeetingRow({
 
   const snippet = query ? searchSnippet(report, query) : null;
   const failed = report.status === "error" && report.error;
+  const job = jobFor(report.id, report);
 
   async function retry() {
     const owner = uid();
@@ -81,9 +87,12 @@ export default function MeetingRow({
     try {
       // The list holds a projection; re-saving it would write the transcript
       // turns out of existence. Always send the stored report.
-      const stored = await getLocal(owner, report.id);
+      const stored = await getLocal(owner, report.id, { index: reportIndexCollection(report) });
+      if (uid() !== owner) return;
       if (!stored) throw new Error("Der Bericht ist lokal nicht mehr vorhanden.");
-      const warning = await saveReport(stored.report);
+      const warning = await saveReport(stored.report, {
+        expectedUpdatedAt: stored.report.updatedAt ?? null,
+      });
       // A sign-out mid-write must not leave the next account looking at this
       // one's result.
       if (uid() !== owner) return;
@@ -102,22 +111,27 @@ export default function MeetingRow({
       onDragStart={
         draggable
           ? (drag) => {
-              drag.dataTransfer.setData(MIME, report.id);
+              drag.dataTransfer.setData(MIME, reportHref(report));
               drag.dataTransfer.effectAllowed = "link";
             }
           : undefined
       }
     >
       {/* The row's own link would otherwise start a URL drag of its own. */}
-      <Link className="meeting-row-main" draggable={false} to={`/report/${report.id}`}>
+      <Link className="meeting-row-main" draggable={false} to={reportHref(report)}>
         <span className="row-head">
           <h3>{report.title || "Unbenanntes Meeting"}</h3>
-          <Status
-            status={report.status}
-            syncedAt={archiveSyncedAt(report)}
-            local={dirty}
-            running={running}
-          />
+          {running || isArchivedWithoutReport(report) ? (
+            <span className="status-group">
+              <span className={`badge ${running ? "blue" : "green"}`}>
+                <span className="status-dot" />
+                {running ? job?.message || "Verarbeitung läuft" : "Archiviert · ohne Bericht"}
+              </span>
+              {dirty && <span className="badge amber">Cloud-Speichern ausstehend</span>}
+            </span>
+          ) : (
+            <Status status={report.status} syncedAt={archiveSyncedAt(report)} local={dirty} />
+          )}
           <CalendarStatus report={report} />
         </span>
         <span className="row-meta">{meta.join(" · ")}</span>
@@ -167,6 +181,10 @@ export default function MeetingRow({
             driveFolderId={report.driveFolderId}
             home={report.home}
             onWarning={onWarning}
+            onDeleted={() => requestAnimationFrame(() => {
+              const heading = document.querySelector<HTMLElement>("main h1, h1");
+              if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+            })}
           />
         </>
       </Menu>

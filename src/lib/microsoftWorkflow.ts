@@ -1,5 +1,5 @@
 import { auth } from "./firebase";
-import { putDraft, putLocal, listLocal, getLocal } from "./local";
+import { putDraft, putLocal, listLocal, getLocal, ReportConflictError } from "./local";
 import { saveReport } from "./reports";
 import {
   createOneDriveFolder,
@@ -7,7 +7,7 @@ import {
   writeOneDriveText,
   listOneDriveItems,
   downloadOneDrive,
-  assertOneDriveRevision,
+  readOneDriveArchiveRevision,
 } from "./onedrive";
 import { reportFolderName, toArchive, fromArchive } from "./archive";
 import { ARCHIVE_SCHEMA_DOC, buildArchiveIndex } from "./archiveIndex";
@@ -39,14 +39,27 @@ function operation() {
 export async function backupMicrosoftDraft(
   draft: Draft,
   progress: (s: string) => void,
+  expectedUpdatedAt?: string | null,
 ) {
   const { owner, run } = operation();
   const report = draft.report;
   if (!report.home) throw Error("OneDrive-Speicherort fehlt.");
-  const checkpoint = async () => {
-    report.updatedAt = new Date().toISOString();
+  const stored = await run(() => getLocal(owner, report.id, { index: "meetings" }));
+  let expected = expectedUpdatedAt === undefined ? stored?.report.updatedAt ?? null : expectedUpdatedAt;
+  if ((stored?.report.updatedAt ?? null) !== expected ||
+      (stored && (report.updatedAt ?? null) !== expected))
+    throw new ReportConflictError();
+  // A late provider result cannot advance the caller or replace its recovery draft.
+  const checkpoint = async (upload: Pick<Draft, "microsoftUploadHandle"> = {}) => {
+    const next = { ...report, updatedAt: new Date(Math.max(Date.now(), (Date.parse(report.updatedAt || "") || 0) + 1)).toISOString() };
+    await run(() => putLocal(owner, next, true, expected));
+    expected = next.updatedAt;
+    Object.assign(report, next);
+    if ("microsoftUploadHandle" in upload) {
+      if (upload.microsoftUploadHandle) draft.microsoftUploadHandle = upload.microsoftUploadHandle;
+      else delete draft.microsoftUploadHandle;
+    }
     await run(() => putDraft(owner, draft));
-    await run(() => putLocal(owner, report));
   };
   if (!report.home.folderId) {
     const folder = await run(() =>
@@ -86,37 +99,41 @@ export async function backupMicrosoftDraft(
           reportId: report.id,
           handle: draft.microsoftUploadHandle,
           checkpoint: async (handle) => {
-            draft.microsoftUploadHandle = handle;
-            await checkpoint();
+            await checkpoint({ microsoftUploadHandle: handle });
           },
         },
       ),
     ).catch(async (error) => {
       if ((error as { status?: number }).status === 410) {
-        delete draft.microsoftUploadHandle;
-        await checkpoint();
+        await checkpoint({ microsoftUploadHandle: undefined });
       }
       throw error;
     });
     report.home.audioId = item.id;
-    delete draft.microsoftUploadHandle;
-    await checkpoint();
+    await checkpoint({ microsoftUploadHandle: undefined });
   }
   return report;
 }
 export async function syncMicrosoftReport(report: ReportData) {
   const { owner, run } = operation();
   if (!report.home) throw Error("OneDrive-Speicherort fehlt.");
-  if (transcriptIsElsewhere(report))
+  const stored = await run(() => getLocal(owner, report.id, { index: "meetings" }));
+  if (transcriptIsElsewhere(report) || stored?.report.transcriptStale)
     throw Error(
       "Bitte das vollständige Meeting zuerst aus OneDrive wiederherstellen.",
     );
-  const next = { ...report, home: { ...report.home } };
-  if (next.home.reportId)
-    await run(() => assertOneDriveRevision(next.home, next.home.reportId!));
+  if (stored && (stored.report.updatedAt ?? null) !== (report.updatedAt ?? null))
+    throw new ReportConflictError();
+  const next: ReportData & { home: MicrosoftHome; archiveBaseSyncedAt?: string } = { ...report, home: { ...report.home } };
+  let expectedUpdatedAt = stored?.report.updatedAt ?? null;
+  const archiveEtag = next.home.reportId
+    ? await run(() => readOneDriveArchiveRevision(next))
+    : undefined;
   const checkpoint = async () => {
+    next.updatedAt = new Date(Math.max(Date.now(), (Date.parse(next.updatedAt || "") || 0) + 1)).toISOString();
+    await run(() => putLocal(owner, next, true, expectedUpdatedAt));
+    expectedUpdatedAt = next.updatedAt;
     Object.assign(report, next);
-    await run(() => putLocal(owner, next));
   };
   if (!next.home.folderId) {
     const folder = await run(() =>
@@ -163,7 +180,11 @@ export async function syncMicrosoftReport(report: ReportData) {
     ).id;
     await checkpoint();
   }
+  const latest = await run(() => getLocal(owner, next.id, { index: "meetings" }));
+  if ((latest?.report.updatedAt ?? null) !== expectedUpdatedAt)
+    throw new ReportConflictError();
   const syncedAt = new Date().toISOString();
+  next.archiveBaseSyncedAt = undefined;
   next.home.reportId = (
     await run(() =>
       writeOneDriveText(
@@ -175,12 +196,13 @@ export async function syncMicrosoftReport(report: ReportData) {
           2,
         ),
         next.home.reportId,
+        archiveEtag,
       ),
     )
   ).id;
   next.home.syncedAt = syncedAt;
   await checkpoint();
-  const warning = await run(() => saveReport(next));
+  const warning = await run(() => saveReport(next, { expectedUpdatedAt }));
   try {
     await run(() => refreshMicrosoftArchiveIndex(next.home, syncedAt));
   } catch {
@@ -259,10 +281,11 @@ export async function restoreMicrosoftArchive(
           folder.id,
         ),
       );
-      const local = await run(() => getLocal(owner, report.id));
+      const local = await run(() => getLocal(owner, report.id, { index: "meetings" }));
       const merged = mergeRestoredReport(local, report);
       if (merged) {
-        await run(() => putLocal(owner, merged, false));
+        // Archive recovery is not an acknowledgement from the independent index.
+        await run(() => putLocal(owner, merged, local?.dirty ?? true, local?.report.updatedAt ?? null));
         count++;
       }
     } catch (error) {

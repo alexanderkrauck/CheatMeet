@@ -1,6 +1,6 @@
 import { trashDriveFile } from "./drive";
 import { trashOneDrive } from "./onedrive";
-import { archiveAudioId } from "../../shared/storage";
+import { archiveAudioId, reportIndexCollection } from "../../shared/storage";
 import { auth } from "./firebase";
 import { deleteDraft, getLocal, listLocal, putLocal } from "./local";
 import { activeJobs } from "./pipeline";
@@ -65,7 +65,7 @@ export async function sweepRetention(
   for (const stale of due) {
     // Another device may have deleted the meeting since the scan. Writing it
     // back here would resurrect it in IndexedDB and in the cloud index.
-    const current = (await getLocal(owner, stale.id))?.report;
+    const current = (await getLocal(owner, stale.id, { index: reportIndexCollection(stale) }))?.report;
     if (!current || !archiveAudioId(current) || current.audioDeletedAt) continue;
     if(!current.home && !token) continue;
     try {
@@ -85,7 +85,7 @@ export async function sweepRetention(
       );
       // Otherwise this browser keeps full-quality audio that can never be
       // released again: freeing it requires the Drive pointer just cleared.
-      await deleteDraft(owner, current.id).catch(() => {});
+      await deleteDraft(owner, current.id, { index: reportIndexCollection(current) }).catch(() => {});
       result.deleted += 1;
     } catch (error) {
       result.failed += 1;

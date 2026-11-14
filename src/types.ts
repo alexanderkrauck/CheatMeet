@@ -15,6 +15,8 @@ export interface ReportData {
   /** The model's own title, kept when the user typed their own. */
   suggestedTitle?: string;
   summary: string;
+  /** Corrections require an explicit text-only summary refresh, never automatic ASR. */
+  summaryNeedsRefresh?: boolean;
   transcription: string;
   speech?: MeetingTranscript;
   /** Legacy documents hold plain strings; `asTodos` normalises on read. */
@@ -35,6 +37,8 @@ export interface ReportData {
   driveTranscriptId?: string;
   driveConsentId?: string;
   driveSyncedAt?: string;
+  /** Last-known canonical baseline while local/index changes await archive save. */
+  archiveBaseSyncedAt?: string;
   /**
    * What the participants were actually told, frozen at the moment they were
    * told it. The retention promised here is the retention the sweep enforces,
@@ -47,6 +51,10 @@ export interface ReportData {
   audioDeleteError?: string;
   /** >0 means a transcript exists, but not on this device. */
   transcriptChars?: number;
+  /** Bounded content version used to detect stale same-device transcript caches. */
+  transcriptRevision?: string;
+  /** Device-local stale-content warning, not evidence of a newer transcript's text. */
+  transcriptStale?: boolean;
   /** Resolved speaker display names, so the index can answer "who was there". */
   participants?: string[];
   speakerReviewPending?: boolean;

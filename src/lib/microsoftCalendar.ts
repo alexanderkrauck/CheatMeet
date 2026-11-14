@@ -1,6 +1,11 @@
 import { auth } from "./firebase";
-import { microsoftRequest, ensureMicrosoftToken } from "./microsoft";
-import { CalendarError, type CalendarEvent } from "./calendar";
+import { microsoftRequest } from "./microsoft";
+import {
+  CalendarError,
+  calendarResult,
+  type CalendarEvent,
+  type CalendarEvents,
+} from "./calendar";
 import {
   graphEventToCalendarEvent,
   mergeMicrosoftBody,
@@ -76,6 +81,14 @@ function calendarOwner() {
   return { request, read, check };
 }
 
+function pinnedConnection(connectionId?: string): string {
+  if (!connectionId)
+    throw new Error(
+      "Bitte das Outlook-Konto für den Kalender ausdrücklich auswählen.",
+    );
+  return connectionId;
+}
+
 function eventPath(calendarId: string, id: string): string {
   return calendarId === "primary"
     ? `/me/events/${encodeURIComponent(id)}`
@@ -125,7 +138,7 @@ export async function getMicrosoftEvent(
   connectionId?: string,
 ): Promise<CalendarEvent | null> {
   const operation = calendarOwner();
-  const pinned = connectionId || (await ensureMicrosoftToken()).connectionId;
+  const pinned = pinnedConnection(connectionId);
   const { data, response } = await operation.read(
     eventPath(calendarId, id),
     {},
@@ -175,12 +188,15 @@ export async function createMicrosoftEvent(input: {
   endMs: number;
   block: string;
   connectionId?: string;
+  calendarId?: string;
 }) {
   const operation = calendarOwner();
-  const pinned =
-    input.connectionId || (await ensureMicrosoftToken()).connectionId;
+  const pinned = pinnedConnection(input.connectionId);
+  const calendarId = input.calendarId || "primary";
   const { data } = await operation.read(
-    "/me/events",
+    calendarId === "primary"
+      ? "/me/events"
+      : `/me/calendars/${encodeURIComponent(calendarId)}/events`,
     {
       method: "POST",
       body: JSON.stringify({
@@ -210,11 +226,44 @@ export async function createMicrosoftEvent(input: {
     );
   return {
     id: data.id as string,
-    calendarId: "primary",
+    calendarId,
     htmlLink: data.webLink as string | undefined,
     calendarProvider: "microsoft" as const,
     calendarConnectionId: pinned,
   };
+}
+
+export async function availableMicrosoftCalendars(
+  connectionId: string,
+): Promise<{ id: string; name: string }[]> {
+  const operation = calendarOwner();
+  const pinned = pinnedConnection(connectionId);
+  const calendars: { id: string; name: string }[] = [];
+  let next: string | undefined = "/me/calendars?$select=id,name&$top=100";
+  const pages = new Set<string>();
+  while (next && pages.size < 3) {
+    if (pages.has(next))
+      throw new Error(
+        "Outlook hat eine Ergebnisseite wiederholt. Bitte erneut versuchen.",
+      );
+    pages.add(next);
+    const { data } = await operation.read(next, {}, pinned);
+    for (const item of data.value || [])
+      if (
+        typeof item.id === "string" &&
+        !calendars.some((c) => c.id === item.id)
+      )
+        calendars.push({
+          id: item.id,
+          name: typeof item.name === "string" ? item.name : item.id,
+        });
+    next = data["@odata.nextLink"];
+  }
+  if (next)
+    throw new Error(
+      "Die Kalenderliste ist zu groß und wurde nicht vollständig geladen. Bitte bei Outlook prüfen.",
+    );
+  return calendars;
 }
 
 /** calendarView, unlike /events, expands recurring occurrences and exceptions. */
@@ -223,37 +272,51 @@ export async function microsoftEventsBetween(
   toMs: number,
   budget = 250,
   connectionId?: string,
-): Promise<CalendarEvent[]> {
-  if (budget <= 0) return [];
+  calendarId = "primary",
+): Promise<CalendarEvents> {
+  if (budget <= 0) return calendarResult([]);
   const operation = calendarOwner();
-  const pinned = connectionId || (await ensureMicrosoftToken()).connectionId;
+  const pinned = pinnedConnection(connectionId);
   const params = new URLSearchParams({
     startDateTime: new Date(fromMs).toISOString(),
     endDateTime: new Date(toMs).toISOString(),
     $orderby: "start/dateTime",
     $top: String(Math.min(100, budget)),
   });
-  let next: string | undefined = `/me/calendarView?${params}`;
+  let next: string | undefined =
+    `${calendarId === "primary" ? "/me" : `/me/calendars/${encodeURIComponent(calendarId)}`}/calendarView?${params}`;
   const events: CalendarEvent[] = [];
   const seen = new Set<string>();
   const pages = new Set<string>();
-  while (next && events.length < budget) {
+  let remainder = false;
+  while (
+    next &&
+    events.length < budget &&
+    pages.size < Math.max(3, Math.ceil(budget / 100))
+  ) {
     if (pages.has(next))
       throw new Error(
         "Outlook Kalender lieferte eine wiederholte Ergebnisseite. Bitte erneut versuchen.",
       );
     pages.add(next);
     const { data } = await operation.read(next, {}, pinned);
-    for (const raw of (data.value || []) as GraphCalendarEvent[]) {
-      const event = await normalize(raw, "primary", pinned, operation);
+    const items = (data.value || []) as GraphCalendarEvent[];
+    for (const [index, raw] of items.entries()) {
+      const event = await normalize(raw, calendarId, pinned, operation);
       if (event && !seen.has(event.id)) {
         seen.add(event.id);
         events.push(event);
       }
-      if (events.length >= budget) break;
+      if (events.length >= budget) {
+        remainder = index < items.length - 1;
+        break;
+      }
     }
     next = data["@odata.nextLink"];
   }
   operation.check();
-  return events.sort((a, b) => a.startMs - b.startMs);
+  return calendarResult(
+    events.sort((a, b) => a.startMs - b.startMs),
+    remainder || !!next,
+  );
 }

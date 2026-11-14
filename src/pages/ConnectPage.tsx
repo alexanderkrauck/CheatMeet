@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { signOut } from "firebase/auth";
 import { Check, Loader2, ShieldCheck } from "lucide-react";
 import { auth } from "../lib/firebase";
 import { signInGoogle, errorMessage } from "../lib/session";
@@ -27,6 +29,9 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(Boolean(request));
+  const [needsStorage, setNeedsStorage] = useState(false);
+  const choiceKey = `cheatmeet:assistant-choice:${request}`;
+  const returnTo = `/connect?request=${encodeURIComponent(request)}`;
 
   useEffect(() => {
     if (!request) return;
@@ -35,7 +40,17 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
       .then((loaded) => {
         if (!live) return;
         setInfo(loaded);
-        setAllowed(loaded.scopes);
+        let selected = loaded.scopes;
+        try {
+          const stored = JSON.parse(
+            sessionStorage.getItem(choiceKey) || "null",
+          );
+          if (Array.isArray(stored))
+            selected = loaded.scopes.filter((scope) => stored.includes(scope));
+        } catch {
+          /* Optional draft only; approval remains explicit. */
+        }
+        setAllowed(selected);
       })
       .catch(
         (e) =>
@@ -51,9 +66,11 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
   async function answer(approve: boolean) {
     setBusy(true);
     setError("");
+    setNeedsStorage(false);
     try {
       window.location.assign(await decide(request, approve, allowed));
     } catch (e) {
+      setNeedsStorage(e instanceof ConnectError && e.reason === "no_storage");
       setError(e instanceof ConnectError ? e.message : errorMessage(e));
       setBusy(false);
     }
@@ -70,12 +87,19 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
       setBusy(false);
     }
   }
-  const toggle = (scope: Scope) =>
-    setAllowed((current) =>
-      current.includes(scope)
+  function toggle(scope: Scope) {
+    setAllowed((current) => {
+      const next = current.includes(scope)
         ? current.filter((s) => s !== scope)
-        : [...current, scope],
-    );
+        : [...current, scope];
+      try {
+        sessionStorage.setItem(choiceKey, JSON.stringify(next));
+      } catch {
+        /* Optional draft. */
+      }
+      return next;
+    });
+  }
 
   return (
     <div className="login-page connect-page">
@@ -92,7 +116,7 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
           {loading && <Loader2 className="spin" aria-label="Wird geladen" />}
           {info && (
             <>
-              <h2>„{info.clientName}“ erlauben?</h2>
+              <h1>„{info.clientName}“ erlauben?</h1>
               <p className="muted">
                 Der Assistent ruft CheatMeet von{" "}
                 <strong>{info.redirectHost}</strong> aus auf. Den Namen hat der
@@ -104,6 +128,19 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
                     Angemeldet als <strong>{auth.currentUser?.email}</strong>.
                     Der Zugriff gilt nur für dieses Konto.
                   </p>
+                  <button
+                    className="btn"
+                    disabled={busy}
+                    onClick={() => {
+                      setBusy(true);
+                      setError("");
+                      void signOut(auth)
+                        .catch((e) => setError(errorMessage(e)))
+                        .finally(() => setBusy(false));
+                    }}
+                  >
+                    Arbeitsbereich wechseln
+                  </button>
                   <div className="connect-scopes">
                     {info.scopes.map((scope) => (
                       <label key={scope}>
@@ -170,6 +207,19 @@ export default function ConnectPage({ signedIn }: { signedIn: boolean }) {
             </>
           )}
           {error && <Notice>{error}</Notice>}
+          {signedIn && needsStorage && (
+            <div className="actions">
+              <Link
+                className="btn btn-primary"
+                to={`/setup?returnTo=${encodeURIComponent(returnTo)}`}
+              >
+                Speicher einrichten und zurückkehren
+              </Link>
+              <p className="muted small">
+                Die Einrichtung erteilt dem Assistenten noch keinen Zugriff.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

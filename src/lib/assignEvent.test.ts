@@ -10,12 +10,18 @@ const state = {
   syncPatch: {} as Partial<ReportData>,
   syncThrows: null as Error | null,
   signedIn: "u1",
+  reads: 0,
+  sibling: undefined as { report: ReportData } | undefined,
 };
 const saved: ReportData[] = [];
 const synced: { report: ReportData; create?: boolean }[] = [];
 
 vi.mock("./local", () => ({
-  getLocal: async () => state.freshest ?? state.stored,
+  getLocal: async (_owner: string, _id: string, options?: { index: "reports" | "meetings" }) => {
+    if (state.sibling && !options) throw Error("Meeting-ID mehrdeutig");
+    const latest = ++state.reads > 1 ? state.freshest ?? state.stored : state.stored;
+    return options && latest && (latest.report.home ? "meetings" : "reports") !== options.index ? state.sibling : latest;
+  },
 }));
 vi.mock("./reports", () => ({
   saveReport: async (report: ReportData) => {
@@ -24,7 +30,8 @@ vi.mock("./reports", () => ({
   },
   uid: () => state.signedIn,
 }));
-vi.mock("./calendarSync", () => ({
+vi.mock("./calendarSync", async (original) => ({
+  ...await original<typeof import("./calendarSync")>(),
   syncReportToCalendar: async (
     report: ReportData,
     options: { create?: boolean },
@@ -64,6 +71,8 @@ beforeEach(() => {
   state.stored = { report: report() };
   state.freshest = undefined;
   state.signedIn = "u1";
+  state.reads = 0;
+  state.sibling = undefined;
   state.granted = true;
   state.saveWarning = "";
   state.syncPatch = { calendarSyncedAt: "2026-09-15T12:00:00.000Z" };
@@ -71,6 +80,18 @@ beforeEach(() => {
 });
 
 describe("assignReportToEvent", () => {
+  it("pins both assignment reads to the clicked provider while rejecting an ambiguous bare ID before sending notes", async () => {
+    const google = report({ title: "Google", summary: "Google notes" });
+    state.stored = { report: google };
+    state.sibling = { report: report({ title: "Microsoft", summary: "Private sibling notes", home: { provider: "microsoft", connectionId: "c", driveId: "d", rootId: "root", rootName: "Meetings" } }) };
+    await expect(assignReportToEvent("u1", "r1", event)).rejects.toThrow(/mehrdeutig/);
+    expect(synced).toEqual([]); expect(saved).toEqual([]);
+    const result = await assignReportToEvent("u1", "r1", event, { index: "reports" });
+    expect(result.assigned).toBe(true);
+    expect(synced[0].report.summary).toBe("Google notes");
+    expect(saved[0].title).toBe("Google");
+    expect(saved[0].home).toBeUndefined();
+  });
   it("links the stored report to the event and saves it once", async () => {
     const outcome = await assignReportToEvent("u1", "r1", event);
     expect(outcome).toEqual({ assigned: true, warnings: [] });
@@ -101,12 +122,40 @@ describe("assignReportToEvent", () => {
   });
 
   it("skips the write-back when it was not asked for", async () => {
+    state.stored = { report: report({ driveReportId: "canonical-json", driveSyncedAt: "2026-11-13T12:00:00Z" }) };
     const outcome = await assignReportToEvent("u1", "r1", event, {
       writeBack: false,
     });
+    expect(outcome.warnings.join(" ")).toContain("Dateiarchiv");
     expect(synced).toHaveLength(0);
     expect(outcome.assigned).toBe(true);
     expect(saved[0].calendarEventId).toBe("ev-you-two");
+    expect(saved[0]).toMatchObject({ archiveBaseSyncedAt: "2026-11-13T12:00:00Z", driveSyncedAt: "" });
+    state.stored = {
+      report: report({
+        home: {
+          provider: "microsoft",
+          connectionId: "archive",
+          driveId: "drive",
+          rootId: "root",
+          rootName: "Meetings",
+          reportId: "canonical-json",
+          syncedAt: "2026-11-13T12:00:00Z",
+        },
+      }),
+    };
+    const outlook = await assignReportToEvent(
+      "u1",
+      "r1",
+      { ...event, provider: "microsoft", connectionId: "work" },
+      { writeBack: false },
+    );
+    expect(outlook.assigned).toBe(true);
+    expect(outlook.warnings.join(" ")).toContain("Dateiarchiv");
+    expect(saved.at(-1)?.home?.connectionId).toBe("archive");
+    expect(saved.at(-1)?.calendarConnectionId).toBe("work");
+    expect(saved.at(-1)).toMatchObject({ archiveBaseSyncedAt: "2026-11-13T12:00:00Z" });
+    expect(saved.at(-1)?.home?.syncedAt).toBeUndefined();
   });
 
   it("links without a grant, but says the notes were not written", async () => {
@@ -145,6 +194,7 @@ describe("assignReportToEvent", () => {
     const outcome = await promise;
     expect(outcome.assigned).toBe(false);
     expect(saved).toHaveLength(0);
+    expect(synced).toHaveLength(0);
   });
 
   it("applies the link to the newest stored copy, not the one read first", async () => {
@@ -154,6 +204,17 @@ describe("assignReportToEvent", () => {
     await assignReportToEvent("u1", "r1", event);
     expect(saved[0].title).toBe("Umbenannt");
     expect(saved[0].calendarEventId).toBe("ev-you-two");
+    expect(saved[0].calendarSyncedAt).toBe("2026-09-15T12:00:00.000Z");
+  });
+
+  it("does not mark concurrently changed notes as synchronized to the calendar", async () => {
+    state.freshest = { report: report({ summary: "Newer human notes", updatedAt: "new-revision" }) };
+    const outcome = await assignReportToEvent("u1", "r1", event);
+    expect(outcome.assigned).toBe(true);
+    expect(saved[0].summary).toBe("Newer human notes");
+    expect(saved[0].calendarEventId).toBe(event.id);
+    expect(saved[0].calendarSyncedAt).toBeUndefined();
+    expect(outcome.warnings.join(" ")).toContain("Kalender aktualisieren");
   });
 
   it("keeps the link when the calendar refuses the notes", async () => {
@@ -162,7 +223,9 @@ describe("assignReportToEvent", () => {
     state.syncThrows = new Error("Google Kalender ist gerade ausgelastet.");
     const outcome = await assignReportToEvent("u1", "r1", event);
     expect(outcome.assigned).toBe(true);
-    expect(outcome.warnings[0]).toContain("Google Kalender ist gerade ausgelastet.");
+    expect(outcome.warnings[0]).toContain(
+      "Google Kalender ist gerade ausgelastet.",
+    );
     expect(saved[0].calendarEventId).toBe("ev-you-two");
   });
 

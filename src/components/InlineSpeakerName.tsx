@@ -9,12 +9,14 @@ export default function InlineSpeakerName({
   source,
   onRename,
   onEditing,
+  disabled = false,
 }: {
   id: string;
   name: string;
   source: string;
   onRename: (id: string, name: string) => void;
   onEditing?: (editing: boolean) => void;
+  disabled?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(name);
@@ -28,7 +30,7 @@ export default function InlineSpeakerName({
     [],
   );
   const close = (save: boolean) => {
-    if (finished.current) return;
+    if (finished.current || disabled) return;
     finished.current = true;
     if (save && value.trim() && value.trim() !== name)
       onRename(id, value.trim());
@@ -41,6 +43,7 @@ export default function InlineSpeakerName({
       list={PEOPLE_LIST_ID}
       autoFocus
       maxLength={80}
+      disabled={disabled}
       aria-label={`Name für ${source} ${name}`}
       value={value}
       onFocus={(event) => event.currentTarget.select()}
@@ -56,6 +59,7 @@ export default function InlineSpeakerName({
   ) : (
     <button
       className="inline-speaker-name"
+      disabled={disabled}
       title="Sprecher umbenennen"
       aria-label={`${source} ${name} umbenennen`}
       onClick={() => {

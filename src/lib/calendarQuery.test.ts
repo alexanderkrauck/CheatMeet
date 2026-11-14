@@ -6,6 +6,16 @@ vi.mock("./session", () => ({
   hasCalendarGrant: () => granted,
   ensureDriveToken: async () => "token",
 }));
+vi.mock("./firebase", () => ({
+  auth: { currentUser: { uid: "calendar-query-owner" } },
+}));
+vi.mock("./providerSettings", () => ({
+  savedCalendarProvider: () => "google",
+  savedCalendarConnectionId: () => undefined,
+  savedCalendarId: () => "primary",
+  hasMicrosoftCalendar: () => false,
+  loadProviderSettings: async () => ({ calendarProvider: "google", calendarConnectionId: "", calendarId: "primary" }),
+}));
 
 let pages: Record<string, unknown>[] = [];
 const fetchMock = vi.fn(async (url: string) => {

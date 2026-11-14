@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Link,
   NavLink,
   Outlet,
   useLocation,
   useNavigate,
+  useNavigationType,
   useSearchParams,
 } from "react-router-dom";
 import {
+  BarChart3,
   CalendarDays,
   Cloud,
   LayoutGrid,
@@ -24,10 +26,12 @@ import { auth } from "../lib/firebase";
 import Menu from "./Menu";
 import PeopleDatalist from "./PeopleDatalist";
 import { Brand } from "./UI";
+import InstallApp from "./InstallApp";
 
 const NAV = [
   { to: "/dashboard", label: "Übersicht", icon: LayoutGrid },
   { to: "/calendar", label: "Kalender", icon: CalendarDays },
+  { to: "/usage", label: "Nutzung", icon: BarChart3 },
   { to: "/settings", label: "Einstellungen", icon: Settings2 },
 ];
 
@@ -43,11 +47,21 @@ export default function AppLayout() {
   const [online, setOnline] = useState(navigator.onLine);
   const navigate = useNavigate();
   const location = useLocation();
+  const navigationType = useNavigationType();
+  const previousPath = useRef(location.pathname);
   const [params] = useSearchParams();
   const urlQuery = params.get("q") || "";
   const [query, setQuery] = useState(urlQuery);
   const onOverview = location.pathname === "/dashboard";
   const user = auth.currentUser;
+
+  useLayoutEffect(() => {
+    // Search edits share a pathname and must keep the caret in their field.
+    if (previousPath.current === location.pathname) return;
+    previousPath.current = location.pathname;
+    if (navigationType !== "POP") window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    document.getElementById("inhalt")?.focus({ preventScroll: true });
+  }, [location.pathname, navigationType]);
 
   useEffect(() => {
     const update = () => setOnline(navigator.onLine);
@@ -67,7 +81,10 @@ export default function AppLayout() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.defaultPrevented || event.repeat) return;
+      const search = (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "k";
+      const record = event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && event.code === "KeyN";
+      if (!search && !record) return;
       // A modal owns the keyboard while it is open.
       if (document.querySelector("dialog[open]")) return;
       const target = event.target as HTMLElement | null;
@@ -77,14 +94,14 @@ export default function AppLayout() {
         target?.isContentEditable
       )
         return;
-      if (event.key === "/") {
+      if (search) {
         event.preventDefault();
         const field =
           document.querySelector<HTMLInputElement>(".topbar-search input");
         field?.focus();
         // Selected, so the shortcut starts a new search rather than appending.
         field?.select();
-      } else if (event.key === "n") {
+      } else if (record) {
         event.preventDefault();
         navigate("/record?new=1");
       }
@@ -107,8 +124,8 @@ export default function AppLayout() {
         <Link
           to="/record?new=1"
           className="rail-record"
-          title="Neues Meeting (n)"
-          aria-keyshortcuts="n"
+          title="Neues Meeting (Alt+N)"
+          aria-keyshortcuts="Alt+n"
         >
           <Mic size={17} />
           Meeting aufnehmen
@@ -168,8 +185,8 @@ export default function AppLayout() {
                     navigate(target(event.target.value), { replace: true });
                 }}
                 placeholder="Meetings durchsuchen …"
-                aria-label="Meetings durchsuchen (Taste /)"
-                aria-keyshortcuts="/"
+                aria-label="Meetings durchsuchen (Strg/⌘+K)"
+                aria-keyshortcuts="Control+k Meta+k"
               />
             </label>
           </form>
@@ -186,6 +203,8 @@ export default function AppLayout() {
             </button>
           </Menu>
         </header>
+
+        <InstallApp signedIn />
 
         {!online && (
           <div className="offline no-print">

@@ -9,7 +9,7 @@ import {
   googleAccountFor,
   refreshAccessToken,
 } from "../server/googleAuth";
-import { memoryStore } from "../server/tokenStore";
+import { memoryStore, preserveOwnerGoogleGrant, resolveOwnerGoogleKey, uidGrantKey } from "../server/tokenStore";
 
 /** A signed-in Google-backed Firebase identity. */
 const identity = { uid: "firebase-uid", googleSub: "google-123" };
@@ -268,7 +268,7 @@ describe("drive token endpoint", () => {
     expect(await store.get(identity.googleSub)).toBe("rt");
   });
 
-  it("revokes the grant at Google and drops it on sign-out", async () => {
+  it("revokes the grant at Google only on the explicit revoke action", async () => {
     await store.set(identity.googleSub, "rt");
     fetchImpl.mockResolvedValueOnce(new Response("", { status: 200 }));
     const response = await fetch(`${base}/api/auth/revoke`, {
@@ -280,6 +280,34 @@ describe("drive token endpoint", () => {
     expect(await store.get(identity.googleSub)).toBeNull();
   });
 
+  it.each([
+    {preserved:false, invalid:false}, {preserved:true, invalid:false},
+    {preserved:false, invalid:true}, {preserved:true, invalid:true},
+  ])("accepts new explicit cached-client consent after removal ($preserved / invalid=$invalid)", async ({preserved,invalid}) => {
+    await store.set(identity.googleSub,"R1");
+    if (preserved) await preserveOwnerGoogleGrant(store,identity);
+    if(invalid) {
+      fetchImpl.mockResolvedValueOnce(Response.json({error:"invalid_grant"},{status:400}));
+      expect((await mint()).status).toBe(403);
+    } else {
+      fetchImpl.mockRejectedValueOnce(Error("provider unavailable"));
+      const revoked=await fetch(`${base}/api/auth/revoke`,{method:"POST",headers:{Authorization:"Bearer firebase-id-token"}});
+      expect(await revoked.json()).toMatchObject({revoked:false,localDisconnected:true});
+    }
+    expect((await mint()).status).toBe(403);
+    const start=await fetch(`${base}/api/auth/google/start`,{redirect:"manual"});
+    const cookie=start.headers.get("set-cookie")!.split(";")[0];
+    const state=new URL(start.headers.get("location")!).searchParams.get("state");
+    const idToken=`e30.${Buffer.from(JSON.stringify({sub:identity.googleSub})).toString("base64url")}.sig`;
+    fetchImpl.mockResolvedValueOnce(Response.json({access_token:"unused",refresh_token:"R2",id_token:idToken}));
+    expect((await fetch(`${base}/api/auth/google/callback?state=${state}&code=fresh`,{headers:{Cookie:cookie}})).status).toBe(200);
+    expect(await resolveOwnerGoogleKey(identity,store)).toBe(uidGrantKey(identity.uid));
+    fetchImpl.mockResolvedValueOnce(Response.json({access_token:"fresh-after-consent"}));
+    expect((await mint()).status).toBe(200);
+    expect(await store.get(uidGrantKey(identity.uid))).toBe("R2");
+    expect(await store.get(identity.googleSub)).toBe("R2"); // historical jobs still read G
+  });
+
   it("tells a first-time user to consent rather than claiming revocation", async () => {
     const response = await mint();
     expect(response.status).toBe(403);
@@ -289,14 +317,19 @@ describe("drive token endpoint", () => {
     expect(body.error).not.toMatch(/entzogen/i);
   });
 
-  it("drops the grant even when Google's revoke endpoint fails", async () => {
+  it("contains the local grant without claiming Google's failed revocation succeeded", async () => {
     await store.set(identity.googleSub, "rt");
     fetchImpl.mockRejectedValueOnce(new Error("revoke unreachable"));
     const response = await fetch(`${base}/api/auth/revoke`, {
       method: "POST",
       headers: { Authorization: "Bearer firebase-id-token" },
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      revoked: false,
+      localDisconnected: true,
+      warning: expect.any(String),
+    });
     expect(await store.get(identity.googleSub)).toBeNull();
   });
 

@@ -4,13 +4,15 @@ import {
   archiveAudioId,
   archiveFolderLink,
   archiveSyncedAt,
+  reportIndexCollection,
 } from "../../shared/storage";
+import { withCalendarFreshness } from "../../shared/calendarNotes";
 import { ensureMicrosoftToken } from "../lib/microsoft";
 import { downloadOneDrive } from "../lib/onedrive";
-import { restoreMicrosoftReport } from "../lib/microsoftWorkflow";
+import { restoreReportTranscript } from "../lib/restoreTranscript";
 import { hasAnyCalendarGrant, subscribeCalendar } from "../lib/calendar";
 import { ConsentRecordPanel } from "../components/ConsentRecordPanel";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, useSearchParams, Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   CloudUpload,
@@ -28,9 +30,16 @@ import {
   CheckSquare,
   Lightbulb,
 } from "lucide-react";
-import { Busy, Notice, Status, dateTimeLabel } from "../components/UI";
+import {
+  AudioPreview,
+  Busy,
+  Notice,
+  Status,
+  dateTimeLabel,
+} from "../components/UI";
 import Menu from "../components/Menu";
 import DeleteMeeting from "../components/DeleteMeeting";
+import AssignEvent from "../components/AssignEvent";
 import { shareReport } from "../lib/share";
 import { syncReportToCalendar } from "../lib/calendarSync";
 import {
@@ -40,6 +49,7 @@ import {
   meetingStatus,
   plural,
   speakerNamesOf,
+  summarise,
 } from "../lib/meetingMeta";
 import {
   formatTodoEditLine,
@@ -48,21 +58,22 @@ import {
   type Todo,
 } from "../../shared/analysis";
 import type { ReportData } from "../types";
-import {
-  connectGoogle,
-  ensureDriveToken,
-  errorMessage,
-  hasCalendarGrant,
-  subscribeDriveSession,
-} from "../lib/session";
-import { saveReport, uid } from "../lib/reports";
+import { connectGoogle, ensureDriveToken, errorMessage } from "../lib/session";
+import { getReport, saveReport, uid } from "../lib/reports";
 import {
   backupDraft,
   syncReport,
   analyzeDraft,
   restoreDraft,
 } from "../lib/workflow";
-import { deleteDraft, getDraft, getLocal, putDraft } from "../lib/local";
+import {
+  deleteDraft,
+  getDraft,
+  getLocal,
+  putDraft,
+  ReportConflictError,
+  watchLocalReports,
+} from "../lib/local";
 import {
   clearJob,
   jobFor,
@@ -83,15 +94,46 @@ import {
 import { prepareTranscript } from "../lib/prepareTranscript";
 import { downloadDriveFile } from "../lib/drive";
 import { withWebmDuration } from "../lib/webmDuration";
+import {
+  forgetReportEdit,
+  hasReportEdits,
+  pendingArchive,
+  recoverReportEdit,
+  rememberReportEdit,
+} from "../lib/reportEdits";
 
-export default function ReportPage({
+type ReportPageProps = { report?: ReportData; dirty?: boolean };
+async function confirmSavedReport(owner: string, expected: ReportData) {
+  const checkOwner = () => {
+    if (uid() !== owner) throw Error("Das angemeldete Konto hat sich geändert.");
+  };
+  checkOwner();
+  const saved = await getLocal(owner, expected.id, { index: expected.home ? "meetings" : "reports" });
+  checkOwner();
+  if (!saved || Object.keys({ ...expected, ...saved.report }).some(key =>
+    key !== "updatedAt" && key !== "transcriptRevision" &&
+    JSON.stringify(expected[key as keyof ReportData]) !== JSON.stringify(saved.report[key as keyof ReportData])))
+    throw new ReportConflictError();
+  return saved;
+}
+export default function ReportPage(props: ReportPageProps) {
+  const { id } = useParams();
+  const [search] = useSearchParams();
+  // Router reuses a route element when only :id changes. Isolate each draft,
+  // audio request and subscription instead of carrying them to the next report.
+  const identity = id || props.report?.id;
+  const index = search.get("index") || (props.report ? reportIndexCollection(props.report) : "");
+  return <ReportDetail key={index ? `${identity}:${index}` : identity} {...props} />;
+}
+
+export function ReportDetail({
   report: initialReport,
   dirty: initialDirty,
-}: {
-  report?: ReportData;
-  dirty?: boolean;
-}) {
+}: ReportPageProps) {
   const params = useParams();
+  const [search] = useSearchParams();
+  const requestedIndex = search.get("index");
+  const index = requestedIndex === "reports" || requestedIndex === "meetings" ? requestedIndex : undefined;
   const [report, setReport] = useState<ReportData | undefined>(initialReport);
   const [dirty, setDirty] = useState(initialDirty || false);
   const [edited, setEdited] = useState<ReportData>();
@@ -100,10 +142,76 @@ export default function ReportPage({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
-  const [audioUrl, setAudioUrl] = useState("");
+  const [audioBlob, setAudioBlob] = useState<Blob>();
   const [audioLoading, setAudioLoading] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  const [focusTurnId, setFocusTurnId] = useState<string>();
+  const [inlineEditing, setInlineEditing] = useState(false);
+  const deletionWarning = useRef("");
   const navigate = useNavigate();
   const [todosText, setTodosText] = useState("");
+  const editBase = useRef<string | null>(initialReport?.updatedAt ?? null);
+  const recovered = useRef("");
+  const [conflict, setConflict] = useState(false);
+  const [recoveryFailed, setRecoveryFailed] = useState(false);
+  const hasEdits = !!report && !!edited && hasReportEdits(report, edited);
+  const recoveryReady = useRef(false);
+  useEffect(() => {
+    // The saved report owns browser history/tab labels, not the editor draft.
+    if (report) document.title = `${report.title.trim() || "Unbenanntes Meeting"} · CheatMeet`;
+  }, [report?.id, report?.title]);
+  useEffect(() => {
+    if (!report || recovered.current === report.id) return;
+    recovered.current = report.id;
+    const draft = recoverReportEdit(uid(), report);
+    if (draft) {
+      editBase.current = draft.baseUpdatedAt;
+      setEdited(draft.report);
+      setTodosText(draft.todosText);
+      setEditFields(draft.editFields);
+      setConflict(draft.baseUpdatedAt !== (report.updatedAt ?? null));
+      setNotice(
+        "Ungespeicherte Änderungen auf diesem Gerät wiederhergestellt. Bitte prüfen und speichern.",
+      );
+    }
+    recoveryReady.current = true;
+  }, [report]);
+  useEffect(() => {
+    if (!report || !recoveryReady.current || !edited) return;
+    setRecoveryFailed(
+      !rememberReportEdit(uid(), {
+        report: edited,
+        baseUpdatedAt: editBase.current,
+        todosText,
+        editFields,
+      }),
+    );
+  }, [report?.id, edited, todosText, editFields]);
+  useEffect(() => {
+    if (!hasEdits && !inlineEditing) return;
+    const guard = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [hasEdits, inlineEditing]);
+  function cancelEdits() {
+    if (!report || busy) return;
+    forgetReportEdit(uid(), report.id, { index: reportIndexCollection(report) });
+    setEdited(undefined);
+    setEditFields(false);
+    setConflict(false);
+    setRecoveryFailed(false);
+    setFocusTurnId(undefined);
+  }
+  function beginEdit() {
+    if (!report || busy) return;
+    editBase.current = report.updatedAt ?? null;
+    setEdited(structuredClone(report));
+    setTodosText(report.todos.map(formatTodoEditLine).join("\n"));
+    setEditFields(true);
+  }
   // The token is usually minted after this mounts; a bare read would leave the
   // calendar action missing for the whole visit.
   const calendarReady = useSyncExternalStore(
@@ -113,21 +221,18 @@ export default function ReportPage({
         report?.calendarEventId
           ? report.calendarProvider || "google"
           : undefined,
+        report?.calendarEventId ? report.calendarConnectionId : undefined,
       ),
     () => false,
   );
-  const audio = useRef<HTMLAudioElement>(null);
+  const calendarPickerReady = useSyncExternalStore(subscribeCalendar, () => hasAnyCalendarGrant(), () => false);
+  const audio = useRef<HTMLDivElement>(null);
   const seekTo = useRef(0);
   const audioRequest = useRef(0);
-  useEffect(
-    () => () => {
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
-    },
-    [audioUrl],
-  );
   useEffect(() => {
     audioRequest.current++;
-    setAudioUrl("");
+    setAudioBlob(undefined);
+    setAudioLoading(false);
     return () => {
       audioRequest.current++;
     };
@@ -140,11 +245,15 @@ export default function ReportPage({
       try {
         const id = params.id!;
         const owner = uid();
+        if (requestedIndex !== null && !index) throw Error("Ungültiger Meeting-Speicher. Bitte den Bericht über die Übersicht öffnen.");
         // A finished report is a saved report, not a draft: the draft is deleted
         // once it has been analysed and exported.
-        const stored = await getLocal(owner, id);
-        const draft = stored ? undefined : await getDraft(owner, id);
-        if (!active) return;
+        const selection = index ? { index } as const : undefined;
+        const local = await getLocal(owner, id, selection);
+        const draft = local ? undefined : await getDraft(index === "meetings" ? `${owner}:microsoft` : owner, id, !!index);
+        const stored =
+          local || (draft ? undefined : await getReport(owner, id, selection));
+        if (!active || uid() !== owner) return;
         if (stored) {
           setReport(stored.report);
           setDirty(stored.dirty);
@@ -164,13 +273,45 @@ export default function ReportPage({
     return () => {
       active = false;
     };
-  }, [initialReport, params.id]);
+  }, [initialReport, params.id, requestedIndex]);
 
   const view = edited || report;
+  const liveState = useRef({ report, edited, busy });
+  liveState.current = { report, edited, busy };
+  useEffect(() => {
+    const id = params.id || initialReport?.id;
+    if (!id) return;
+    const owner = uid();
+    let active = true;
+    let request = 0;
+    const refresh = async () => {
+      const currentRequest = ++request;
+      const expected = liveState.current.report;
+      if (!expected) return;
+      const stored = await getLocal(owner, id, { index: reportIndexCollection(expected) });
+      if (!active || currentRequest !== request || uid() !== owner || !stored)
+        return;
+      const state = liveState.current;
+      if (state.busy) return; // The writer reads back its exact committed revision.
+      if (
+        state.edited &&
+        (stored.report.updatedAt ?? null) !== editBase.current
+      )
+        setConflict(true);
+      setReport(stored.report);
+      setDirty(stored.dirty);
+    };
+    const stop = watchLocalReports(owner, () => void refresh().catch(() => {}));
+    void refresh().catch(() => {});
+    return () => {
+      active = false;
+      stop();
+    };
+  }, [params.id, initialReport?.id, index]);
   const duration = view ? meetingDurationMs(view) : 0;
   const speakers = speakerNamesOf(view?.speech);
   const job = useSyncExternalStore(subscribeJobs, () =>
-    params.id ? jobFor(params.id) : undefined,
+    report ? jobFor(report.id, report) : undefined,
   );
   const running =
     !!job &&
@@ -178,14 +319,37 @@ export default function ReportPage({
     job.stage !== "error" &&
     job.stage !== "review";
 
+  function correctTranscript(
+    patch: Pick<ReportData, "transcription"> &
+      Partial<Pick<ReportData, "speech">>,
+  ) {
+    if (!view || busy || running) return;
+    if (!edited) {
+      editBase.current = report?.updatedAt ?? null;
+      setTodosText(view.todos.map(formatTodoEditLine).join("\n"));
+    }
+    setEdited({ ...view, ...patch, summaryNeedsRefresh: true, error: "" });
+  }
+  function editTurn(id: string) {
+    if (busy || running) return;
+    if (!edited) beginEdit();
+    setFocusTurnId(id);
+  }
+
   // The background pipeline writes each step locally; mirror it into the view
   // rather than leaving a stale report on screen.
   useEffect(() => {
-    if (!job) return;
+    if (!job || !report) return;
     let active = true;
-    getLocal(uid(), job.reportId)
+    const owner = uid();
+    getLocal(owner, job.reportId, { index: reportIndexCollection(report) })
       .then((stored) => {
-        if (!active || !stored) return;
+        if (!active || uid() !== owner || !stored) return;
+        if (
+          liveState.current.edited &&
+          (stored.report.updatedAt ?? null) !== editBase.current
+        )
+          setConflict(true);
         setReport(stored.report);
         setDirty(stored.dirty);
         if (job.stage === "done") {
@@ -193,11 +357,11 @@ export default function ReportPage({
             job.warning ||
               `In ${stored.report.home ? "OneDrive" : "Google Drive"} gespeichert.`,
           );
-          clearJob(job.reportId);
+          clearJob(job.reportId, report);
         }
         if (job.stage === "error") {
           setError(job.error || "Der Vorgang ist fehlgeschlagen.");
-          clearJob(job.reportId);
+          clearJob(job.reportId, report);
         }
       })
       .catch(() => {});
@@ -206,111 +370,151 @@ export default function ReportPage({
     };
   }, [job]);
 
-  /**
-   * Ticking a box is a real edit, so it goes through the same save path as any
-   * other — including the Drive copy, which is where the report actually lives.
-   */
+  /** Task ticks patch the latest index/local copy. The notice keeps explicit
+   * archive-save work separate; a tick must not overwrite unrelated edits. */
   async function toggleTodo(index: number, done: boolean) {
     // While an edit is open, Speichern/Abbrechen owns the document: a tick
     // would otherwise persist the whole pending draft behind the user's back.
-    if (!view || busy || edited) return;
-    const todos = view.todos.map((todo, i) =>
-      i === index
-        ? { ...todo, ...(done ? { done: true } : { done: undefined }) }
-        : todo,
-    );
-    const next = { ...view, todos, updatedAt: new Date().toISOString() };
-    setReport(next);
-    let warning: string | null;
+    if (!view || busy || running || edited) return;
+    const owner = uid();
+    const selected = view.todos[index];
+    if (!selected) return;
+    setBusy("Aufgabe speichern …");
+    setError("");
     try {
-      warning = await saveReport(next);
+      const stored = await getLocal(owner, view.id, { index: reportIndexCollection(view) });
+      if (uid() !== owner) return;
+      const latest = stored?.report || view;
+      const matches = latest.todos
+        .map((todo, i) => ({ todo, i }))
+        .filter(
+          ({ todo }) =>
+            todo.text === selected.text &&
+            todo.owner === selected.owner &&
+            todo.due === selected.due,
+        );
+      const target = latest.todos[index];
+      const targetIndex =
+        target &&
+        target.text === selected.text &&
+        target.owner === selected.owner &&
+        target.due === selected.due
+          ? index
+          : matches.length === 1
+            ? matches[0].i
+            : -1;
+      if (targetIndex < 0)
+        throw Error(
+          "Die Aufgabe wurde inzwischen geändert. Bitte die aktuelle Fassung prüfen.",
+        );
+      const next = withCalendarFreshness(latest, {
+        ...latest,
+        ...pendingArchive(latest),
+        todos: latest.todos.map((todo, i) =>
+          i === targetIndex ? { ...todo, done: done || undefined } : todo,
+        ),
+      });
+      const warning = await saveReport(next, {
+        expectedUpdatedAt: stored?.report.updatedAt ?? null,
+      });
+      if (uid() !== owner) return;
+      const saved = await getLocal(owner, view.id, { index: reportIndexCollection(view) });
+      if (uid() !== owner) return;
+      setReport(saved?.report || next);
+      setDirty(saved?.dirty ?? !!warning);
+      setNotice(
+        [
+          "Aufgabe gespeichert.",
+          next.archiveBaseSyncedAt &&
+            "Die Archivkopie wird beim nächsten Speichern aktualisiert.",
+          warning,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      if (warning) setError(warning);
     } catch (cause) {
-      // The box is ticked on screen but nothing was stored; say so rather than
-      // letting the optimistic update stand in for a save.
-      setReport(view);
       setError(errorMessage(cause));
-      return;
+    } finally {
+      setBusy("");
     }
-    setDirty(!!warning);
-    // The Drive copy is only refreshed by an explicit save; say so rather than
-    // letting the tick look like a full save.
-    setNotice(
-      warning ||
-        (archiveSyncedAt(next)
-          ? "Gespeichert. Die Archivkopie wird beim nächsten Speichern aktualisiert."
-          : "Gespeichert."),
-    );
-    if (warning) setError(warning);
   }
 
   async function save(syncDrive: boolean) {
-    if (!view || busy) return;
+    if (!view || busy || running) return;
     const owner = uid();
+    const checkOwner = () => {
+      if (uid() !== owner)
+        throw Error("Das angemeldete Konto hat sich geändert.");
+    };
     setBusy("Bericht speichern …");
     setError("");
     setNotice("");
     try {
-      const connection = (
-        syncDrive
-          ? view.home
-            ? ensureMicrosoftToken(view.home.connectionId).then(
-                (t) => t.accessToken,
-              )
-            : ensureDriveToken().then((t) => t || connectGoogle())
-          : Promise.resolve(null)
-      )
-        .then((t) => ({ token: t, error: null as unknown }))
-        .catch((error) => ({ token: null, error }));
-      const next = {
+      const next = withCalendarFreshness(report || view, {
         ...view,
-        updatedAt: new Date().toISOString(),
-        ...(edited
-          ? view.home
-            ? { home: { ...view.home, syncedAt: undefined } }
-            : { driveSyncedAt: "" }
-          : {}),
-      };
-      const warning = await saveReport(next);
-      setReport(next);
-      setDirty(!!warning);
+        ...(hasEdits ? pendingArchive(view) : {}),
+      });
+      const warning = await saveReport(next, {
+        expectedUpdatedAt: edited
+          ? editBase.current
+          : (report?.updatedAt ?? null),
+      });
+      checkOwner();
+      const stored = await confirmSavedReport(owner, next);
+      checkOwner();
+      const saved = stored.report;
+      setReport(saved);
+      setDirty(stored.dirty);
+      forgetReportEdit(owner, next.id, { index: reportIndexCollection(next) });
       setEdited(undefined);
       setEditFields(false);
-      const connected = await connection;
-      if (uid() !== owner)
-        throw new Error("Das Google-Konto wurde gewechselt.");
-      if (connected.error) {
-        setNotice(
-          warning ||
-            "Lokal gespeichert. Drive kann später erneut verbunden werden.",
-        );
-        throw connected.error;
-      }
-      const t = connected.token;
-      if (t) {
-        const result = await syncReport(next, t);
+      setConflict(false);
+      setNotice(warning || "Auf diesem Gerät gespeichert.");
+      if (syncDrive) {
+        const token = saved.home
+          ? (await ensureMicrosoftToken(saved.home.connectionId)).accessToken
+          : (await ensureDriveToken()) || (await connectGoogle());
+        checkOwner();
+        const latest = await getLocal(owner, saved.id, { index: reportIndexCollection(saved) });
+        checkOwner();
+        if (!latest || latest.report.updatedAt !== saved.updatedAt)
+          throw Error(
+            "Die gespeicherte Fassung wurde inzwischen geändert. Bitte vor dem Archiv-Upload erneut prüfen.",
+          );
+        const result = await syncReport(saved, token);
+        checkOwner();
         setReport(result.report);
         setDirty(!!result.warning);
         setNotice(
-          result.warning ||
-            `In ${next.home ? "OneDrive" : "Google Drive"} gespeichert.`,
+          [
+            `In ${saved.home ? "OneDrive" : "Google Drive"} gespeichert.`,
+            warning,
+            result.warning,
+          ]
+            .filter(Boolean)
+            .join(" "),
         );
-      } else {
-        setNotice(warning || "Lokal gespeichert.");
       }
     } catch (e) {
+      if (e instanceof Error && e.name === "ReportConflictError")
+        setConflict(true);
       setError(errorMessage(e));
     } finally {
       setBusy("");
     }
   }
 
-  async function retry(reviewDecision?: "reviewed" | "skipped") {
-    if (!view || busy) return;
+  async function retry(
+    reviewDecision?: "reviewed" | "skipped",
+    refreshSummary = false,
+  ) {
+    if (!view || busy || running || edited) return;
     const report = view;
     const owner = uid();
     const checkOwner = () => {
       if (uid() !== owner)
-        throw new Error("Das Google-Konto wurde gewechselt.");
+        throw new Error("Das angemeldete Konto wurde gewechselt.");
     };
     setBusy("Lade...");
     setError("");
@@ -319,8 +523,26 @@ export default function ReportPage({
         ? (await ensureMicrosoftToken(report.home.connectionId)).accessToken
         : (await ensureDriveToken()) || (await connectGoogle());
       checkOwner();
-      const local = await getDraft(owner, report.id);
+      const currentReport = await getLocal(owner, report.id, { index: report.home ? "meetings" : "reports" });
       checkOwner();
+      if (
+        currentReport &&
+        currentReport.report.updatedAt !== report.updatedAt
+      ) {
+        setReport(currentReport.report);
+        throw Error(
+          "Eine neuere Fassung wurde gespeichert. Bitte die aktuelle Fassung prüfen und die Analyse erneut starten.",
+        );
+      }
+      let expectedUpdatedAt = currentReport?.report.updatedAt ?? null;
+      const local = await getDraft(report.home ? `${owner}:microsoft` : owner, report.id, true);
+      checkOwner();
+      const syncSource = async (source: ReportData) => {
+        const result = await syncReport(source, t);
+        checkOwner();
+        if (result.warning) setError(result.warning);
+        return result.report;
+      };
       if (await processingAvailable()) {
         checkOwner();
         if (report.home && !report.home.reportId) {
@@ -337,6 +559,17 @@ export default function ReportPage({
           return;
         }
         let source = report;
+        if (
+          refreshSummary &&
+          (!source.transcription.trim() || source.transcriptStale)
+        )
+          throw Error(
+            "Bitte zuerst das aktuelle Transkript aus dem Archiv laden. Es wird keine neue Transkription gestartet.",
+          );
+        if (refreshSummary && !archiveSyncedAt(source)) {
+          source = await syncSource(source);
+          checkOwner();
+        }
         if (reviewDecision && needsSpeakerReview(source.speech)) {
           source = {
             ...source,
@@ -344,12 +577,13 @@ export default function ReportPage({
             transcription: renderTranscript(source.speech!),
             error: "",
           };
-          source = (await syncReport(source, t)).report;
+          source = await syncSource(source);
           checkOwner();
         }
         await handoffServerProcessing(owner, source, {
           analyze: true,
-          regenerate: !!edited && !!source.summary.trim(),
+          regenerate: refreshSummary && !!source.summary.trim(),
+          ...(refreshSummary ? { retranscribe: false } : {}),
         });
         checkOwner();
         setNotice(
@@ -361,7 +595,15 @@ export default function ReportPage({
         throw new Error(
           "OneDrive-Verarbeitung ist auf diesem Server nicht verfügbar. Der Entwurf bleibt erhalten.",
         );
+      if (
+        refreshSummary &&
+        (!report.transcription.trim() || report.transcriptStale)
+      )
+        throw Error(
+          "Bitte zuerst das aktuelle Transkript aus dem Archiv laden. Es wird keine neue Transkription gestartet.",
+        );
       const canUseSavedTranscript =
+        refreshSummary ||
         report.speech?.phase === "final" ||
         (!report.speech && !!report.transcription.trim());
       const canUseDriveStream = !!report.speech && !!report.rawAudioUrl;
@@ -372,12 +614,27 @@ export default function ReportPage({
             ? { report }
             : await restoreDraft(report, t);
       checkOwner();
-      if (local?.speakerReference) d.speakerReference = local.speakerReference;
-      if (local?.retranscribe) d.retranscribe = true;
-      if (local?.report.id === report.id) await backupDraft(d, t, setBusy);
+      if (local?.speakerReference && !refreshSummary)
+        d.speakerReference = local.speakerReference;
+      if (local?.retranscribe && !refreshSummary) d.retranscribe = true;
+      if (refreshSummary) {
+        d.retranscribe = false;
+        // analyzeDraft prepares its input too: a corrected saved text is final,
+        // never a request to obtain another paid audio transcript.
+        if (d.report.speech)
+          d.report = {
+            ...d.report,
+            speech: { ...d.report.speech, phase: "final" },
+          };
+      }
+      if (local?.report.id === report.id) {
+        await backupDraft(d, t, setBusy, expectedUpdatedAt);
+        expectedUpdatedAt = d.report.updatedAt ?? null;
+      }
       checkOwner();
       setBusy("Transkript vorbereiten …");
-      await prepareTranscript(d, t);
+      await prepareTranscript(d, t, { expectedUpdatedAt });
+      expectedUpdatedAt = d.report.updatedAt ?? null;
       checkOwner();
       if (reviewDecision && needsSpeakerReview(d.report.speech)) {
         d.report = {
@@ -390,15 +647,20 @@ export default function ReportPage({
         checkOwner();
       }
       if (needsSpeakerReview(d.report.speech)) {
-        d.report = { ...d.report, status: "pending", error: "" };
-        await saveReport(d.report);
+        d.report = { ...d.report, ...pendingArchive(d.report), status: "pending", error: "" };
+        const warning = await saveReport(d.report, { expectedUpdatedAt });
         checkOwner();
+        const saved = await confirmSavedReport(owner, d.report);
+        d.report = saved.report;
         setReport(d.report);
+        setDirty(saved.dirty);
         setEdited(undefined);
         setEditFields(false);
         const result = await syncReport(d.report, t);
         checkOwner();
         setReport(result.report);
+        setDirty(!!result.warning);
+        if (warning) setError(warning);
         setNotice(
           result.warning ||
             "Transkript bereit. Bitte Sprecher prüfen oder Prüfung überspringen.",
@@ -406,93 +668,105 @@ export default function ReportPage({
         return;
       }
       setBusy("Analysiere...");
-      const next = await analyzeDraft(d);
+      const next = { ...(await analyzeDraft(d, { expectedUpdatedAt })), ...pendingArchive(d.report), summaryNeedsRefresh: false };
+      expectedUpdatedAt = d.report.updatedAt ?? null;
       checkOwner();
-      await saveReport(next);
+      const warning = await saveReport(next, { expectedUpdatedAt });
       checkOwner();
-      setReport(next);
+      const saved = await confirmSavedReport(owner, next);
+      d.report = saved.report;
+      setReport(saved.report);
+      setDirty(saved.dirty);
       setEdited(undefined);
       setEditFields(false);
       if (local?.report.id === report.id)
-        await putDraft(owner, { ...d, report: next });
-      const result = await syncReport(next, t);
+        await putDraft(owner, d);
+      const result = await syncReport(saved.report, t);
       checkOwner();
       // The pipeline drops the draft on success for a reason: left behind, it
       // reappears as an unfinished recording and "Fortsetzen" can overwrite
       // the finished report with its own pre-analysis state.
-      await deleteDraft(owner, result.report.id).catch(() => {});
+      await deleteDraft(owner, result.report.id, { index: report.home ? "meetings" : "reports" }).catch(() => {});
       setReport(result.report);
       setDirty(!!result.warning);
+      if (warning) setError(warning);
       setNotice(result.warning || "Analyse abgeschlossen.");
     } catch (e) {
+      if (e instanceof Error && e.name === "ReportConflictError") setConflict(true);
       setError(errorMessage(e));
     } finally {
       setBusy("");
     }
   }
 
+  async function playLoadedAudio() {
+    const player = audio.current?.querySelector("audio");
+    if (!player) return;
+    try {
+      player.currentTime = seekTo.current;
+      await player.play();
+    } catch {
+      setError(
+        "Wiedergabe konnte nicht gestartet werden. Bitte die Wiedergabetaste am Audioplayer verwenden.",
+      );
+    }
+  }
+
   async function listen(atMs: number) {
-    if (!view || audioLoading) return;
-    seekTo.current = atMs / 1000;
-    if (audioUrl && audio.current) {
-      audio.current.currentTime = seekTo.current;
-      void audio.current.play().catch(() => {});
+    if (!view || view.audioDeletedAt) return;
+    seekTo.current = Math.max(0, atMs) / 1000;
+    if (audioBlob && audio.current) {
+      await playLoadedAudio();
       return;
     }
+    if (audioLoading) return;
     const owner = uid();
     const request = ++audioRequest.current;
+    const current = () => {
+      try {
+        return uid() === owner && request === audioRequest.current;
+      } catch {
+        return false;
+      }
+    };
     setAudioLoading(true);
     try {
-      const draft = await getDraft(owner, view.id);
-      if (uid() !== owner || request !== audioRequest.current) return;
+      const draft = await getDraft(view.home ? `${owner}:microsoft` : owner, view.id, true);
+      if (!current()) return;
       let blob = draft?.audio;
       if (!blob && view.home?.audioId)
         blob = await downloadOneDrive(view.home, view.home.audioId);
       if (!blob && !view.home && view.rawAudioUrl) {
         const token = (await ensureDriveToken()) || (await connectGoogle());
-        if (uid() !== owner || request !== audioRequest.current) return;
+        if (!current()) return;
         blob = await downloadDriveFile(view.rawAudioUrl, token);
       }
-      if (uid() !== owner || request !== audioRequest.current) return;
-      if (!blob)
-        throw new Error(
-          view.audioDeletedAt
-            ? "Die Originalaufnahme wurde nach der zugesagten Aufbewahrungsfrist gelöscht. Transkript und Zusammenfassung bleiben erhalten."
-            : "Die Originalaufnahme ist hier nicht verfügbar.",
-        );
+      if (!current()) return;
+      if (!blob) throw Error("Die Originalaufnahme ist hier nicht verfügbar.");
       blob = await withWebmDuration(blob, view.durationMs || 0);
-      if (uid() !== owner || request !== audioRequest.current) return;
-      setAudioUrl(URL.createObjectURL(blob));
+      if (current()) setAudioBlob(blob);
     } catch (e) {
-      setError(errorMessage(e));
+      if (current()) setError(errorMessage(e));
     } finally {
-      setAudioLoading(false);
+      if (current()) setAudioLoading(false);
     }
   }
 
-  async function restoreFromMicrosoft() {
-    if (!view?.home?.folderId || !view.home.reportId || busy) return;
+  async function restoreTranscript() {
+    if (!view || busy || running || edited) return;
     const owner = uid();
-    setBusy("Meeting aus OneDrive wiederherstellen …");
+    setBusy("Transkript aus Archiv laden …");
     setError("");
     try {
-      const restored = await restoreMicrosoftReport(
-        view.home,
-        view.home.reportId,
-        view.home.folderId,
+      const restored = await restoreReportTranscript(owner, view);
+      if (uid() !== owner) return;
+      const stored = await getLocal(owner, view.id, { index: reportIndexCollection(view) });
+      if (uid() !== owner) return;
+      setReport(stored?.report || restored);
+      setDirty(stored?.dirty || false);
+      setNotice(
+        "Vorhandenes Transkript aus dem angehefteten Archiv geladen. Keine neue Transkription gestartet.",
       );
-      if (uid() !== owner) return;
-      const local = await getLocal(owner, view.id);
-      if (uid() !== owner) return;
-      if (local?.dirty || edited)
-        throw Error(
-          "Ungespeicherte Änderungen bleiben erhalten. Bitte zuerst speichern oder verwerfen, bevor die OneDrive-Kopie geladen wird.",
-        );
-      const warning = await saveReport(restored);
-      if (uid() !== owner) return;
-      setReport(restored);
-      setDirty(!!warning);
-      setNotice(warning || "Vollständiges Meeting aus OneDrive geladen.");
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -503,26 +777,50 @@ export default function ReportPage({
   /** Two-way: updates the matched event, or creates one for a meeting that
    *  belonged to none. */
   async function toCalendar() {
-    if (!view || busy) return;
+    if (!view || busy || running || edited) return;
     const owner = uid();
     setBusy("Kalender wird aktualisiert …");
     setError("");
+    setNotice("");
     try {
-      const patch = await syncReportToCalendar(view);
+      const stored = await getLocal(owner, view.id, { index: reportIndexCollection(view) });
       if (uid() !== owner) return;
-      const next = { ...view, ...patch, updatedAt: new Date().toISOString() };
-      setReport(next);
-      if (edited) setEdited(next);
-      setDirty(!!(await saveReport(next)));
+      const source = stored?.report || view;
+      const patch = await syncReportToCalendar(source);
+      if (uid() !== owner) return;
+      // Calendar/index persistence is not a canonical-file update. Keep that
+      // pending across reload and offer the existing explicit archive save.
+      const next = {
+        ...source,
+        ...patch,
+        ...pendingArchive(source),
+      };
+      const warning = await saveReport(next, {
+        expectedUpdatedAt: source.updatedAt ?? null,
+      });
+      if (uid() !== owner) return;
+      const saved = await getLocal(owner, view.id, { index: reportIndexCollection(view) });
+      if (uid() !== owner) return;
+      setReport(saved?.report || next);
+      setDirty(saved?.dirty ?? !!warning);
       // syncReportToCalendar reports a refusal in the patch rather than
       // throwing, so the cleared link is persisted along with the reason.
       if (patch.calendarError) setError(patch.calendarError);
-      else
-        setNotice(
-          patch.calendarEventId
-            ? "Termin im Kalender angelegt."
-            : "Kalendereintrag aktualisiert.",
-        );
+      setNotice(
+        [
+          !patch.calendarError &&
+            (patch.calendarEventId && !source.calendarEventId
+              ? "Termin im Kalender angelegt."
+              : "Kalendereintrag aktualisiert."),
+          warning
+            ? "Kalenderdaten auf diesem Gerät gespeichert. Cloud-Index noch nicht bestätigt."
+            : "Kalenderdaten auf diesem Gerät gespeichert und im Cloud-Index gesichert.",
+          warning,
+          `Dateiarchiv noch nicht aktualisiert. Bitte ausdrücklich „In ${source.home ? "OneDrive" : "Drive"} speichern“ wählen, bevor du den Bericht aus dem Archiv wiederherstellst.`,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -531,7 +829,7 @@ export default function ReportPage({
   }
 
   async function share() {
-    if (!view) return;
+    if (!view || edited || view.transcriptStale) return;
     setError("");
     setNotice("");
     try {
@@ -548,7 +846,7 @@ export default function ReportPage({
   }
 
   function download() {
-    if (!view) return;
+    if (!view || edited || view.transcriptStale) return;
     const url = URL.createObjectURL(
       new Blob([reportToMarkdown(view)], {
         type: "text/markdown;charset=utf-8",
@@ -576,6 +874,28 @@ export default function ReportPage({
       </>
     );
 
+  const editControls = edited && (
+    <div
+      className="speaker-review-actions no-print"
+      role="group"
+      aria-label="Berichtänderungen"
+    >
+      <button
+        className="btn btn-primary"
+        onClick={() => save(true)}
+        disabled={!!busy || running}
+      >
+        <Save size={16} /> Speichern
+      </button>
+      <button
+        className="btn"
+        onClick={cancelEdits}
+        disabled={!!busy || running}
+      >
+        Abbrechen
+      </button>
+    </div>
+  );
   return (
     <>
       <fieldset
@@ -606,7 +926,7 @@ export default function ReportPage({
                   {plural(speakers.length, "Sprecher", "Sprecher")}
                 </span>
               )}
-              {view.calendarSyncedAt && (
+              {view.calendarEventId && (
                 <a
                   className="report-calendar"
                   href={
@@ -631,74 +951,55 @@ export default function ReportPage({
           </div>
           <div className="report-head-actions no-print">
             {edited ? (
-              <>
-                <button className="btn btn-primary" onClick={() => save(true)}>
-                  <Save size={16} /> Speichern
-                </button>
-                <button
-                  className="btn"
-                  onClick={() => {
-                    setEdited(undefined);
-                    setEditFields(false);
-                  }}
-                >
-                  Abbrechen
-                </button>
-              </>
+              editControls
             ) : !archiveSyncedAt(view) ? (
               <button className="btn btn-primary" onClick={() => save(true)}>
                 <CloudUpload size={16} /> In {view.home ? "OneDrive" : "Drive"}{" "}
                 speichern
               </button>
             ) : (
-              <button
-                className="btn"
-                onClick={() => {
-                  setEdited(structuredClone(view));
-                  setTodosText(view.todos.map(formatTodoEditLine).join("\n"));
-                  setEditFields(true);
-                }}
-              >
+              <button className="btn" onClick={beginEdit}>
                 <Edit3 size={16} /> Bearbeiten
               </button>
             )}
             <Menu title="Weitere Aktionen" icon={<MoreHorizontal size={18} />}>
               {!edited && !archiveSyncedAt(view) && (
-                <button
-                  onClick={() => {
-                    setEdited(structuredClone(view));
-                    setTodosText(view.todos.map(formatTodoEditLine).join("\n"));
-                    setEditFields(true);
-                  }}
-                >
+                <button onClick={beginEdit}>
                   <Edit3 size={16} /> Bearbeiten
                 </button>
               )}
-              <button onClick={() => void share()}>
+              <button
+                onClick={() => void share()}
+                disabled={!!edited || !!view.transcriptStale}
+              >
                 <Share2 size={16} /> Teilen
               </button>
-              {calendarReady && (
-                <button onClick={() => void toCalendar()}>
-                  <CalendarDays size={16} />
-                  {view.calendarSyncedAt
-                    ? "Kalender aktualisieren"
-                    : "In den Kalender"}
+              {calendarPickerReady && (
+                <button onClick={() => setAssigning(true)} disabled={!!edited}>
+                  <CalendarDays size={16} /> Termin zuordnen
                 </button>
               )}
-              <button onClick={() => window.print()} disabled={!!edited}>
-                <Printer size={16} /> Als PDF drucken
+              {calendarReady && (
+                <button onClick={toCalendar} disabled={!!edited}>
+                  <CalendarDays size={16} />
+                  {view.calendarEventId
+                    ? "Kalender aktualisieren"
+                    : "Neuen Termin anlegen"}
+                </button>
+              )}
+              <button
+                onClick={() => window.print()}
+                disabled={!!edited || !!view.transcriptStale}
+              >
+                <Printer size={16} /> Bericht als PDF drucken
               </button>
-              <button onClick={download}>
+              <button
+                onClick={download}
+                disabled={!!edited || !!view.transcriptStale}
+              >
                 <Download size={16} /> Markdown laden
               </button>
-              {view.home?.reportId && (
-                <button
-                  onClick={() => void restoreFromMicrosoft()}
-                  disabled={!!busy || !!edited}
-                >
-                  <Download size={16} /> Aus OneDrive wiederherstellen
-                </button>
-              )}
+
               {archiveFolderLink(view) && (
                 <a
                   href={archiveFolderLink(view)}
@@ -714,7 +1015,23 @@ export default function ReportPage({
                 title={view.title}
                 driveFolderId={view.driveFolderId}
                 home={view.home}
-                onDeleted={() => navigate("/dashboard", { replace: true })}
+                onWarning={(message) => {
+                  deletionWarning.current = message;
+                  setError(message);
+                }}
+                onDeleted={(outcome) =>
+                  navigate("/dashboard", {
+                    replace: true,
+                    state: {
+                      deleteOutcome: outcome || {
+                        removed: true,
+                        warnings: deletionWarning.current
+                          ? [deletionWarning.current]
+                          : [],
+                      },
+                    },
+                  })
+                }
               />
             </Menu>
           </div>
@@ -722,6 +1039,26 @@ export default function ReportPage({
 
         {error && <Notice>{error}</Notice>}
         {notice && <Notice kind="info">{notice}</Notice>}
+        {hasEdits && (
+          <p className="muted no-print" role="status">
+            Ungespeicherte Änderungen · beim Zurückkehren in diesem Tab
+            wiederherstellbar.
+          </p>
+        )}
+        {recoveryFailed && (
+          <Notice>
+            Die Entwurfskopie konnte nicht gespeichert werden. Bitte vor dem
+            Verlassen speichern.
+          </Notice>
+        )}
+        {conflict && (
+          <Notice>
+            Eine neuere gespeicherte Fassung liegt vor. Dein Entwurf bleibt
+            erhalten. Zum Vergleichen kannst du ihn kopieren; mit Abbrechen
+            lädst du die gespeicherte Fassung. Der alte Entwurf überschreibt sie
+            nicht.
+          </Notice>
+        )}
         {view.speech?.liveWarning && <Notice>{view.speech.liveWarning}</Notice>}
         {busy && <Busy text={busy} />}
 
@@ -742,22 +1079,31 @@ export default function ReportPage({
             </div>
           </div>
         ) : (
-          view.status !== "completed" &&
+          (view.status !== "completed" || view.summaryNeedsRefresh) &&
           !edited &&
           !needsSpeakerReview(view.speech) && (
             <div className="analysis-recovery panel no-print">
               <div>
-                <h2>Analyse erneut starten</h2>
+                <h2>
+                  {view.summaryNeedsRefresh
+                    ? "Zusammenfassung nicht mehr aktuell"
+                    : "Analyse erneut starten"}
+                </h2>
                 <p className="muted">
-                  {view.error || "Starte die KI-Analyse."}
+                  {view.summaryNeedsRefresh
+                    ? "Sprecher oder Text wurden korrigiert. Aktualisiert nur die Zusammenfassung aus dem gespeicherten Text, ohne neue Audiotranskription."
+                    : view.error || "Starte die KI-Analyse."}
                 </p>
               </div>
               <button
                 className="btn btn-primary"
-                onClick={() => retry()}
+                onClick={() => retry(undefined, !!view.summaryNeedsRefresh)}
                 disabled={!!busy || !!edited}
               >
-                <WandSparkles size={18} /> Bericht erstellen
+                <WandSparkles size={18} />{" "}
+                {view.summaryNeedsRefresh
+                  ? "Zusammenfassung aktualisieren"
+                  : "Bericht erstellen"}
               </button>
             </div>
           )
@@ -771,31 +1117,14 @@ export default function ReportPage({
               nur unklare Beiträge. Du kannst sie zuordnen oder direkt
               fortfahren.
             </p>
-            {audioLoading && <p role="status">Originalaufnahme laden …</p>}
-            {audioUrl && (
-              <audio
-                ref={audio}
-                src={audioUrl}
-                controls
-                style={{ width: "100%" }}
-                onLoadedMetadata={() => {
-                  if (audio.current) {
-                    audio.current.currentTime = seekTo.current;
-                    void audio.current.play().catch(() => {});
-                  }
-                }}
-              />
-            )}
+
             <SpeakerReview
               speech={view.speech!}
               onListen={listen}
               onChange={(speech) =>
-                setEdited({
-                  ...view,
+                correctTranscript({
                   speech,
                   transcription: renderTranscript(speech),
-                  status: "pending",
-                  error: "",
                 })
               }
             />
@@ -803,14 +1132,12 @@ export default function ReportPage({
               <summary>Weitere Korrekturen</summary>
               <SpeakerEditor
                 speech={view.speech!}
+                disabled={!!busy || running}
                 onListen={listen}
                 onChange={(speech) =>
-                  setEdited({
-                    ...view,
+                  correctTranscript({
                     speech,
                     transcription: renderTranscript(speech),
-                    status: "pending",
-                    error: "",
                   })
                 }
               />
@@ -818,14 +1145,26 @@ export default function ReportPage({
             <div className="speaker-review-actions">
               <button
                 className="btn btn-primary"
-                onClick={() => retry("reviewed")}
+                onClick={() => retry("reviewed", !!view.summaryNeedsRefresh)}
+                disabled={!!edited}
               >
                 Weiter zur Zusammenfassung
               </button>
-              <button className="btn" onClick={() => retry("skipped")}>
+              <button
+                className="btn"
+                disabled={!!edited}
+                onClick={() => retry("skipped", !!view.summaryNeedsRefresh)}
+              >
                 Prüfung überspringen
               </button>
             </div>
+            {edited && (
+              <p className="muted">
+                Sprecherkorrekturen zuerst speichern, dann mit der
+                Zusammenfassung fortfahren.
+              </p>
+            )}
+            {editControls}
           </section>
         )}
 
@@ -837,6 +1176,7 @@ export default function ReportPage({
             {edited && editFields ? (
               <textarea
                 className="field"
+                aria-label="Zusammenfassung bearbeiten"
                 value={view.summary}
                 onChange={(e) =>
                   setEdited({ ...view, summary: e.target.value })
@@ -858,6 +1198,7 @@ export default function ReportPage({
                 </p>
                 <textarea
                   className="field"
+                  aria-label="Aufgaben bearbeiten"
                   aria-describedby="todo-syntax"
                   value={todosText}
                   onChange={(e) => {
@@ -910,6 +1251,7 @@ export default function ReportPage({
             {edited && editFields ? (
               <textarea
                 className="field"
+                aria-label="Erkenntnisse bearbeiten"
                 value={view.takeaways.join("\n")}
                 onChange={(e) =>
                   setEdited({ ...view, takeaways: e.target.value.split("\n") })
@@ -929,78 +1271,139 @@ export default function ReportPage({
         </div>
       </fieldset>
 
+      <section className="panel no-print" aria-label="Originalaufnahme">
+        {view.audioDeletedAt ? (
+          <p className="muted">
+            Die Originalaufnahme wurde nach der zugesagten Aufbewahrungsfrist
+            gelöscht. Transkript und Zusammenfassung bleiben erhalten.
+          </p>
+        ) : (
+          <button
+            className="btn"
+            onClick={() => listen(0)}
+            disabled={audioLoading}
+          >
+            {audioLoading ? "Originalaufnahme laden …" : "Aufnahme anhören"}
+          </button>
+        )}
+        {audioBlob && !view.audioDeletedAt && (
+          <div
+            ref={audio}
+            onLoadedMetadataCapture={() => void playLoadedAudio()}
+            onErrorCapture={() =>
+              setError(
+                "Die Aufnahme konnte nicht wiedergegeben werden. Bitte den Archivzugriff prüfen.",
+              )
+            }
+          >
+            <AudioPreview blob={audioBlob} durationMs={view.durationMs} />
+          </div>
+        )}
+      </section>
+
       {/* Outside the guard: a running analysis must not grey out the transcript
           the page invites you to keep reading. */}
       <section className="report-transcript">
         <h2>Transkript</h2>
+        {editControls}
+        {(transcriptIsElsewhere(view) || view.transcriptStale) && (
+          <div className="panel no-print">
+            <p>
+              {view.transcriptStale
+                ? "Die lokale Transkriptkopie ist nicht mehr aktuell und wird nicht angezeigt oder exportiert."
+                : `Das vollständige Transkript liegt im ${view.home ? "OneDrive" : "Google-Drive"}-Archiv.`}
+            </p>
+            <button
+              className="btn"
+              onClick={restoreTranscript}
+              disabled={!!busy || running || !!edited}
+            >
+              <Download size={16} /> Transkript aus Archiv laden
+            </button>
+            <p className="muted small">
+              Lädt vorhandenen Text. Keine neue KI-Analyse oder kostenpflichtige
+              Audiotranskription.
+            </p>
+          </div>
+        )}
         {view.speech && view.speech.phase !== "final" && (
           <p className="muted" role="status">
             Live-Transkript. Es wird direkt für die Zusammenfassung verwendet.
           </p>
         )}
-        {view.speech ? (
+        {!view.transcriptStale && view.speech ? (
           <>
             <TranscriptTimeline
               transcript={view.transcription}
               speech={view.speech}
               startedAt={view.date}
-              onRename={
-                busy || running
-                  ? undefined
-                  : (id, name) => {
-                      const speech = renameSpeaker(view.speech!, id, name);
-                      setEdited({
-                        ...view,
-                        speech,
-                        transcription: renderTranscript(speech),
-                        status: "pending",
-                        error:
-                          "Sprechernamen geändert. Zusammenfassung aus dem gespeicherten Transkript aktualisieren.",
-                      });
-                    }
-              }
+              onListen={!view.audioDeletedAt ? listen : undefined}
+              onEditTurn={editTurn}
+              editingDisabled={!!busy || running}
+              onEditing={setInlineEditing}
+              onRename={(id, name) => {
+                const speech = renameSpeaker(view.speech!, id, name);
+                correctTranscript({
+                  speech,
+                  transcription: renderTranscript(speech),
+                });
+              }}
             />
             {edited && !needsSpeakerReview(view.speech) && (
-              <details className="speaker-advanced">
+              <details
+                className="speaker-advanced"
+                open={focusTurnId ? true : undefined}
+              >
                 <summary>Weitere Transkriptkorrekturen</summary>
                 <SpeakerEditor
                   speech={view.speech}
+                  disabled={!!busy || running}
+                  onListen={!view.audioDeletedAt ? listen : undefined}
+                  focusTurnId={focusTurnId}
+                  actions={editControls}
                   onChange={(speech) =>
-                    setEdited({
-                      ...view,
+                    correctTranscript({
                       speech,
                       transcription: renderTranscript(speech),
-                      status: "pending",
-                      error:
-                        "Transkript korrigiert. Bericht aus dem gespeicherten Text erneut erstellen.",
                     })
                   }
                 />
               </details>
             )}
           </>
-        ) : edited ? (
+        ) : edited && !view.transcriptStale && !transcriptIsElsewhere(view) ? (
           <textarea
             className="field"
+            aria-label="Transkript bearbeiten"
+            disabled={!!busy || running}
             value={view.transcription}
             onChange={(e) =>
-              setEdited({ ...view, transcription: e.target.value })
+              correctTranscript({ transcription: e.target.value })
             }
           />
         ) : (
           <TranscriptTimeline
-            transcript={view.transcription}
+            transcript={view.transcriptStale ? "" : view.transcription}
             startedAt={view.date}
+            onListen={!view.audioDeletedAt ? listen : undefined}
             empty={
               transcriptIsElsewhere(view)
-                ? view.home
-                  ? "Das vollständige Transkript liegt in OneDrive. Über „Weitere Aktionen → Aus OneDrive wiederherstellen“ kannst du es auf dieses Gerät laden."
-                  : "Das Transkript liegt in Google Drive, aber nicht auf diesem Gerät. Es lässt sich in den Einstellungen unter „Aus Drive wiederherstellen“ zurückholen."
-                : "Für dieses Meeting wurde kein Transkript gespeichert."
+                ? "Das vollständige Transkript ist auf diesem Gerät noch nicht geladen."
+                : view.transcriptStale
+                  ? "Transkriptversion nicht aktuell. Bitte aus dem Archiv laden."
+                  : "Für dieses Meeting wurde kein Transkript gespeichert."
             }
           />
         )}
       </section>
+      {editControls}
+      {assigning && !edited && (
+        <AssignEvent
+          report={summarise(view)}
+          onClose={() => setAssigning(false)}
+          onWarning={setError}
+        />
+      )}
     </>
   );
 }

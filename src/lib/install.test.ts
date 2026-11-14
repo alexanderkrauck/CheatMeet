@@ -1,11 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const work = vi.hoisted(() => ({ release: true, capture: { state: "ready", busy: "", saved: true }, jobs: [] as { serverOwned?: boolean }[] }));
+vi.mock("./capture", () => ({ captureSnapshot: () => work.capture, canReleaseCapture: () => work.release }));
+vi.mock("./pipeline", () => ({ activeJobs: () => work.jobs }));
+
 const listeners = new Map<string, ((e: unknown) => void)[]>();
 const fire = (type: string, event: Record<string, unknown> = {}) =>
   (listeners.get(type) || []).forEach((fn) => fn({ preventDefault() {}, ...event }));
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   vi.resetModules();
+  work.capture = { state: "ready", busy: "", saved: true };
+  work.release = true;
+  work.jobs = [];
   listeners.clear();
   vi.stubGlobal("window", {
     addEventListener: (type: string, fn: (e: unknown) => void) =>
@@ -16,6 +24,63 @@ beforeEach(() => {
 });
 
 describe("install state", () => {
+  it("defers an activated update until newly started capture and browser work are durable", async () => {
+    const postMessage = vi.fn(), reload = vi.fn();
+    let controllerChanged = () => {};
+    vi.stubEnv("PROD", true);
+    vi.stubGlobal("window", { addEventListener: vi.fn(), matchMedia: () => ({ matches: false }), location: { reload } });
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0", serviceWorker: {
+      register: async () => ({ waiting: { postMessage }, addEventListener: vi.fn() }),
+      addEventListener: (_type: string, callback: () => void) => { controllerChanged = callback; },
+    } });
+    const { startInstallWatch, applyUpdate } = await import("./install");
+    startInstallWatch();
+    await Promise.resolve();
+    applyUpdate();
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    work.release = false;
+    controllerChanged();
+    expect(reload).not.toHaveBeenCalled();
+    work.release = true;
+    work.jobs = [{ serverOwned: false }];
+    applyUpdate();
+    expect(reload).not.toHaveBeenCalled();
+    work.jobs = [{ serverOwned: true }];
+    applyUpdate();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(postMessage).toHaveBeenCalledTimes(1);
+  });
+  it("blocks reload when private capture state is unsafe despite an empty public snapshot", async () => {
+    const { canApplyUpdate } = await import("./install");
+    work.release = false;
+    expect(work.capture.state).toBe("ready");
+    expect(canApplyUpdate()).toBe(false);
+    work.release = true;
+    expect(canApplyUpdate()).toBe(true);
+  });
+  it("does not reload a recording or browser upload, but allows an acknowledged server job", async () => {
+    const postMessage = vi.fn();
+    vi.stubEnv("PROD", true);
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0", serviceWorker: {
+      register: async () => ({ waiting: { postMessage }, addEventListener: vi.fn() }),
+      addEventListener: vi.fn(),
+    } });
+    const { startInstallWatch, applyUpdate } = await import("./install");
+    startInstallWatch();
+    await Promise.resolve();
+    work.capture.state = "recording";
+    work.release = false;
+    applyUpdate();
+    expect(postMessage).not.toHaveBeenCalled();
+    work.capture.state = "ready";
+    work.release = true;
+    work.jobs = [{ serverOwned: false }];
+    applyUpdate();
+    expect(postMessage).not.toHaveBeenCalled();
+    work.jobs = [{ serverOwned: true }];
+    applyUpdate();
+    expect(postMessage).toHaveBeenCalledWith({ type: "SKIP_WAITING" });
+  });
   it("captures the install prompt and notifies subscribers", async () => {
     const { startInstallWatch, installState, subscribeInstall } = await import("./install");
     const seen = vi.fn();

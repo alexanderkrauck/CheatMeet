@@ -1,5 +1,6 @@
 import { MAX_FILE_BYTES, AUDIO_MIME_TYPES } from "../../shared/analysis";
 import {
+  assembleConsentText,
   buildConsentRecord,
   decisionFacts,
   type ConsentDecision,
@@ -91,10 +92,17 @@ const blank = (owner: string): CaptureSnapshot => ({
  * the tab, so callers keep a beforeunload guard.
  */
 let snapshot: CaptureSnapshot = blank("");
+let hiddenSnapshot = blank("");
+let changingOwner = false;
+let nextCaptureOwner = "";
+let ownerTransition: Promise<void> = Promise.resolve();
+/** A failed owner checkpoint must not be replaced by an older disk draft. */
+let retainedOwnerTake = false;
 const listeners = new Set<() => void>();
 
 function emit(patch: Partial<CaptureSnapshot>) {
   snapshot = { ...snapshot, ...patch };
+  syncUnloadProtection();
   for (const listener of listeners) listener();
 }
 
@@ -104,20 +112,27 @@ export function subscribeCapture(onChange: () => void) {
     listeners.delete(onChange);
   };
 }
-export const captureSnapshot = () => snapshot;
+export const captureSnapshot = () => {
+  const owner = auth.currentUser?.uid || "";
+  if (!changingOwner && snapshot.owner === owner) return snapshot;
+  // Stable useSyncExternalStore snapshot, never the foreign owner's draft.
+  if (hiddenSnapshot.owner !== owner) hiddenSnapshot = blank(owner);
+  return hiddenSnapshot;
+};
 export const isCapturing = () =>
-  snapshot.state === "recording" || snapshot.state === "paused";
+  !ownerChanged() && (snapshot.state === "recording" || snapshot.state === "paused");
 /**
  * Devices are open — armed or recording. Deliberately separate from
  * isCapturing(): the bar, the attention queue and the recorder screen all mean
  * "audio is being recorded" by that one, and an armed session records nothing.
  */
 export const hasOpenDevices = () =>
-  snapshot.state === "armed" || isCapturing();
+  !ownerChanged() && (snapshot.state === "armed" || isCapturing());
 
 // --- session internals -----------------------------------------------------
 
 let recorder: MediaRecorder | null = null;
+let recorderDone: Promise<void> = Promise.resolve();
 let sources: { mic?: MediaStream; system?: MediaStream; merged?: MergedAudio } =
   {};
 let captureTracks: MediaStreamTrack[] = [];
@@ -166,6 +181,8 @@ let queue: Promise<void> = Promise.resolve();
 let revision = 0;
 let pendingSnapshot: Draft | null = null;
 let busyOperation = false;
+/** Invalidates pending device/consent continuations, not same-owner navigation. */
+let captureAttempt = 0;
 /** What arm asked for, so consent resolves against the sources still alive. */
 let armedSources: {
   requested: AudioSourcePreference;
@@ -173,7 +190,31 @@ let armedSources: {
 } | null = null;
 
 const elapsed = () => clock.read();
-const ownerChanged = () => auth.currentUser?.uid !== snapshot.owner;
+const ownerChanged = () => changingOwner || !snapshot.owner || auth.currentUser?.uid !== snapshot.owner;
+
+/** Reload safety is tab-private: a foreign owner's hidden take still matters. */
+export function canReleaseCapture(): boolean {
+  return !changingOwner && !busyOperation && !snapshot.busy &&
+    !["armed", "recording", "paused"].includes(snapshot.state) &&
+    (!recorder || recorder.state === "inactive") && !live &&
+    pendingChunks.size === 0 && !pendingSnapshot &&
+    (snapshot.state !== "review" || snapshot.saved);
+}
+
+let unloadTarget: Window | null = null;
+function guardUnload(event: BeforeUnloadEvent) {
+  if (canReleaseCapture()) return;
+  event.preventDefault();
+  event.returnValue = "";
+}
+/** Device lifecycle can end before a failed checkpoint; memory still needs protection. */
+function syncUnloadProtection() {
+  const target = typeof window !== "undefined" && !canReleaseCapture() ? window : null;
+  if (target === unloadTarget) return;
+  unloadTarget?.removeEventListener("beforeunload", guardUnload);
+  unloadTarget = target;
+  unloadTarget?.addEventListener("beforeunload", guardUnload);
+}
 
 /**
  * The user can stop sharing their screen at any time — after a demo, or by
@@ -296,6 +337,9 @@ function persist(draft: Draft) {
 export const captureQueue = () => queue;
 
 async function acquireWakeLock() {
+  const attempt = captureAttempt;
+  const owner = snapshot.owner;
+  const current = () => attempt === captureAttempt && snapshot.owner === owner && !ownerChanged();
   if (wakeLock && !wakeLock.released) return;
   if (!navigator.wakeLock || document.visibilityState !== "visible") {
     emit({ wakeLock: "unavailable" });
@@ -303,15 +347,68 @@ async function acquireWakeLock() {
   }
   emit({ wakeLock: "requesting" });
   try {
-    wakeLock = await navigator.wakeLock.request("screen");
-    wakeLock.addEventListener("release", () => emit({ wakeLock: "unavailable" }));
+    const lock = await navigator.wakeLock.request("screen");
+    if (!current()) { void lock.release().catch(() => {}); return; }
+    wakeLock = lock;
+    wakeLock.addEventListener("release", () => {
+      if (current() && wakeLock === lock) emit({ wakeLock: "unavailable" });
+    });
     emit({ wakeLock: "active" });
   } catch {
-    emit({ wakeLock: "unavailable" });
+    if (current()) emit({ wakeLock: "unavailable" });
   }
 }
 
 // --- actions ---------------------------------------------------------------
+
+/** Fence synchronously; drain/checkpoint the old namespace before adopting another. */
+export function handleCaptureOwnerChange(nextOwner: string | null): Promise<void> {
+  nextCaptureOwner = nextOwner || "";
+  if (changingOwner) return ownerTransition;
+  if (snapshot.owner === nextCaptureOwner && !retainedOwnerTake) return Promise.resolve();
+  changingOwner = true;
+  ++captureAttempt;
+  busyOperation = true;
+  emit({});
+  const rec = recorder;
+  if (rec && rec.state !== "inactive") rec.stop();
+  releaseCapture();
+  const sharing = endShare();
+  const transcription = drainTranscription();
+  ownerTransition = (async () => {
+    try {
+      await recorderDone;
+      await Promise.all([sharing, transcription]);
+      // Failed storage retains the old draft in memory for checkpoint retry.
+      await queueWrite();
+      recorder = null;
+      recorderDone = Promise.resolve();
+      live = null;
+      transcriptionDone = null;
+      if (!retainedOwnerTake || snapshot.owner !== nextCaptureOwner) {
+        chunks = [];
+        pendingChunks.clear();
+        pendingSnapshot = null;
+        chunkSequence = 0;
+        clock.reset();
+        retainedOwnerTake = false;
+        snapshot = blank(nextCaptureOwner);
+      }
+    } catch (error) {
+      retainedOwnerTake = true;
+      // Devices/providers have stopped even if the journal is unavailable.
+      // Returning to this owner exposes the retained take, never a fake live session.
+      emit({ state: snapshot.draft.audio || snapshot.draft.report.transcription ? "review" : "ready",
+        busy: "", sources: [], wakeLock: "idle", liveConnection: undefined });
+      throw error;
+    } finally {
+      changingOwner = false;
+      busyOperation = false;
+      emit({});
+    }
+  })();
+  return ownerTransition;
+}
 
 /** Adopts a stored draft, or starts a new one. Never disturbs a live session. */
 export async function openDraft(
@@ -319,9 +416,14 @@ export async function openDraft(
   id: string | undefined,
   startNew: boolean,
 ): Promise<string> {
+  if (auth.currentUser?.uid !== owner) throw new Error("Das angemeldete Konto hat sich geändert.");
+  if (changingOwner || snapshot.owner !== owner) await handleCaptureOwnerChange(owner);
+  if (auth.currentUser?.uid !== owner) throw new Error("Das angemeldete Konto hat sich geändert.");
   if (hasOpenDevices()) return snapshot.draft.report.id;
-  if (snapshot.owner !== owner) snapshot = blank(owner);
+  if (retainedOwnerTake) return snapshot.draft.report.id;
+  const attempt = captureAttempt;
   const stored = startNew ? undefined : await getDraft(owner, id);
+  if (ownerChanged() || attempt !== captureAttempt) throw new Error("Das angemeldete Konto oder die Aufnahme hat sich geändert.");
   if (!stored) {
     if (startNew || snapshot.state === "review") snapshot = blank(owner);
     emit({ owner });
@@ -345,11 +447,13 @@ export async function openDraft(
   return stored.report.id;
 }
 
-export const setCaptureTitle = (title: string) =>
+export const setCaptureTitle = (title: string) => {
+  if (ownerChanged()) return;
   void persist({
     ...snapshot.draft,
     report: { ...snapshot.draft.report, title, projectName: title },
   }).catch(() => {});
+};
 
 /**
  * Ties this recording to a planned meeting. The title follows unless the user
@@ -381,9 +485,9 @@ export function setCaptureHome(home:MicrosoftHome|null) {
   const selected=home?microsoftHome(home):undefined;
   emit({draft:{...snapshot.draft,report:{...snapshot.draft.report,home:selected}}});
 }
-export const setCaptureError = (error: string) => emit({ error });
-export const setCaptureBusy = (busy: string) => emit({ busy });
-export const setCaptureHint = (hint: string) => emit({ hint });
+export const setCaptureError = (error: string) => { if (!ownerChanged()) emit({ error }); };
+export const setCaptureBusy = (busy: string) => { if (!ownerChanged()) emit({ busy }); };
+export const setCaptureHint = (hint: string) => { if (!ownerChanged()) emit({ hint }); };
 export const setCaptureSpeakerName = (speaker: string, name: string) => {
   if (ownerChanged() || !snapshot.draft.report.speech) return;
   const speech = renameSpeaker(snapshot.draft.report.speech, speaker, name);
@@ -411,7 +515,7 @@ export const setCaptureRetranscribe = (enabled: boolean) => {
   void persist({ ...snapshot.draft, retranscribe: enabled }).catch(() => {});
 };
 export const setCaptureLanguages = (languages: string[]) => {
-  if (isCapturing() || !validLanguages(languages)) return;
+  if (ownerChanged() || isCapturing() || !validLanguages(languages)) return;
   void persist({ ...snapshot.draft, report: { ...snapshot.draft.report,
     speech: { provider: "assemblyai", phase: "pending", turns: [], speakerNames: {}, ...snapshot.draft.report.speech, languages } } }).catch(() => {});
 };
@@ -430,13 +534,17 @@ export async function armCapture(
   verify: () => Promise<void>,
   audioSources: AudioSourcePreference = "mic+system",
 ) {
-  if (busyOperation || hasOpenDevices()) return;
+  if (ownerChanged() || busyOperation || hasOpenDevices()) return;
   busyOperation = true;
+  const attempt = ++captureAttempt;
+  const reportId = snapshot.draft.report.id;
   // A previous attempt may have left a dead stream in the device bag, and
   // beginRecording deliberately reads that bag rather than what arm saw.
   releaseCapture();
   emit({ busy: "Aufnahme vorbereiten …", error: "", warning: "", localStartOffered: false, sources: [] });
   const captureOwner = snapshot.owner;
+  const current = () => attempt === captureAttempt && snapshot.owner === captureOwner &&
+    snapshot.draft.report.id === reportId && !ownerChanged();
   let share: Promise<MediaStream | undefined> | undefined;
   // Request display capture during the actual click, before Drive/mic awaits
   // consume transient user activation. Keep its rejection handled immediately.
@@ -444,7 +552,7 @@ export async function armCapture(
     try {
       share = navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
         .then(stream => {
-          if (auth.currentUser?.uid !== captureOwner) { stream.getTracks().forEach(t => t.stop()); return undefined; }
+          if (!current()) { stream.getTracks().forEach(t => t.stop()); return undefined; }
           sources.system = stream;
           return stream;
         }, () => undefined);
@@ -456,11 +564,11 @@ export async function armCapture(
       try {
         await verify();
       } catch (e) {
-        emit({ localStartOffered: true });
+        if (current()) emit({ localStartOffered: true });
         throw e;
       }
     }
-    if (ownerChanged()) { releaseCapture(); return; }
+    if (!current()) return;
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder)
       throw new Error(
         "Aufnahme wird in diesem Browser nicht unterstützt. Bitte eine Audiodatei importieren oder einen aktuellen Browser über HTTPS verwenden.",
@@ -468,8 +576,8 @@ export async function armCapture(
 
     emit({ busy: "Mikrofon vorbereiten …" });
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (!current()) { mic.getTracks().forEach(track => track.stop()); return; }
     sources.mic = mic;
-    if (ownerChanged()) { releaseCapture(); return; }
 
     // Browsers only expose system audio through a display-capture prompt, and
     // only alongside a video track. Declining it is a normal outcome. A user
@@ -483,7 +591,7 @@ export async function armCapture(
         busy: "Systemaudio freigeben … Teile den Tab oder Bildschirm und aktiviere „Audio teilen“.",
       });
       system = await share;
-      if (ownerChanged()) { releaseCapture(); return; }
+      if (!current()) return;
     }
     // One resolution feeds the warning, the stored source list and the consent
     // notice, so the notice cannot claim a source the recorder never got.
@@ -507,6 +615,7 @@ export async function armCapture(
     void acquireWakeLock();
     emit({ state: "armed", sources: resolved.sources });
   } catch (e) {
+    if (attempt !== captureAttempt) return;
     releaseCapture();
     recorder = null;
     emit({
@@ -516,12 +625,14 @@ export async function armCapture(
           : errorMessage(e),
     });
   } finally {
-    if (snapshot.state !== "armed") {
+    if (!current() || snapshot.state !== "armed") {
       // A Drive/mic failure can happen while the native picker is still open.
       void share?.then(stream => stream?.getTracks().forEach(t => t.stop()));
     }
-    busyOperation = false;
-    emit({ busy: "" });
+    if (attempt === captureAttempt) {
+      busyOperation = false;
+      emit({ busy: "" });
+    }
   }
 }
 
@@ -543,6 +654,14 @@ export async function beginRecording(decision: ConsentDecision | null) {
     return;
   }
   busyOperation = true;
+  const attempt = captureAttempt;
+  const captureOwner = snapshot.owner;
+  const reportId = snapshot.draft.report.id;
+  const user = auth.currentUser;
+  const sameSession = () => attempt === captureAttempt && snapshot.owner === captureOwner &&
+    snapshot.draft.report.id === reportId && !ownerChanged();
+  const current = () => sameSession() && snapshot.state === "armed";
+  emit({ busy: "Einwilligung sichern …", error: "" });
   try {
     if (ownerChanged()) { releaseCapture(); return; }
     if(decision && (decision.storageService || "Google Drive") !== (snapshot.draft.report.home ? "Microsoft OneDrive" : "Google Drive")) throw new Error("Der Speicherort stimmt nicht mit dem Einwilligungshinweis überein. Bitte die Aufnahme neu vorbereiten.");
@@ -564,6 +683,8 @@ export async function beginRecording(decision: ConsentDecision | null) {
           obtainedAt: new Date().toISOString(),
         })
       : undefined;
+    if (decision && consent?.text !== assembleConsentText(decisionFacts(decision, resolved.sources), decision.parts))
+      throw new Error("Der Einwilligungshinweis hat sich geändert. Bitte die Aufnahme neu vorbereiten und den aktuellen Hinweis erneut bestätigen.");
     // The mixed stream is the durable recording; transcription reads each
     // source separately so speech is never lost under what is playing. Built
     // here rather than at arm: a share ended while the notice was being read
@@ -587,6 +708,12 @@ export async function beginRecording(decision: ConsentDecision | null) {
       report: { ...snapshot.draft.report, date: new Date().toISOString(), captureState: "recording", transcriptionOrigin: "live", captureSources: resolved.sources, consent },
     });
 
+    // Cancel/sign-out can happen during the durable consent write. Neither
+    // providers nor the recorder may start from an obsolete preparation.
+    if (!current()) return;
+    if (mic.getAudioTracks().some(track => track.readyState === "ended") || sources.system !== system)
+      throw new Error("Die Audioquellen haben sich geändert. Bitte die Aufnahme neu vorbereiten und den Hinweis erneut bestätigen.");
+
     const systemAudio =
       system && system.getAudioTracks().length
         ? new MediaStream(system.getAudioTracks())
@@ -597,8 +724,13 @@ export async function beginRecording(decision: ConsentDecision | null) {
         reportId: snapshot.draft.report.id,
         startedAt: new Date().toISOString(),
         languages: snapshot.draft.report.speech?.languages || defaultLanguages(),
-        getToken: async () => auth.currentUser?.getIdToken(),
-        onStatus: (liveShare) => emit({ liveShare }),
+        isOwnerCurrent: sameSession,
+        getToken: async () => {
+          if (!sameSession()) return undefined;
+          const token = await user?.getIdToken();
+          return sameSession() ? token : undefined;
+        },
+        onStatus: (liveShare) => { if (sameSession()) emit({ liveShare }); },
       });
     } catch {
       share = null;
@@ -607,8 +739,8 @@ export async function beginRecording(decision: ConsentDecision | null) {
       { mic: new MediaStream(mic.getAudioTracks()), system: systemAudio },
       elapsed,
       (speech) => {
-        if (ownerChanged()) {
-          void endShare();
+        if (!sameSession()) {
+          if (ownerChanged()) void endShare();
           return;
         }
         const aliases = snapshot.draft.report.speech?.speakerAliases;
@@ -630,6 +762,7 @@ export async function beginRecording(decision: ConsentDecision | null) {
         pendingSnapshot = chunks.length
           ? { ...snapshot.draft, audio: undefined }
           : snapshot.draft;
+        syncUnloadProtection();
         // Checkpoint with the recorder's 10-second journal tick. Partial
         // events can arrive many times per second; do not queue a full
         // IndexedDB rewrite for every word. Pause/finish also flush this.
@@ -641,7 +774,7 @@ export async function beginRecording(decision: ConsentDecision | null) {
     );
 
     rec.ondataavailable = (event) => {
-      if (!event.data.size) return;
+      if (rec !== recorder || !event.data.size) return;
       chunks.push(event.data);
       const audio = new Blob(chunks, {
         type: rec.mimeType || event.data.type,
@@ -675,6 +808,7 @@ export async function beginRecording(decision: ConsentDecision | null) {
       }
     };
     rec.onstop = () => {
+      if (rec !== recorder) return;
       const finalDuration = clock.pause();
       releaseCapture();
       if (snapshot.draft.audio)
@@ -689,7 +823,12 @@ export async function beginRecording(decision: ConsentDecision | null) {
       emit({ durationMs: finalDuration, state: "review" });
     };
 
+    let stopped!: () => void;
+    const done = new Promise<void>(resolve => { stopped = resolve; });
+    const onstop = rec.onstop;
+    rec.onstop = event => { try { onstop?.call(rec, event); } finally { stopped(); } };
     rec.start(10_000);
+    recorderDone = done;
     clock.resume();
     stopLifecycle = observeRecordingLifecycle({
       recorder: rec,
@@ -728,17 +867,29 @@ export async function beginRecording(decision: ConsentDecision | null) {
     }, 500);
     emit({ state: "recording", durationMs: 0, sources: resolved.sources, liveConnection: undefined });
   } catch (e) {
+    if (attempt !== captureAttempt) return;
     releaseCapture();
     recorder = null;
-    emit({ error: errorMessage(e) });
+    emit({ state: "ready", error: errorMessage(e) });
   } finally {
-    busyOperation = false;
-    emit({ busy: "" });
+    if (attempt === captureAttempt) {
+      busyOperation = false;
+      emit({ busy: "" });
+    }
   }
 }
 
 /** Closes the devices without ever having recorded anything. */
 export function disarmCapture() {
+  if (ownerChanged()) return;
+  ++captureAttempt;
+  busyOperation = false;
+  if (recorder && recorder.state !== "inactive") {
+    void endShare();
+    stopCapture();
+    releaseCapture();
+    return;
+  }
   releaseCapture();
   recorder = null;
   live = null;
@@ -748,11 +899,12 @@ export function disarmCapture() {
 
 /** Rebuilds the live transcription connections; the recording itself is untouched. */
 export function restartLive() {
-  if (recorder?.state !== "recording") return;
+  if (ownerChanged() || recorder?.state !== "recording") return;
   void live?.restart?.();
 }
 
 export function pauseCapture() {
+  if (ownerChanged()) return;
   const rec = recorder;
   if (!rec) return;
   if (rec.state === "recording") {
@@ -797,14 +949,14 @@ export function pauseCapture() {
  * Analysis must not run against a transcript that stops seconds before the
  * meeting did, so this resolves once every queued segment has been applied.
  */
-export function finishTranscription(): Promise<string> {
+function drainTranscription(): Promise<string> {
   const pipeline = live;
   if (!pipeline)
     return Promise.resolve(snapshot.draft.report.transcription || "");
   const reportId = snapshot.draft.report.id;
   const captureOwner = snapshot.owner;
   transcriptionDone ||= pipeline.finish().then((transcription) => {
-    if (snapshot.owner !== captureOwner || snapshot.draft.report.id !== reportId) return transcription;
+    if (live !== pipeline || snapshot.owner !== captureOwner || snapshot.draft.report.id !== reportId) return transcription;
     live = null;
     // The provider has drained, so the share now holds the final words. Not awaited:
     // ending is bounded but must never hold up the review screen.
@@ -829,7 +981,15 @@ export function finishTranscription(): Promise<string> {
   return transcriptionDone;
 }
 
+export function finishTranscription(): Promise<string> {
+  if (ownerChanged()) return Promise.resolve("");
+  const owner = snapshot.owner, reportId = snapshot.draft.report.id;
+  return drainTranscription().then(text =>
+    !ownerChanged() && snapshot.owner === owner && snapshot.draft.report.id === reportId ? text : "");
+}
+
 export function stopCapture() {
+  if (ownerChanged()) return;
   const rec = recorder;
   if (!rec || rec.state === "inactive") return;
   const time = clock.pause();
@@ -839,7 +999,8 @@ export function stopCapture() {
 }
 
 export async function importAudio(file: File) {
-  if (busyOperation || hasOpenDevices()) return;
+  if (ownerChanged() || busyOperation || hasOpenDevices()) return;
+  const owner = snapshot.owner, reportId = snapshot.draft.report.id, attempt = captureAttempt;
   if (
     file.size > MAX_FILE_BYTES ||
     !file.size ||
@@ -852,6 +1013,7 @@ export async function importAudio(file: File) {
     return;
   }
   await queue.catch(() => {});
+  if (ownerChanged() || snapshot.owner !== owner || snapshot.draft.report.id !== reportId || attempt !== captureAttempt) return;
   // The import moves to a fresh report id, so the record it leaves behind is
   // orphaned — it would show up forever as an unfinished recording with no
   // audio, and its chunk journal would keep the megabytes.
@@ -890,8 +1052,9 @@ export async function importAudio(file: File) {
       calendarSyncedAt: undefined, calendarError: undefined, transcription: "", summary: "", todos: [], takeaways: [], status: "pending", durationMs: 0,
       speech: { provider: "assemblyai", phase: "pending", languages: snapshot.draft.report.speech?.languages || defaultLanguages(), turns: [], speakerNames: {} } },
   });
+  if (ownerChanged() || snapshot.owner !== owner || attempt !== captureAttempt) return;
   if (previousId && previousId !== snapshot.draft.report.id)
-    await deleteDraft(snapshot.owner, previousId).catch(() => {});
+    await deleteDraft(owner, previousId).catch(() => {});
   return snapshot.draft.report.id;
 }
 
@@ -902,9 +1065,18 @@ export async function importAudio(file: File) {
  * the recorder after asking to discard.
  */
 export async function discardCapture() {
+  if (ownerChanged()) return;
+  const attempt = ++captureAttempt;
+  const owner = snapshot.owner, reportId = snapshot.draft.report.id;
+  if (recorder && recorder.state !== "inactive") recorder.stop();
   releaseCapture();
+  void endShare();
+  await drainTranscription();
+  await recorderDone;
   await queue.catch(() => {});
-  await deleteDraft(snapshot.owner, snapshot.draft.report.id);
+  if (ownerChanged() || snapshot.owner !== owner || snapshot.draft.report.id !== reportId || attempt !== captureAttempt) return;
+  await deleteDraft(owner, reportId);
+  if (ownerChanged() || snapshot.owner !== owner || snapshot.draft.report.id !== reportId || attempt !== captureAttempt) return;
   chunks = [];
   pendingChunks.clear();
   pendingSnapshot = null;
@@ -914,11 +1086,14 @@ export async function discardCapture() {
   void endShare();
   transcriptionDone = null;
   snapshot = blank(snapshot.owner);
+  retainedOwnerTake = false;
   emit({});
 }
 
 /** Clears the session after its draft has been handed to the save pipeline. */
 export function releaseAfterHandoff() {
+  if (ownerChanged()) return;
+  ++captureAttempt;
   releaseCapture();
   chunks = [];
   pendingChunks.clear();
@@ -929,5 +1104,6 @@ export function releaseAfterHandoff() {
   void endShare();
   transcriptionDone = null;
   snapshot = blank(snapshot.owner);
+  retainedOwnerTake = false;
   emit({});
 }

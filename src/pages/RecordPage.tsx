@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   Check,
@@ -18,7 +18,6 @@ import {
   CloudUpload,
   Volume2,
   MonitorUp,
-  Settings2,
 } from "lucide-react";
 import { AudioPreview } from "../components/UI";
 import LiveMeeting from "../components/LiveMeeting";
@@ -29,6 +28,7 @@ import { draftConsentNotice } from "../lib/consentDraft";
 import { consentStepEnabled, savedRetention } from "../lib/meetingDefaults";
 import {
   assembleConsentText,
+  acceptConsentParts,
   decisionFacts,
   everyoneAgreed,
   type ConsentDecision,
@@ -42,10 +42,11 @@ import {
 import "./record.css";
 import { putLocal } from "../lib/local";
 import { uid } from "../lib/reports";
+import { auth } from "../lib/firebase";
 import { DEFAULT_FOLDER_NAME, verifyDriveAccess } from "../lib/drive";
 import PeopleDatalist from "../components/PeopleDatalist";
 import CalendarMatch from "../components/CalendarMatch";
-import { getEvent } from "../lib/calendar";
+import { getEvent, type CalendarEvent, type CalendarSelection } from "../lib/calendar";
 import {
   errorMessage,
   connectGoogle,
@@ -57,7 +58,6 @@ import { audioExtension } from "../../shared/analysis";
 import MeetingLanguages, {
   languageLabel,
 } from "../components/MeetingLanguages";
-import DriveSettings from "../components/DriveSettings";
 import MicrosoftSettings from "../components/MicrosoftSettings";
 import { savedMeetingHome, loadMeetingHome } from "../lib/providerSettings";
 import {
@@ -109,6 +109,18 @@ export default function RecordPage() {
   // Arriving from an upcoming meeting: the recording is tied to that event
   // before a single second is captured.
   const requestedEvent = useRef(searchParams.get("event")).current;
+  const requestedBinding = useRef<CalendarSelection>({
+    provider: searchParams.get("provider") === "microsoft" ? "microsoft" : "google",
+    connectionId: searchParams.get("connection") || undefined,
+    calendarId: searchParams.get("calendar") || "primary",
+  }).current;
+  const [eventUnresolved, setEventUnresolved] = useState(!!requestedEvent);
+  const unresolvedEvent = useRef(!!requestedEvent);
+  const [eventError, setEventError] = useState("");
+  const [eventLoading, setEventLoading] = useState(false);
+  const [selectedEvent, setSelectedEvent] = useState<CalendarEvent>();
+  const eventAttempt = useRef(0);
+  const eventDraft = useRef("");
   const [accountId] = useState(uid);
   // The session lives outside this component so that leaving the screen does
   // not end the meeting.
@@ -148,30 +160,46 @@ export default function RecordPage() {
   // this, so the normal case costs no typing at all.
   const [invited, setInvited] = useState<string[]>([]);
   const [consentParts, setConsentParts] = useState<ConsentParts | null>(null);
+  const partsFactsKey = useRef("");
+  const [approvalFactsKey, setApprovalFactsKey] = useState("");
   const [consentChat, setConsentChat] = useState<string[]>([]);
+  const [showConsent, setShowConsent] = useState(consentStepEnabled);
   const [drafting, setDrafting] = useState(false);
   const [draftError, setDraftError] = useState("");
   const draftRequest = useRef(0);
+  const pageActive = useRef(true);
+  const preparationRequest = useRef(0);
+  const preparingReport = useRef<string | null>(null);
 
-  // Armed is page-local: it holds open devices and nothing else, and no other
-  // surface can stop them — the recording bar deliberately ignores armed.
-  useEffect(
-    () => () => {
-      if (captureSnapshot().state === "armed") disarmCapture();
-    },
-    [],
-  );
+  // Preparation (including pending permissions) is page-local. Only an already
+  // recording/paused session survives navigation through the global bar.
+  useEffect(() => {
+    pageActive.current = true;
+    return () => {
+      pageActive.current = false;
+      preparationRequest.current++;
+      const current = captureSnapshot();
+      if (current.owner === accountId && (current.state === "armed" ||
+          (current.state === "ready" && preparingReport.current === current.draft.report.id)))
+        disarmCapture(); // Invalidates captureAttempt and stops late device results.
+      preparingReport.current = null;
+    };
+  }, []);
 
   const [loading, setLoading] = useState(true);
   const [sheet, setSheet] = useState<
     | "settings"
     | "options"
     | "leave"
+    | "discard"
     | "sources"
     | "languages"
     | "share-explainer"
     | null
   >(null);
+  const [discarding, setDiscarding] = useState(false);
+  const [discardError, setDiscardError] = useState("");
+  const discardTarget = useRef<{ id: string; title: string } | null>(null);
   const [online, setOnline] = useState(navigator.onLine);
   const [folder, setFolder] = useState(savedDriveFolder);
   const [selectedHome, setSelectedHome] = useState(savedMeetingHome);
@@ -221,6 +249,7 @@ export default function RecordPage() {
   const audioInput = useRef<HTMLInputElement>(null);
   const saveButton = useRef<HTMLButtonElement>(null);
   const recording = state === "recording" || state === "paused";
+  const ownsSession = () => auth.currentUser?.uid === accountId && captureSnapshot().owner === accountId;
   const armed = state === "armed";
   // The readiness label must never be stricter than the gate the action
   // itself applies: a 10-minute preflight against ensureDriveToken's 5-minute
@@ -271,49 +300,109 @@ export default function RecordPage() {
     let cancelled = false;
     openDraft(accountId, requestedDraft || undefined, startNew)
       .then(async (id) => {
-        if (cancelled) return;
+        if (cancelled || !ownsSession()) return;
         // Only for a session this navigation actually started: arriving here
         // while another meeting is recording must leave that one alone.
-        if (requestedEvent && !isCapturing()) {
-          // A failed lookup must not block the recording; the picker on this
-          // screen is still there to link it by hand.
-          const event = await getEvent(
-            searchParams.get("calendar") || "primary",
-            requestedEvent,
-            searchParams.get("provider") === "microsoft"
-              ? "microsoft"
-              : "google",
-            searchParams.get("connection") || undefined,
-          ).catch(() => null);
-          if (!cancelled && event && !isCapturing()) {
-            setCaptureEvent(event);
-            setInvited(event.attendees);
-          }
+        if (requestedEvent && !isCapturing() && captureSnapshot().state !== "armed") {
+          eventDraft.current = id;
+          // Keep the complete requested destination through reload and failed lookups.
+          const pending = new URLSearchParams(searchParams);
+          pending.delete("new");
+          pending.set("draft", id);
+          navigate(`/record?${pending}`, { replace: true });
+          await loadRequestedEvent(id);
+        } else {
+          unresolvedEvent.current = false;
+          setEventUnresolved(false);
+          navigate(`/record?draft=${id}`, { replace: true });
         }
-        if (!cancelled) navigate(`/record?draft=${id}`, { replace: true });
       })
       .catch((e) => !cancelled && setCaptureError(errorMessage(e)))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
+      eventAttempt.current++;
     };
   }, [accountId, requestedDraft, startNew, requestedEvent, navigate]);
 
+  async function loadRequestedEvent(id: string) {
+    if (!requestedEvent || !unresolvedEvent.current || !ownsSession() ||
+        captureSnapshot().draft.report.id !== id || isCapturing() || captureSnapshot().state === "armed") return;
+    const attempt = ++eventAttempt.current;
+    const current = () => attempt === eventAttempt.current && unresolvedEvent.current &&
+      ownsSession() && captureSnapshot().draft.report.id === id &&
+      !isCapturing() && captureSnapshot().state !== "armed";
+    setEventLoading(true);
+    setEventError("");
+    try {
+      const event = await getEvent(requestedBinding.calendarId || "primary", requestedEvent,
+        requestedBinding.provider, requestedBinding.connectionId);
+      if (!current()) return;
+      if (!event) throw new Error("Der gewünschte Termin ist nicht mehr verfügbar.");
+      setCaptureEvent(event);
+      setSelectedEvent(event);
+      setInvited(event.attendees);
+      resetNotice();
+      unresolvedEvent.current = false;
+      setEventUnresolved(false);
+      navigate(`/record?draft=${id}`, { replace: true });
+    } catch (cause) {
+      if (current()) setEventError(errorMessage(cause));
+    } finally {
+      if (attempt === eventAttempt.current) setEventLoading(false);
+    }
+  }
+
+  function continueWithoutEvent() {
+    if (!ownsSession() || captureSnapshot().draft.report.id !== eventDraft.current ||
+        isCapturing() || captureSnapshot().state === "armed") return;
+    eventAttempt.current++;
+    unresolvedEvent.current = false;
+    setEventUnresolved(false);
+    setEventLoading(false);
+    setEventError("");
+    setCaptureEvent(null);
+    setSelectedEvent(undefined);
+    setInvited([]);
+    resetNotice();
+    navigate(`/record?draft=${eventDraft.current}`, { replace: true });
+  }
+
+  const calendarBinding: CalendarSelection | undefined = draft.report.calendarEventId
+      ? { provider: draft.report.calendarProvider || "google",
+          connectionId: draft.report.calendarConnectionId,
+          calendarId: draft.report.calendarId || "primary" }
+      : eventUnresolved ? requestedBinding : undefined;
+  const pickedEvent = selectedEvent?.id === draft.report.calendarEventId &&
+    (selectedEvent?.provider || "google") === calendarBinding?.provider &&
+    selectedEvent?.connectionId === calendarBinding?.connectionId &&
+    selectedEvent?.calendarId === calendarBinding?.calendarId ? selectedEvent : undefined;
+
+  function pickEvent(event: CalendarEvent | null) {
+    if (unresolvedEvent.current || !ownsSession() || isCapturing() || busy ||
+        captureSnapshot().draft.report.id !== draft.report.id) return;
+    setCaptureEvent(event);
+    setSelectedEvent(event || undefined);
+    setInvited(event?.attendees || []);
+    resetNotice();
+  }
+
   async function authorizeDrive() {
-    if (operation.current) return;
+    if (operation.current || !ownsSession()) return;
     operation.current = true;
     setCaptureError("");
     setCaptureBusy(`${storageName} freigeben …`);
     try {
       if (meetingHome) {
         await connectMicrosoft(false);
+        if (!ownsSession()) return;
         await ensureMicrosoftToken(meetingHome.connectionId);
       } else await verifyDriveAccess(await connectGoogle());
     } catch (e) {
-      setCaptureError(errorMessage(e));
+      if (ownsSession()) setCaptureError(errorMessage(e));
     } finally {
       operation.current = false;
-      setCaptureBusy("");
+      if (ownsSession()) setCaptureBusy("");
       refreshDriveSession((n) => n + 1);
     }
   }
@@ -331,10 +420,20 @@ export default function RecordPage() {
     decisionNow,
     liveSources.length ? liveSources : ["mic"],
   );
-  const consentText = assembleConsentText(consentFactsNow, consentParts);
+  const factsKey = JSON.stringify(consentFactsNow);
+  const latestFactsKey = useRef(factsKey);
+  latestFactsKey.current = factsKey;
+  const acceptedParts = acceptConsentParts(consentFactsNow, partsFactsKey.current === factsKey ? consentParts : null);
+  const consentText = assembleConsentText(consentFactsNow, acceptedParts);
+  useEffect(() => {
+    if (armed) resetNotice();
+  }, [factsKey]);
 
   async function refineNotice(instruction: string) {
+    if (!ownsSession()) return;
     const request = ++draftRequest.current;
+    const requestFacts = factsKey;
+    setApprovalFactsKey("");
     setConsentChat((lines) => [...lines, instruction]);
     setDrafting(true);
     setDraftError("");
@@ -343,7 +442,12 @@ export default function RecordPage() {
         ...consentChat,
         instruction,
       ]);
-      if (request === draftRequest.current) setConsentParts(parts);
+      if (ownsSession() && request === draftRequest.current && requestFacts === latestFactsKey.current) {
+        partsFactsKey.current = requestFacts;
+        setConsentParts(parts);
+        setApprovalFactsKey("");
+        setDecision(current => ({ ...current, participants: current.participants.map(p => ({ ...p, stance: "silent" })) }));
+      }
     } catch (e) {
       if (request === draftRequest.current) setDraftError(errorMessage(e));
     } finally {
@@ -353,6 +457,9 @@ export default function RecordPage() {
 
   function resetNotice() {
     draftRequest.current++;
+    partsFactsKey.current = "";
+    setApprovalFactsKey("");
+    setDecision(current => ({ ...current, participants: current.participants.map(p => ({ ...p, stance: "silent" })) }));
     setConsentParts(null);
     setConsentChat([]);
     setDraftError("");
@@ -360,14 +467,17 @@ export default function RecordPage() {
   }
 
   function consentGiven() {
-    void beginRecording({ ...decisionNow, parts: consentParts }).catch((e) =>
+    if (!pageActive.current || !ownsSession() || busy || drafting || approvalFactsKey !== factsKey || !everyoneAgreed(decision.participants)) return;
+    void beginRecording({ ...decisionNow, parts: acceptedParts }).catch((e) =>
       setCaptureError(errorMessage(e)),
     );
   }
 
   function cancelArmed() {
+    if (!ownsSession()) return;
     disarmCapture();
     resetNotice();
+    setDecision((current) => ({ ...current, participants: [] }));
   }
 
   // `sources` is always explicit, never read from the component's own state,
@@ -380,78 +490,88 @@ export default function RecordPage() {
     sources: AudioSourcePreference,
     sharingExplained = false,
   ) {
+    if (!pageActive.current || !ownsSession() || unresolvedEvent.current || preparingReport.current) return;
     if (!homeReady) {
       setCaptureError(
         "Bitte zuerst den Speicherort laden oder ausdrücklich im Speicherort-Menü wählen.",
       );
       return;
     }
-    setCaptureHome(selectedHome);
-    const verifyStorage = async () => {
-      const home = captureSnapshot().draft.report.home;
-      if (home) {
-        await ensureMicrosoftToken(home.connectionId);
-        await getOneDriveItem(home, home.rootId);
+    const request = ++preparationRequest.current;
+    const reportId = captureSnapshot().draft.report.id;
+    preparingReport.current = reportId;
+    const current = () => pageActive.current && request === preparationRequest.current &&
+      ownsSession() && captureSnapshot().draft.report.id === reportId;
+    try {
+      setCaptureHome(selectedHome);
+      const verifyStorage = async () => {
+        const home = captureSnapshot().draft.report.home;
+        if (home) {
+          await ensureMicrosoftToken(home.connectionId);
+          if (!current()) return;
+          await getOneDriveItem(home, home.rootId);
+          return;
+        }
+        const token = await ensureDriveToken();
+        if (!current()) return;
+        if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
+        await verifyDriveAccess(token);
+      };
+      // The explainer's confirmation click must reach getDisplayMedia without
+      // an intervening await (native browser activation requirement).
+      if (sharingExplained && sources === "mic+system") {
+        await armCapture(localOnly, verifyStorage, sources);
+        if (!current() || captureSnapshot().state !== "armed") return;
+        seedRoster();
+        await skipConsentStep();
         return;
       }
-      const token = await ensureDriveToken();
-      if (!token) throw new Error("Bitte zuerst Google Drive freigeben.");
-      await verifyDriveAccess(token);
-    };
-    // The explainer's confirmation click must reach getDisplayMedia without
-    // an intervening await (native browser activation requirement).
-    if (sharingExplained && sources === "mic+system") {
+      try {
+        // Signed in should already mean authorized; only prompt if that fails.
+        if (
+          !localOnly &&
+          navigator.onLine &&
+          !selectedHome &&
+          !(await ensureDriveToken())
+        ) {
+          if (!current()) return;
+          await authorizeDrive();
+          return;
+        }
+      } catch (e) {
+        // This runs from `void begin()`, so a rejection would vanish silently.
+        if (current()) setCaptureError(errorMessage(e));
+        return;
+      }
+      if (!current()) return;
+      // A cached Drive token can expire and then renew without a popup. Decide
+      // after renewal so this path still explains sharing before requesting it.
+      if (sources === "mic+system" && systemAudioAvailable && !sharingExplained) {
+        pendingLocalOnly.current = localOnly;
+        setSheet("share-explainer");
+        return;
+      }
       await armCapture(localOnly, verifyStorage, sources);
+      if (!current() || captureSnapshot().state !== "armed") return;
       seedRoster();
       await skipConsentStep();
-      return;
+    } finally {
+      if (request === preparationRequest.current) preparingReport.current = null;
     }
-    try {
-      // Signed in should already mean authorized; only prompt if that fails.
-      if (
-        !localOnly &&
-        navigator.onLine &&
-        !selectedHome &&
-        !(await ensureDriveToken())
-      ) {
-        await authorizeDrive();
-        return;
-      }
-    } catch (e) {
-      // This runs from `void begin()`, so a rejection would vanish silently.
-      setCaptureError(errorMessage(e));
-      return;
-    }
-    // A cached Drive token can expire and then renew without a popup. Decide
-    // after renewal so this path still explains sharing before requesting it.
-    if (sources === "mic+system" && systemAudioAvailable && !sharingExplained) {
-      pendingLocalOnly.current = localOnly;
-      setSheet("share-explainer");
-      return;
-    }
-    await armCapture(localOnly, verifyStorage, sources);
-    seedRoster();
-    await skipConsentStep();
   }
 
   /** The guest list is the roster; nobody should have to retype it. */
   function seedRoster() {
-    setDecision((current) =>
-      current.participants.length
-        ? current
-        : {
-            ...current,
-            participants: invited.map((name) => ({
-              name,
-              stance: "silent" as const,
-            })),
-          },
-    );
+    resetNotice();
+    setDecision((current) => ({
+      ...current,
+      participants: invited.map((name) => ({ name, stance: "silent" as const })),
+    }));
   }
 
   /** No notice means no record: the meeting documents no consent at all. */
   async function skipConsentStep() {
-    if (consentStepEnabled() || captureSnapshot().state !== "armed") return;
+    if (!pageActive.current || !ownsSession() || showConsent || captureSnapshot().state !== "armed") return;
     await beginRecording(null).catch((e) => setCaptureError(errorMessage(e)));
   }
 
@@ -466,13 +586,13 @@ export default function RecordPage() {
   }
 
   async function process(analyze: boolean) {
-    if (!draft.audio || operation.current) return;
+    if (!ownsSession() || unresolvedEvent.current || state !== "review" || !draft.audio || operation.current) return;
     operation.current = true;
     setCaptureError("");
     setCaptureBusy("Transkription abschließen …");
     try {
       await setCaptureProcessing(analyze);
-      if (uid() !== accountId) return;
+      if (!ownsSession()) return;
       // Renewing is a server call, never a popup.
       const token = draft.report.home
         ? (await ensureMicrosoftToken(draft.report.home.connectionId))
@@ -484,34 +604,34 @@ export default function RecordPage() {
           "Die Drive-Freigabe ist abgelaufen. Bitte zuerst Google Drive verbinden. Dein Entwurf bleibt erhalten.",
         );
       }
-      if (uid() !== accountId) return;
+      if (!ownsSession()) return;
       await finishTranscription().catch(() => {});
-      if (uid() !== accountId) return;
+      if (!ownsSession()) return;
 
       setCaptureBusy("Entwurf lokal sichern …");
       await captureQueue().catch(() => {});
-      if (uid() !== accountId) return;
+      if (!ownsSession()) return;
       const d = captureSnapshot().draft;
       d.report.title ||= `Meeting vom ${new Date(d.report.date).toLocaleDateString("de-AT")}`;
       d.report.status = analyze ? "analyzing" : d.report.status;
       // The report must be readable before its page opens; the rest of the
       // pipeline continues in the background.
       await putLocal(accountId, d.report);
-      if (uid() !== accountId) return;
+      if (!ownsSession()) return;
 
       void startProcessing({ owner: accountId, draft: d, token, analyze });
       releaseAfterHandoff();
       navigate(`/report/${d.report.id}`);
     } catch (e) {
-      setCaptureError(errorMessage(e));
+      if (ownsSession()) setCaptureError(errorMessage(e));
     } finally {
       operation.current = false;
-      setCaptureBusy("");
+      if (ownsSession()) setCaptureBusy("");
     }
   }
 
   function download() {
-    if (!draft.audio) return;
+    if (!ownsSession() || !draft.audio) return;
     const url = URL.createObjectURL(draft.audio);
     const a = document.createElement("a");
     a.href = url;
@@ -520,8 +640,46 @@ export default function RecordPage() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  async function confirmDiscard() {
+    if (operation.current) return;
+    const target = discardTarget.current;
+    const current = captureSnapshot();
+    if (!target || !ownsSession() || current.owner !== accountId ||
+        current.draft.report.id !== target.id || isCapturing()) {
+      setDiscardError("Der Entwurf hat sich geändert. Bitte schließen und erneut auswählen.");
+      return;
+    }
+    operation.current = true;
+    setDiscarding(true);
+    setDiscardError("");
+    try {
+      await discardCapture();
+      if (!ownsSession()) return;
+      resetNotice();
+      setSheet(null);
+      navigate("/dashboard", { replace: true });
+    } catch (e) {
+      setDiscardError(errorMessage(e));
+      if (ownsSession()) setSheet("discard");
+    } finally {
+      operation.current = false;
+      setDiscarding(false);
+    }
+  }
+
+  function requestDiscard() {
+    if (!ownsSession() || recording || busy) return;
+    discardTarget.current = {
+      id: draft.report.id,
+      title: draft.report.title || "Unbenannte Aufnahme",
+    };
+    setDiscardError("");
+    if (draft.audio?.size || draft.report.transcription.trim()) setSheet("discard");
+    else void confirmDiscard();
+  }
+
   function leave() {
-    if (busy) return;
+    if (!ownsSession() || busy) return;
     // Armed holds an open microphone and screen share with no bar to stop them
     // from anywhere else, and nothing has been recorded — so leaving releases.
     if (armed) disarmCapture();
@@ -530,6 +688,8 @@ export default function RecordPage() {
     if (recording || !draft.audio) navigate("/dashboard");
     else setSheet("leave");
   }
+
+  if (!ownsSession()) return <main className="walk-progress" role="status">Aufnahme für dein Konto laden …</main>;
 
   return (
     <div className={`walk-page walk-${state}`}>
@@ -563,6 +723,7 @@ export default function RecordPage() {
           <button
             className="walk-icon"
             aria-label="Weitere Optionen"
+            aria-haspopup="dialog"
             disabled={!!busy || loading}
             onClick={() => setSheet("options")}
           >
@@ -594,6 +755,15 @@ export default function RecordPage() {
               "Offline · Aufnahme möglich. Zum Sichern in Drive benötigst du Internet."}
           </div>
         )}
+        {eventUnresolved && (
+          <div className="walk-message is-error" role={eventError ? "alert" : "status"}>
+            <p>{eventError || "Gewünschten Termin laden …"} Die Terminzuordnung ist noch offen. Bitte erneut laden oder ausdrücklich ohne Termin fortfahren.</p>
+            <button type="button" className="walk-secondary" disabled={loading || eventLoading}
+              onClick={() => loadRequestedEvent(eventDraft.current)}>Erneut versuchen</button>
+            <button type="button" className="walk-secondary" disabled={loading}
+              onClick={continueWithoutEvent}>Ohne Termin fortfahren</button>
+          </div>
+        )}
         {loading ? (
           <main className="walk-progress" role="status">
             <Loader2 className="spin" />
@@ -615,14 +785,15 @@ export default function RecordPage() {
                     <CalendarMatch
                       atMs={Date.parse(draft.report.date) || Date.now()}
                       selectedId={draft.report.calendarEventId}
-                      onPick={(event) => {
-                        setCaptureEvent(event);
-                        setInvited(event?.attendees || []);
-                      }}
+                      binding={calendarBinding}
+                      selectedEvent={pickedEvent}
+                      disabled={eventUnresolved || !!busy}
+                      onPick={pickEvent}
                     />
                     <label className="walk-project">
                       <input
                         id="title"
+                        aria-label="Titel des Meetings"
                         placeholder="Titel des Meetings"
                         value={draft.report.title}
                         onChange={(e) => setCaptureTitle(e.target.value)}
@@ -674,21 +845,32 @@ export default function RecordPage() {
                       </span>
                     </button>
                   </div>
+                  {!showConsent && (
+                    <div className="walk-message">
+                      <p><strong>Einwilligungsschritt ausgeschaltet</strong> · Für Solo-Aufnahmen.
+                        Nach der Gerätefreigabe beginnen Aufnahme und Live-Transkription direkt.
+                        Es wird keine Einwilligung dokumentiert.</p>
+                      <button type="button" className="walk-secondary"
+                        onClick={() => setShowConsent(true)}>Für dieses Meeting einschalten</button>
+                    </div>
+                  )}
                 </>
               ) : armed ? (
                 <ArmedMeeting
                   sources={liveSources}
                   text={consentText}
                   decision={decisionNow}
-                  onDecision={(patch) =>
-                    setDecision((current) => ({ ...current, ...patch }))
-                  }
+                  onDecision={(patch) => {
+                    if (patch.participants) setApprovalFactsKey(factsKey);
+                    else resetNotice();
+                    setDecision((current) => ({ ...current, ...patch }));
+                  }}
                   onDraft={(instruction) => void refineNotice(instruction)}
                   onResetDraft={resetNotice}
                   drafting={drafting}
                   draftError={draftError}
                   chat={consentChat}
-                  hasDraft={!!consentParts}
+                  hasDraft={Object.keys(acceptedParts).length > 0}
                 />
               ) : recording ? (
                 <LiveMeeting
@@ -753,8 +935,11 @@ export default function RecordPage() {
                   <CalendarMatch
                     atMs={Date.parse(draft.report.date) || Date.now()}
                     selectedId={draft.report.calendarEventId}
+                    binding={calendarBinding}
+                    selectedEvent={pickedEvent}
+                    disabled={eventUnresolved || !!busy}
                     label="TERMIN"
-                    onPick={(event) => setCaptureEvent(event)}
+                    onPick={pickEvent}
                   />
                   <div className="walk-review-media">
                     <div className="walk-review-stats">
@@ -809,7 +994,7 @@ export default function RecordPage() {
                   <div className="walk-capture-controls">
                     <button
                       className="walk-pause"
-                      onClick={pauseCapture}
+                      onClick={() => { if (ownsSession()) pauseCapture(); }}
                       aria-label={
                         state === "paused"
                           ? "Aufnahme fortsetzen"
@@ -823,7 +1008,7 @@ export default function RecordPage() {
                       )}
                       <span>{state === "paused" ? "Weiter" : "Pause"}</span>
                     </button>
-                    <button className="walk-finish" onClick={stopCapture}>
+                    <button className="walk-finish" onClick={() => { if (ownsSession()) stopCapture(); }}>
                       <span>
                         <strong>Meeting abschließen</strong>
                         <small>Weiter zum Sichern &amp; Zusammenfassen</small>
@@ -836,7 +1021,7 @@ export default function RecordPage() {
                 <>
                   <button
                     className="walk-primary"
-                    disabled={!!busy || !everyoneAgreed(decision.participants)}
+                    disabled={!!busy || drafting || approvalFactsKey !== factsKey || !everyoneAgreed(decision.participants)}
                     onClick={consentGiven}
                   >
                     <Mic size={22} />
@@ -850,7 +1035,7 @@ export default function RecordPage() {
                 <>
                   <button
                     className="walk-primary"
-                    disabled={!!busy}
+                    disabled={!!busy || !homeReady || eventUnresolved}
                     onClick={() => startRecording()}
                   >
                     <Mic size={22} />
@@ -858,25 +1043,21 @@ export default function RecordPage() {
                       ? "Speicherort wird geladen …"
                       : online && !driveReady
                         ? `${storageName} freigeben`
-                        : "Aufnahme vorbereiten"}
+                        : showConsent ? "Aufnahme vorbereiten" : "Ohne Einwilligungsschritt aufnehmen"}
                   </button>
                   {localStartOffered && (
                     <button
                       className="walk-secondary"
+                      disabled={eventUnresolved || !!busy}
                       onClick={() => startRecording(true)}
                     >
-                      Trotzdem lokal aufnehmen · später im gewählten Archiv
-                      sichern
+                      {showConsent ? "Lokal vorbereiten" : "Ohne Einwilligungsschritt lokal aufnehmen"} · später im gewählten Archiv sichern
                     </button>
                   )}
                   <button
                     className="walk-secondary"
-                    onClick={() => {
-                      if (navigator.onLine && !driveReady)
-                        void authorizeDrive();
-                      else audioInput.current?.click();
-                    }}
-                    disabled={!homeReady || (online && !driveReady)}
+                    onClick={() => audioInput.current?.click()}
+                    disabled={!homeReady || !!busy || eventUnresolved}
                   >
                     <Upload size={16} />
                     Vorhandenes Audio importieren
@@ -893,7 +1074,7 @@ export default function RecordPage() {
                     ref={saveButton}
                     className="walk-primary"
                     disabled={
-                      !!busy || !online || !driveReady || !draft.audio?.size
+                      !!busy || eventUnresolved || !online || !driveReady || !draft.audio?.size
                     }
                     onClick={() => process(true)}
                   >
@@ -956,11 +1137,11 @@ export default function RecordPage() {
         accept="audio/*"
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file) {
+          if (file && ownsSession() && !unresolvedEvent.current && homeReady && captureSnapshot().state === "ready") {
             setCaptureHome(selectedHome);
             void importAudio(file)
               .then((id) => {
-                if (id) navigate(`/record?draft=${id}`, { replace: true });
+                if (id && ownsSession()) navigate(`/record?draft=${id}`, { replace: true });
               })
               .catch((err) => setCaptureError(errorMessage(err)));
           }
@@ -970,8 +1151,10 @@ export default function RecordPage() {
       {sheet && (
         <RecordingSheet
           title={
-            sheet === "settings"
-              ? "Speicherort"
+            sheet === "discard"
+              ? "Entwurf endgültig verwerfen?"
+              : sheet === "settings"
+              ? state === "ready" ? "Speicherort dieses Meetings" : "Festgelegter Speicherort"
               : sheet === "leave"
                 ? "Dein Bericht ist noch nicht gesichert"
                 : sheet === "sources"
@@ -982,12 +1165,31 @@ export default function RecordPage() {
                       ? "Gleich fragt der Browser"
                       : "Weitere Optionen"
           }
-          onClose={() => setSheet(null)}
+          onClose={() => { if (!operation.current) setSheet(null); }}
         >
-          {sheet === "settings" ? (
+          {sheet === "discard" ? (
+            <div className="walk-leave">
+              <p><strong>{discardTarget.current?.title}</strong></p>
+              <p>
+                Audio und Transkript dieses lokalen Entwurfs werden endgültig
+                gelöscht. Das kann die einzige Kopie sein. Ein vorhandenes
+                Cloud-Archiv wird nicht gelöscht; prüfe deine Sicherung vorher.
+              </p>
+              {discardError && <p className="notice" role="alert">{discardError}</p>}
+              <button className="walk-primary" disabled={discarding}
+                onClick={() => setSheet(null)}>Abbrechen</button>
+              {draft.audio && <button className="walk-secondary" disabled={discarding}
+                onClick={download}><Download size={16} /> Audio vorher herunterladen</button>}
+              <button className="btn danger" disabled={discarding} onClick={confirmDiscard}>
+                {discarding ? "Wird verworfen …" : "Endgültig verwerfen"}
+              </button>
+            </div>
+          ) : sheet === "settings" ? (
             <div className="sheet-stack">
-              <DriveSettings />
-              {state === "ready" && (
+              {state === "ready" ? (
+                <>
+                <p className="muted">Die Auswahl gilt nur für dieses Meeting, nicht für zukünftige Aufnahmen.
+                  Google Drive verwendet den bestehenden Ordner „{folder?.name || DEFAULT_FOLDER_NAME}“.</p>
                 <MicrosoftSettings
                   meetingOnly
                   value={selectedHome}
@@ -1000,19 +1202,21 @@ export default function RecordPage() {
                     setCaptureError("");
                   }}
                 />
-              )}
-              {/* Leaving mid-capture would abandon the recording, and the
-                  settings page can sign you out. Offer the exit only when
-                  there is nothing running to lose. */}
-              {state === "recording" || state === "paused" ? (
-                <p className="muted small">
-                  Weitere Einstellungen nach dem Ende der Aufnahme.
-                </p>
+                </>
               ) : (
-                <Link className="btn" to="/settings">
-                  <Settings2 size={16} /> Alle Einstellungen
-                </Link>
+                <>
+                  <p><strong>{storageName} · {meetingHome?.rootName || folder?.name || DEFAULT_FOLDER_NAME}</strong></p>
+                  {meetingHome && <p>{cachedMicrosoftConnections().find(c => c.connectionId === meetingHome.connectionId)?.accountName || "Die ursprünglich gewählte Microsoft-Verbindung wird benötigt."}</p>}
+                  <p className="muted">{meetingHome
+                    ? "Dieser Speicherort bleibt für dieses Meeting festgelegt."
+                    : "Für dieses Meeting ist Google Drive festgelegt. Ein bereits angelegter Meeting-Ordner bleibt erhalten; andernfalls wird beim Sichern der gewählte Google-Drive-Ordner verwendet."}
+                    Erneutes Verbinden ändert weder den Ordner noch den Standard für zukünftige Meetings.</p>
+                </>
               )}
+              <button type="button" className="btn" disabled={!!busy} onClick={authorizeDrive}>
+                {storageName} erneut verbinden
+              </button>
+              {error && <p className="notice" role="alert">{error}</p>}
             </div>
           ) : sheet === "sources" ? (
             <div
@@ -1154,7 +1358,7 @@ export default function RecordPage() {
             </div>
           ) : (
             <div className="walk-options">
-              {draft.audio && (
+              {state === "review" && draft.audio && (
                 <>
                   <button
                     onClick={() => {
@@ -1166,7 +1370,7 @@ export default function RecordPage() {
                     Audio herunterladen
                   </button>
                   <button
-                    disabled={!online || !driveReady}
+                    disabled={!online || !driveReady || eventUnresolved}
                     onClick={() => {
                       setSheet(null);
                       void process(false);
@@ -1181,25 +1385,19 @@ export default function RecordPage() {
                   </button>
                 </>
               )}
+              {recording && (
+                <button onClick={() => navigate("/dashboard")}>
+                  <ArrowLeft size={19} /> Zur Übersicht · Aufnahme bleibt aktiv
+                </button>
+              )}
               <button onClick={() => setSheet("settings")}>
                 <FolderOpen size={19} />
-                Speicherort ändern
+                {state === "ready" ? "Speicherort für dieses Meeting wählen" : "Speicherort & Verbindung prüfen"}
               </button>
               <button
                 className="danger"
                 disabled={recording}
-                onClick={() => {
-                  if (armed) resetNotice();
-                  void discardCapture()
-                    .then(() => {
-                      setSheet(null);
-                      // Discarding means leaving. Navigating to the fresh blank
-                      // draft discardCapture returns kept the user standing on
-                      // the recorder, looking at the take they just threw away.
-                      navigate("/dashboard", { replace: true });
-                    })
-                    .catch((e) => setCaptureError(errorMessage(e)));
-                }}
+                onClick={requestDiscard}
               >
                 <Trash2 size={19} />
                 Entwurf verwerfen

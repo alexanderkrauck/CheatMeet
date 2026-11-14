@@ -1,8 +1,47 @@
 import { fromArchive } from "./archive";
 import { ensureDriveToken, rememberToken } from "./session";
+import { auth } from "./firebase";
+import type { ReportData } from "../types";
+
+function assertDriveOwner(owner: string | undefined) {
+  if (!owner || auth.currentUser?.uid !== owner)
+    throw new Error("Das angemeldete Konto hat sich geändert. Bitte den Vorgang erneut starten.");
+}
+
+const archiveConflict = () => new Error(
+  "Die Archivdatei wurde inzwischen geändert oder ihre Ausgangsversion ist unbekannt. Bitte das Meeting zuerst aus Google Drive wiederherstellen und die Änderungen prüfen. Die vorhandene Datei wurde nicht überschrieben.",
+);
+
+/** Pin the canonical bytes to the report's last successful archive save.
+ * v3 omits ETags in production; match its version to v2's explicit ETag,
+ * exactly as the server worker does. Never adopt a newer baseline on retry. */
+export async function readDriveArchiveRevision(
+  report: Pick<ReportData, "id" | "driveReportId" | "driveFolderId" | "driveSyncedAt"> & { archiveBaseSyncedAt?: string },
+  token: string,
+): Promise<string> {
+  const baseline = report.archiveBaseSyncedAt || report.driveSyncedAt;
+  if (!report.driveReportId || !baseline) throw archiveConflict();
+  const id = encodeURIComponent(report.driveReportId);
+  const metadata = await (await request(
+    `https://www.googleapis.com/drive/v3/files/${id}?fields=id,parents,trashed,version&supportsAllDrives=true`, token,
+  )).json();
+  if (metadata.trashed || !report.driveFolderId || !metadata.parents?.includes(report.driveFolderId))
+    throw archiveConflict();
+  const raw = JSON.parse(await (await downloadDriveFile(report.driveReportId, token)).text());
+  const revision = await (await request(
+    `https://www.googleapis.com/drive/v2/files/${id}?fields=etag,version&supportsAllDrives=true`, token,
+  )).json();
+  if (raw.id !== report.id || raw.home || raw.driveSyncedAt !== baseline ||
+      !metadata.version || String(metadata.version) !== String(revision.version) ||
+      typeof revision.etag !== "string" || !revision.etag)
+    throw archiveConflict();
+  return revision.etag;
+}
 // A cached token alone does not prove the Drive scope was granted. Check it
 // before capture without creating folders or reading filenames/media.
 export async function verifyDriveAccess(token: string): Promise<void> {
+  const owner = auth.currentUser?.uid;
+  assertDriveOwner(owner);
   const response = await fetch(
     "https://www.googleapis.com/drive/v3/files?pageSize=1&fields=kind",
     {
@@ -10,6 +49,7 @@ export async function verifyDriveAccess(token: string): Promise<void> {
       signal: AbortSignal.timeout(10000),
     },
   );
+  assertDriveOwner(owner);
   if (response.ok) return;
   if (response.status === 401 || response.status === 403) {
     rememberToken(undefined);
@@ -39,7 +79,9 @@ async function request(
   init: RequestInit = {},
   timeoutMs = METADATA_TIMEOUT_MS,
   retry = true,
+  owner = auth.currentUser?.uid,
 ): Promise<Response> {
+  assertDriveOwner(owner);
   let response: Response;
   try {
     response = await fetch(url, {
@@ -57,21 +99,25 @@ async function request(
       "Google Drive ist nicht erreichbar. Bitte die Verbindung prüfen und erneut versuchen.",
     );
   }
+  assertDriveOwner(owner);
   if (!response.ok) {
     if (response.status === 401) {
       rememberToken(undefined);
       // A background job can run for half an hour on a token minted at its
       // start. A 401 proves nothing was created, and every body here is
-      // re-sendable, so one silent re-mint and retry is safe.
+      // re-sendable, so one silent re-mint and retry is safe for the SAME owner.
       if (retry) {
+        assertDriveOwner(owner);
         const fresh = await ensureDriveToken(0);
+        assertDriveOwner(owner);
         if (fresh && fresh !== token)
-          return request(url, fresh, init, timeoutMs, false);
+          return request(url, fresh, init, timeoutMs, false, owner);
       }
       throw new Error(
         "Die Drive-Verbindung ist abgelaufen. Bitte Google Drive erneut verbinden.",
       );
     }
+    if (response.status === 409 || response.status === 412) throw archiveConflict();
     throw new Error(
       `Google Drive: ${response.status === 403 ? "Zugriff verweigert. Bitte Drive freigeben." : `Anfrage fehlgeschlagen (${response.status}). Bitte erneut versuchen.`}`,
     );
@@ -126,7 +172,19 @@ export async function uploadFileToFolder(
   parentId: string,
   token: string,
   existingId?: string,
+  expectedEtag?: string,
 ): Promise<string> {
+  if (existingId && name === "bericht_daten.json") {
+    if (!expectedEtag) throw archiveConflict();
+    const data = await (await request(
+      `https://www.googleapis.com/upload/drive/v2/files/${encodeURIComponent(existingId)}?uploadType=media&supportsAllDrives=true`,
+      token,
+      { method: "PUT", headers: { "Content-Type": mimeType, "If-Match": expectedEtag }, body: file },
+      uploadTimeoutMs(file.size),
+    )).json();
+    if (data.id !== existingId) throw new Error("Google Drive konnte die aktualisierte Archivdatei nicht bestätigen.");
+    return data.id;
+  }
   const form = new FormData();
   form.append(
     "metadata",
@@ -277,6 +335,8 @@ function driveConnectionValid(error: unknown) {
  * A folder that is already gone is not an error — deleting twice must succeed.
  */
 export async function trashDriveFile(id: string, token: string) {
+  const owner = auth.currentUser?.uid;
+  assertDriveOwner(owner);
   const response = await fetch(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?supportsAllDrives=true`,
     {
@@ -289,6 +349,7 @@ export async function trashDriveFile(id: string, token: string) {
       signal: AbortSignal.timeout(60000),
     },
   );
+  assertDriveOwner(owner);
   if (response.ok || response.status === 404) return;
   if (response.status === 401) {
     rememberToken(undefined);

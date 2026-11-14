@@ -13,11 +13,27 @@ import { isMeeting } from "./upcoming";
  */
 type Timed = { atMs: number; dayKey: string; allDay: boolean };
 /** Legacy primary Google IDs stay compatible; other identities are fully scoped. */
-export const eventKey = (event:Pick<CalendarEvent,'id'|'calendarId'|'provider'|'connectionId'>) =>
-  (!event.provider||event.provider==='google')&&(!event.calendarId||event.calendarId==='primary')
-    ? event.id : JSON.stringify([event.provider||'google',event.connectionId||'',event.calendarId,event.id]);
-export const reportEventKey = (report:ReportSummary) => report.calendarEventId
-  ? eventKey({id:report.calendarEventId,calendarId:report.calendarId||'primary',provider:report.calendarProvider,connectionId:report.calendarConnectionId}) : undefined;
+export const eventKey = (
+  event: Pick<CalendarEvent, "id" | "calendarId" | "provider" | "connectionId">,
+) =>
+  (!event.provider || event.provider === "google") &&
+  (!event.calendarId || event.calendarId === "primary")
+    ? event.id
+    : JSON.stringify([
+        event.provider || "google",
+        event.connectionId || "",
+        event.calendarId,
+        event.id,
+      ]);
+export const reportEventKey = (report: ReportSummary) =>
+  report.calendarEventId
+    ? eventKey({
+        id: report.calendarEventId,
+        calendarId: report.calendarId || "primary",
+        provider: report.calendarProvider,
+        connectionId: report.calendarConnectionId,
+      })
+    : undefined;
 export type AgendaEntry =
   | (Timed & { kind: "report"; allDay: false; report: ReportSummary })
   | (Timed & { kind: "event"; event: CalendarEvent; quiet: boolean });
@@ -29,17 +45,44 @@ export type AgendaEntry =
  * view: the report says everything the calendar stub does and more, so the
  * month grid must not count it as still-to-do either.
  */
+type AgendaRange = { fromMs: number; toMs: number };
+/** Local calendar increments, not 24-hour jumps: DST days are not always 24h. */
+function occupiedDays(
+  event: CalendarEvent,
+  range?: AgendaRange,
+): { key: string; atMs: number }[] {
+  const start = Math.max(event.startMs, range?.fromMs ?? -Infinity);
+  const end = Math.min(
+    Math.max(event.endMs, event.startMs + 1),
+    range?.toMs ?? Infinity,
+  );
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end)
+    return [];
+  const day = new Date(start);
+  day.setHours(0, 0, 0, 0);
+  const days: { key: string; atMs: number }[] = [];
+  while (day.getTime() < end) {
+    days.push({
+      key: localDayKey(day.toISOString()),
+      atMs: Math.max(event.startMs, day.getTime()),
+    });
+    day.setDate(day.getDate() + 1);
+  }
+  return days;
+}
 export function scheduledByDay(
   events: CalendarEvent[],
   recorded: Set<string>,
+  range?: AgendaRange,
 ): Map<string, CalendarEvent[]> {
   const days = new Map<string, CalendarEvent[]>();
   for (const event of events) {
     if (recorded.has(eventKey(event))) continue;
-    const key = localDayKey(new Date(event.startMs).toISOString());
-    const bucket = days.get(key);
-    if (bucket) bucket.push(event);
-    else days.set(key, [event]);
+    for (const { key } of occupiedDays(event, range)) {
+      const bucket = days.get(key);
+      if (bucket) bucket.push(event);
+      else days.set(key, [event]);
+    }
   }
   return days;
 }
@@ -47,9 +90,7 @@ export function scheduledByDay(
 /** Which calendar events already have a recording behind them. */
 export const recordedEventIds = (reports: ReportSummary[]): Set<string> =>
   new Set(
-    reports
-      .map(reportEventKey)
-      .filter((id): id is string => Boolean(id)),
+    reports.map(reportEventKey).filter((id): id is string => Boolean(id)),
   );
 
 /**
@@ -63,6 +104,7 @@ export function buildAgenda(
   reports: ReportSummary[],
   events: CalendarEvent[],
   recorded: Set<string>,
+  range?: AgendaRange,
 ): AgendaEntry[] {
   const entries: AgendaEntry[] = reports.map((report) => ({
     kind: "report",
@@ -73,16 +115,15 @@ export function buildAgenda(
   }));
   for (const event of events) {
     if (recorded.has(eventKey(event))) continue;
-    entries.push({
-      kind: "event",
-      atMs: event.startMs,
-      dayKey: localDayKey(new Date(event.startMs).toISOString()),
-      allDay: event.allDay,
-      event,
-      // Not hidden, not shouting. The karaoke night stays reachable; it just
-      // stops competing with the meeting two rows down.
-      quiet: !isMeeting(event),
-    });
+    for (const day of occupiedDays(event, range))
+      entries.push({
+        kind: "event",
+        atMs: day.atMs,
+        dayKey: day.key,
+        allDay: event.allDay,
+        event,
+        quiet: !isMeeting(event),
+      });
   }
   return entries.sort((a, b) => {
     // Day first. The all-day lead is a rule *within* a day: applied across a
@@ -103,8 +144,14 @@ export const dayAgenda = (
 ): AgendaEntry[] =>
   buildAgenda(
     reports.filter((report) => localDayKey(report.date) === dayKey),
-    events.filter(
-      (event) => localDayKey(new Date(event.startMs).toISOString()) === dayKey,
-    ),
+    events,
     recorded,
+    {
+      fromMs: new Date(`${dayKey}T00:00:00`).getTime(),
+      toMs: (() => {
+        const end = new Date(`${dayKey}T00:00:00`);
+        end.setDate(end.getDate() + 1);
+        return end.getTime();
+      })(),
+    },
   );

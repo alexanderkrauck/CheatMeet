@@ -59,8 +59,10 @@ service cloud.firestore {
     match /users/{userId}/settings/providers {
       allow read, delete: if owns(userId);
       allow create, update: if owns(userId)
-        && request.resource.data.keys().hasOnly(['calendarProvider', 'meetingHome'])
+        && request.resource.data.keys().hasOnly(['calendarProvider', 'calendarConnectionId', 'calendarId', 'meetingHome'])
         && request.resource.data.get('calendarProvider', 'google') in ['google', 'microsoft']
+        && optionalReference(request.resource.data, 'calendarConnectionId')
+        && optionalReference(request.resource.data, 'calendarId')
         && (request.resource.data.get('meetingHome', null) == null || microsoftHome(request.resource.data.meetingHome));
     }
     match /users/{userId}/settings/preferences {

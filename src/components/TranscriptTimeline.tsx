@@ -29,12 +29,20 @@ export default function TranscriptTimeline({
   speech,
   startedAt,
   onRename,
+  onEditing,
+  editingDisabled,
+  onListen,
+  onEditTurn,
   empty = "Kein Transkript vorhanden.",
 }: {
   transcript: string;
   speech?: MeetingTranscript;
   startedAt?: string;
   onRename?: (id: string, name: string) => void;
+  onEditing?: (editing: boolean) => void;
+  editingDisabled?: boolean;
+  onListen?: (atMs: number) => void;
+  onEditTurn?: (turnId: string) => void;
   empty?: string;
 }) {
   const [query, setQuery] = useState("");
@@ -101,11 +109,15 @@ export default function TranscriptTimeline({
               ? "Kopiert"
               : copied === "failed"
                 ? "Kopieren nicht erlaubt"
-                : "Kopieren"}
+                : "Gesamtes Transkript kopieren"}
           </button>
         </div>
       </div>
-      <div className="final-transcript-scroll">
+      <p className="muted small no-print">
+        Kopieren und PDF enthalten das gesamte verfügbare Transkript. Suche und
+        Sprecherfilter ändern nur die Bildschirmansicht.
+      </p>
+      <div className="final-transcript-scroll no-print">
         <TranscriptChat
           transcript={transcript}
           speech={speech}
@@ -113,6 +125,10 @@ export default function TranscriptTimeline({
           filter={filter}
           query={query}
           onRename={onRename}
+          onEditing={onEditing}
+          editingDisabled={editingDisabled}
+          onListen={onListen}
+          onEditTurn={onEditTurn}
           empty="Keine Beiträge für diese Auswahl."
           renderText={(text) =>
             highlight(text, needle).map((part, i) =>
@@ -123,6 +139,14 @@ export default function TranscriptTimeline({
               ),
             )
           }
+        />
+      </div>
+      <div className="report-transcript-print">
+        <p>Vollständiges verfügbares Transkript · {rows.length} Beiträge</p>
+        <TranscriptChat
+          transcript={transcript}
+          speech={speech}
+          startedAt={startedAt}
         />
       </div>
     </div>

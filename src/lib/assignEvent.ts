@@ -1,10 +1,12 @@
 import { getLocal } from "./local";
 import { saveReport, uid } from "./reports";
-import { syncReportToCalendar } from "./calendarSync";
-import { errorMessage, hasCalendarGrant } from "./session";
+import { calendarReportBlock, syncReportToCalendar } from "./calendarSync";
+import { errorMessage } from "./session";
 import type { CalendarEvent } from "./calendar";
-import {hasAnyCalendarGrant} from "./calendar";
+import { hasAnyCalendarGrant } from "./calendar";
 import type { ReportData } from "../types";
+import { pendingArchive } from "./reportEdits";
+import { reportIndexCollection } from "../../shared/storage";
 
 export interface AssignOutcome {
   /** Whether the link was persisted. False leaves the dialog open to retry. */
@@ -28,13 +30,20 @@ export interface AssignOutcome {
 export async function assignReportToEvent(
   owner: string,
   reportId: string,
-  event: Pick<CalendarEvent, "id" | "calendarId" | "htmlLink"> & Partial<Pick<CalendarEvent,"provider"|"connectionId">>,
-  { writeBack = true }: { writeBack?: boolean } = {},
+  event: Pick<CalendarEvent, "id" | "calendarId" | "htmlLink"> &
+    Partial<Pick<CalendarEvent, "provider" | "connectionId">>,
+  { writeBack = true, index }: { writeBack?: boolean; index?: "reports" | "meetings" } = {},
 ): Promise<AssignOutcome> {
   const warnings: string[] = [];
+  const changedAccount = (): AssignOutcome => ({
+    assigned: false,
+    warnings: ["Das angemeldete Konto wurde gewechselt. Es wurde nichts gespeichert."],
+  });
+  if (uid() !== owner) return changedAccount();
   // The list row is a projection; saving it would write the transcript turns
   // out of existence. Only the stored report may be written back.
-  const stored = await getLocal(owner, reportId);
+  const stored = await getLocal(owner, reportId, index ? { index } : undefined);
+  if (uid() !== owner) return changedAccount();
   if (!stored)
     return {
       assigned: false,
@@ -44,8 +53,8 @@ export async function assignReportToEvent(
   const link = {
     calendarEventId: event.id,
     calendarId: event.calendarId,
-    calendarProvider:event.provider || "google",
-    calendarConnectionId:event.connectionId,
+    calendarProvider: event.provider || "google",
+    calendarConnectionId: event.connectionId,
     calendarLink: event.htmlLink,
     calendarError: undefined,
     calendarSyncedAt: undefined,
@@ -53,7 +62,7 @@ export async function assignReportToEvent(
   let patch: Partial<ReportData> = link;
 
   if (writeBack) {
-    if (!hasAnyCalendarGrant(event.provider || "google"))
+    if (!hasAnyCalendarGrant(event.provider || "google", event.connectionId))
       warnings.push(
         "Die Notizen konnten nicht geschrieben werden: Der Kalender ist nicht freigegeben.",
       );
@@ -61,9 +70,12 @@ export async function assignReportToEvent(
       try {
         // create:false — this assigns to an event that exists. Creating one
         // here would put a duplicate on the calendar next to the target.
-        const result = await syncReportToCalendar({ ...stored.report, ...link }, {
-          create: false,
-        });
+        const result = await syncReportToCalendar(
+          { ...stored.report, ...link },
+          {
+            create: false,
+          },
+        );
         // A vanished event comes back as a patch that CLEARS the link rather
         // than as a throw. Persisting that would save an error about a link
         // that never existed, and report success for an assignment that did
@@ -72,7 +84,7 @@ export async function assignReportToEvent(
           return {
             assigned: false,
             warnings: [
-              "Dieser Termin existiert nicht mehr im Google Kalender. Bitte die Ansicht neu laden.",
+              "Dieser Termin existiert nicht mehr im Kalender. Bitte die Ansicht neu laden.",
             ],
           };
         patch = { ...link, ...result };
@@ -87,18 +99,29 @@ export async function assignReportToEvent(
   // Re-read after the network round trip. The calendar call can take 30s, and
   // writing the snapshot taken before it would silently undo anything saved in
   // the meantime — a speaker rename, a ticked to-do.
-  const fresh = await getLocal(owner, reportId);
+  const fresh = await getLocal(owner, reportId, { index: reportIndexCollection(stored.report) });
   // A sign-out mid-flight must not write this account's report into the next
   // one: saveReport resolves the account itself.
-  if (uid() !== owner)
-    return {
-      assigned: false,
-      warnings: ["Das Google-Konto wurde gewechselt. Es wurde nichts gespeichert."],
-    };
+  if (uid() !== owner) return changedAccount();
 
   // saveReport returns a warning rather than throwing: a local write must never
   // be reported as a cloud save.
-  const warning = await saveReport({ ...(fresh?.report ?? stored.report), ...patch });
+  const latest = fresh?.report ?? stored.report;
+  if (patch.calendarSyncedAt && calendarReportBlock(latest) !== calendarReportBlock(stored.report)) {
+    patch = { ...patch, calendarSyncedAt: undefined };
+    warnings.push("Der Bericht wurde während der Zuordnung geändert. Bitte „Kalender aktualisieren“ ausführen, damit die aktuellen Notizen übernommen werden.");
+  }
+  const warning = await saveReport(
+    { ...latest, ...patch, ...pendingArchive(latest) },
+    { expectedUpdatedAt: latest.updatedAt ?? null },
+  );
   if (warning) warnings.push(warning);
+  if (
+    latest.driveReportId ||
+    (latest.home?.provider === "microsoft" && latest.home.reportId)
+  )
+    warnings.push(
+      "Die Terminzuordnung ist auf diesem Gerät gespeichert, aber im Dateiarchiv noch nicht aktualisiert. Bitte den Bericht öffnen und die Änderungen im gewählten Speicher sichern, bevor du ihn aus dem Archiv wiederherstellst.",
+    );
   return { assigned: true, warnings };
 }

@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildConsentRecord, consentFacts } from "../../shared/consent";
 import type { Draft, ReportData } from "../types";
 
+const microsoftSync = vi.hoisted(() => vi.fn());
+const microsoftBackup = vi.hoisted(() => vi.fn());
+vi.mock("./microsoftWorkflow", () => ({ syncMicrosoftReport: microsoftSync, backupMicrosoftDraft: microsoftBackup }));
 const calls: string[] = [];
 let audioFails = false;
 /** The JSON actually published to Drive, so the contract can be asserted. */
@@ -9,9 +12,14 @@ let archived: Record<string, unknown> | undefined;
 let indexed: Record<string, unknown> | undefined;
 let storedReports: ReportData[] = [];
 let existingIndexId: string | undefined;
+let localReport: ReportData | undefined;
+let duringUpload: ((name: string) => Promise<void>) | undefined;
+class ReportConflictError extends Error {
+  constructor() { super("Neuere Fassung laden"); this.name = "ReportConflictError"; }
+}
 
 vi.mock("./firebase", () => ({
-  auth: { currentUser: { uid: "u1" } },
+  auth: { currentUser: { uid: "u1", getIdToken: async () => "fixture-identity" } },
   db: {},
 }));
 vi.mock("firebase/firestore", () => ({
@@ -20,18 +28,29 @@ vi.mock("firebase/firestore", () => ({
 }));
 vi.mock("./reports", () => ({
   uid: () => "u1",
-  saveReport: async () => null,
+  saveReport: async (report: ReportData, options?: { expectedUpdatedAt?: string | null }) => {
+    if (options?.expectedUpdatedAt !== undefined && options.expectedUpdatedAt !== (localReport?.updatedAt ?? null)) throw new ReportConflictError();
+    localReport = { ...structuredClone(report), updatedAt: new Date(Date.parse(report.updatedAt!) + 1).toISOString() };
+    return null;
+  },
 }));
 vi.mock("./local", () => ({
+  ReportConflictError,
+  getLocal: async () => localReport ? { report: localReport, dirty: false } : undefined,
   listLocal: async () => [{ report: storedReports[0], dirty: false }],
   putDraft: async (_u: string, draft: Draft) =>
     void calls.push(`putDraft:${draft.report.driveConsentId || "-"}`),
-  putLocal: async (_u: string, report: ReportData) =>
-    void calls.push(`putLocal:${report.driveConsentId || "-"}`),
+  putLocal: async (_u: string, report: ReportData, _dirty = true, expected?: string | null) => {
+    if (expected !== undefined && (localReport?.updatedAt ?? null) !== expected)
+      throw new ReportConflictError();
+    localReport = structuredClone(report);
+    calls.push(`putLocal:${report.driveConsentId || "-"}`);
+  },
 }));
 vi.mock("./driveSettings", () => ({ getRootFolder: async () => "root" }));
 vi.mock("./webmDuration", () => ({ withWebmDuration: async (blob: Blob) => blob }));
 vi.mock("./drive", () => ({
+  readDriveArchiveRevision: async () => '"v1"',
   createSubFolder: async (name: string) => {
     calls.push(`folder:${name}`);
     return "folder-id";
@@ -44,6 +63,7 @@ vi.mock("./drive", () => ({
     _token: string,
     existingId?: string,
   ) => {
+    await duringUpload?.(name);
     if (name.startsWith("aufnahme") && audioFails)
       throw new Error("Upload fehlgeschlagen");
     if (name === "bericht_daten.json") archived = JSON.parse(await blob.text());
@@ -57,7 +77,7 @@ vi.mock("./drive", () => ({
 }));
 vi.mock("./prepareTranscript", () => ({ prepareTranscript: async () => {} }));
 
-const { backupDraft, syncReport } = await import("./workflow");
+const { analyzeDraft, backupDraft, syncReport } = await import("./workflow");
 const { forgetArchiveIndexIds } = await import("./archiveDrive");
 
 const consent = buildConsentRecord(
@@ -94,11 +114,40 @@ beforeEach(() => {
   archived = undefined;
   indexed = undefined;
   existingIndexId = undefined;
+  localReport = undefined;
+  duringUpload = undefined;
   storedReports = [report({ driveFolderId: "folder-id", driveReportId: "json" })];
   forgetArchiveIndexIds();
 });
 
+it.each([true, false])("keeps calendar success only for unchanged regenerated notes: changed=%s", async changed => {
+  const pending = draft({ calendarEventId: "event", calendarId: "calendar", calendarSyncedAt: "previous-success" });
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+    title: "Neuer Titel", summary: changed ? "Neue Zusammenfassung" : pending.report.summary,
+    transcription: pending.report.transcription, todos: [], takeaways: [],
+  })));
+  try {
+    const result = await analyzeDraft(pending);
+    expect(result.calendarEventId).toBe("event");
+    expect(result.calendarSyncedAt).toBe(changed ? undefined : "previous-success");
+  } finally { vi.unstubAllGlobals(); }
+});
+
 describe("backupDraft", () => {
+  it("forwards an explicit observed revision to the pinned Microsoft backup", async () => {
+    const pending = draft({ home: { provider: "microsoft", connectionId: "c", driveId: "d", rootId: "root", rootName: "Archive" } });
+    const progress = vi.fn();
+    await backupDraft(pending, "unused", progress, null);
+    expect(microsoftBackup).toHaveBeenCalledWith(pending, progress, null);
+  });
+  it("rejects an upload checkpoint after a newer human revision", async () => {
+    const pending = draft({ updatedAt: "2026-11-01T00:00:00.000Z", driveFolderId: "folder-id", driveConsentId: "consent" });
+    localReport = structuredClone(pending.report);
+    const newer = { ...pending.report, title: "Neue menschliche Fassung", updatedAt: "2026-11-02T00:00:00.000Z" };
+    duringUpload = async () => { localReport = structuredClone(newer); };
+    await expect(backupDraft(pending, "token", () => {})).rejects.toMatchObject({ name: "ReportConflictError" });
+    expect(localReport).toEqual(newer);
+  });
   it("writes the permission before the recording it covers", async () => {
     await backupDraft(draft(), "token", () => {});
 
@@ -147,6 +196,41 @@ describe("backupDraft", () => {
 });
 
 describe("syncReport", () => {
+  it("confirms the final Microsoft durable revision instead of the adapter checkpoint", async () => {
+    const input = report({ updatedAt: "2026-11-01T00:00:00.000Z", home: { provider: "microsoft", connectionId: "c", driveId: "d", rootId: "root", rootName: "Meetings" } });
+    microsoftSync.mockImplementationOnce(async () => {
+      localReport = { ...input, updatedAt: "2026-11-01T00:00:00.001Z" };
+      return { report: input, warning: null };
+    });
+    const result = await syncReport(input, "microsoft-token");
+    expect(result.report.updatedAt).toBe(localReport?.updatedAt);
+    expect(uploads()).toEqual([]);
+  });
+  it("returns the confirmed durable revision advanced by the final cloud-index save", async () => {
+    const result = await syncReport(report(), "token");
+    expect(result.report.updatedAt).toBe(localReport?.updatedAt);
+  });
+  it.each(["entry", "upload"])("preserves a later local revision at %s without publishing stale JSON", async (when) => {
+    const input = report({ updatedAt: "2026-11-01T00:00:00.000Z", driveFolderId: "folder-id", driveConsentId: "consent" });
+    const newer = { ...input, title: "Neuere Bearbeitung", updatedAt: "2026-11-02T00:00:00.000Z" };
+    localReport = structuredClone(when === "entry" ? newer : input);
+    duringUpload = async (name) => {
+      if (name === "zusammenfassung.md") localReport = structuredClone(newer);
+    };
+    await expect(syncReport(input, "token")).rejects.toMatchObject({ name: "ReportConflictError" });
+    expect(localReport).toEqual(newer);
+    expect(archived).toBeUndefined();
+    if (when === "entry") expect(uploads()).toEqual([]);
+  });
+  it("refuses an old caller snapshot after the latest local content was invalidated", async () => {
+    localReport = report({ transcriptStale: true });
+    await expect(syncReport(report(), "token")).rejects.toThrow(/wiederherstellen|Transkript/);
+    expect(uploads()).toEqual([]);
+  });
+  it("refuses stale cached text before writing any archive file", async () => {
+    await expect(syncReport(report({ transcriptStale: true }), "token")).rejects.toThrow(/wiederherstellen|Transkript/);
+    expect(uploads()).toEqual([]);
+  });
   it("writes the permission for a report that never went through a backup", async () => {
     // Saving from the report page reaches syncReport directly.
     await syncReport(report(), "token");

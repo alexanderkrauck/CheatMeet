@@ -159,10 +159,10 @@ export default function LiveMeeting({
         </span>
       </div>
 
-      <div className="live-tabs" role="tablist">
+      <div className="live-tabs" role="group" aria-label="Meeting-Ansicht">
         <button
-          role="tab"
-          aria-selected={tab === "transcript"}
+          type="button"
+          aria-pressed={tab === "transcript"}
           className={tab === "transcript" ? "active" : ""}
           onClick={() => setTab("transcript")}
         >
@@ -170,8 +170,8 @@ export default function LiveMeeting({
           Transkript
         </button>
         <button
-          role="tab"
-          aria-selected={tab === "assist"}
+          type="button"
+          aria-pressed={tab === "assist"}
           className={tab === "assist" ? "active" : ""}
           onClick={() => setTab("assist")}
         >
@@ -190,7 +190,7 @@ export default function LiveMeeting({
       {insightError && <p className="live-error" role="status">Hinweise konnten nicht geladen werden. Der Assistent versucht es erneut.</p>}
 
       <div className="live-panes" data-tab={tab}>
-        <div className="live-pane live-transcript">
+        <div className="live-pane live-transcript" role="region" aria-label="Live-Transkript">
           {speech && <LiveSpeakers speech={speech} filter={speakerFilter} onFilter={setSpeakerFilter} />}
           <div className="live-transcript-scroll" ref={scroller}
             onScroll={(e) => {
@@ -211,7 +211,7 @@ export default function LiveMeeting({
           </div>
         </div>
 
-        <div className="live-pane live-assist">
+        <div className="live-pane live-assist" role="region" aria-label="Meeting-Assistent">
           <div className="live-insights">
             {thinking && (
               <span className="live-thinking">

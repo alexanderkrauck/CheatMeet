@@ -21,6 +21,23 @@ beforeEach(() => {
   request.mockReset();
   account.currentUser = { uid: "owner-a" };
 });
+it("keeps a non-primary Outlook calendar bound and discloses a budget-limited page", async () => {
+  request.mockResolvedValue(
+    Response.json({
+      value: [raw("a"), raw("b")],
+      "@odata.nextLink":
+        "https://graph.microsoft.com/v1.0/me/calendarView?$skiptoken=more",
+    }),
+  );
+  const events = await microsoftEventsBetween(0, 1000, 1, "work", "team");
+  expect(events).toHaveLength(1);
+  expect(events.truncated).toBe(true);
+  expect(request.mock.calls[0][0]).toContain(
+    "/me/calendars/team/calendarView?",
+  );
+  expect(events[0]).toMatchObject({ calendarId: "team", connectionId: "work" });
+  expect(request).toHaveBeenCalledOnce();
+});
 describe("Outlook event writeback", () => {
   it("conditionally patches only the HTML body using the exact linked connection", async () => {
     request.mockResolvedValue(Response.json({}));
@@ -103,6 +120,20 @@ describe("Outlook event writeback", () => {
     expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({
       start: { dateTime: "1970-01-01T00:00:00.000Z", timeZone: "UTC" },
       end: { dateTime: "1970-01-01T00:01:00.000Z", timeZone: "UTC" },
+    });
+    request.mockResolvedValue(Response.json({ id: "team-event" }));
+    const team = await createMicrosoftEvent({
+      title: "Team",
+      startMs: 0,
+      endMs: 0,
+      block: "Summary",
+      connectionId: "work",
+      calendarId: "team",
+    });
+    expect(request.mock.calls[1][0]).toBe("/me/calendars/team/events");
+    expect(team).toMatchObject({
+      calendarId: "team",
+      calendarConnectionId: "work",
     });
   });
   it("reads revisions and immutable IDs from a non-default calendar", async () => {

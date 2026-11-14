@@ -3,6 +3,8 @@ const state = vi.hoisted(() => ({
   owner: "owner-a",
   effects: [] as (() => void | (() => void))[],
   writes: [] as unknown[],
+  slots: [] as unknown[],
+  cursor: 0,
   events: vi.fn(),
   people: vi.fn(),
   grant: true,
@@ -12,12 +14,19 @@ vi.mock("react", () => ({
   useEffect: (effect: () => void | (() => void)) => {
     state.effects.push(effect);
   },
-  useState: (initial: unknown) => [
-    initial,
-    (value: unknown) => {
-      state.writes.push(value);
-    },
-  ],
+  useState: (initial: unknown) => {
+    const index = state.cursor++;
+    if (!(index in state.slots))
+      state.slots[index] = typeof initial === "function" ? initial() : initial;
+    return [
+      state.slots[index],
+      (value: unknown) => {
+        state.slots[index] =
+          typeof value === "function" ? value(state.slots[index]) : value;
+        state.writes.push(state.slots[index]);
+      },
+    ];
+  },
   useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) =>
     snapshot(),
 }));
@@ -37,6 +46,8 @@ import { useCalendarEvents } from "./useCalendarEvents";
 beforeEach(() => {
   state.effects = [];
   state.writes = [];
+  state.slots = [];
+  state.cursor = 0;
   state.owner = "owner-a";
   state.events.mockReset();
   state.people.mockReset().mockResolvedValue(undefined);
@@ -49,6 +60,34 @@ it("loads Outlook using the calendar grant rather than requiring a Google sessio
     expect(state.people).toHaveBeenCalledWith("owner-a", ["Anna"]),
   );
   expect(state.events).toHaveBeenCalledWith(1, 2, undefined);
+});
+it("hides the previous range immediately and rejects its late response", async () => {
+  const render = (fromMs: number) => {
+    state.cursor = 0;
+    state.effects = [];
+    return useCalendarEvents({ fromMs, toMs: fromMs + 1 });
+  };
+  state.events.mockResolvedValueOnce([{ id: "old-month", attendees: [] }]);
+  render(1);
+  const cleanup = state.effects[0]();
+  await vi.waitFor(() => expect(state.people).toHaveBeenCalledOnce());
+  expect(render(1).events.map((e) => e.id)).toEqual(["old-month"]);
+  if (typeof cleanup === "function") cleanup();
+  let finish!: (events: unknown[]) => void;
+  state.events.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const next = render(3);
+  expect(next.events).toEqual([]);
+  expect(next.loading).toBe(true);
+  const stop = state.effects[0]();
+  if (typeof stop === "function") stop();
+  finish([{ id: "late-range", attendees: [] }]);
+  await Promise.resolve();
+  expect(render(5).events).toEqual([]);
 });
 it("never imports old attendees into a newly signed-in account", async () => {
   let finish: (events: unknown[]) => void;

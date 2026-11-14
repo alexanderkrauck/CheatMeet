@@ -67,6 +67,7 @@ export function shiftMonth(month: string, delta: number): string {
  *  transcript's own clock, which exists for both origins. */
 export function meetingDurationMs(report: ReportData): number {
   if (report.durationMs) return report.durationMs;
+  if (report.transcriptStale) return 0;
   return (Array.isArray(report.speech?.turns) ? report.speech.turns : []).reduce(
     (longest, turn) => Math.max(longest, turn.endMs),
     0,
@@ -352,6 +353,7 @@ export interface ReportSummary {
   speakers: string[];
   needsReview: boolean;
   driveFolderId?: string;
+  driveReportId?: string;
   driveSyncedAt?: string;
   /** Lets an upcoming event show its report instead of offering a re-record. */
   calendarEventId?: string;
@@ -396,20 +398,21 @@ export function summarise(report: ReportData): ReportSummary {
     openTodoCount: (report.todos || []).filter((todo) => !todo.done).length,
     takeawayCount: report.takeaways?.length || 0,
     durationMs: meetingDurationMs(report),
-    // A projected report has no turns to read, but carries what was resolved
-    // from them before it was projected.
-    speakers: report.speech
+    // Stale turns remain on-device only for recovery. The incoming projection
+    // owns current participants/review metadata until the transcript is restored.
+    speakers: report.speech && !report.transcriptStale
       ? speakerNamesOf(report.speech)
       : (report.participants ?? []),
-    needsReview: report.speech
+    needsReview: report.speech && !report.transcriptStale
       ? needsSpeakerReview(report.speech)
       : !!report.speakerReviewPending,
     driveFolderId: report.driveFolderId,
+    driveReportId: report.driveReportId,
     driveSyncedAt: report.driveSyncedAt,
     calendarEventId: report.calendarEventId,
     calendarSyncedAt: report.calendarSyncedAt,
     calendarError: report.calendarError,
-    transcription: report.transcription || "",
+    transcription: report.transcriptStale ? "" : report.transcription || "",
     transcriptLocal: !transcriptIsElsewhere(report),
     items: [
       ...(report.todos || []).map((todo) => `${todo.text} ${todo.owner || ""}`),

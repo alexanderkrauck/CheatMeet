@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 const m = vi.hoisted(() => ({
   api: vi.fn(),
   request: vi.fn(),
@@ -19,6 +19,7 @@ import {
   writeOneDriveText,
   downloadOneDrive,
   createOneDriveFolder,
+  readOneDriveArchiveRevision,
 } from "./onedrive";
 const home = {
   provider: "microsoft" as const,
@@ -28,6 +29,34 @@ const home = {
   rootName: "Root",
   folderId: "f",
 };
+afterEach(() => { vi.unstubAllGlobals(); });
+it.each(["before", "during", "commit"])("pins canonical OneDrive JSON against a change %s save even when another tab refreshes the ETag cache", async (when) => {
+  const baseline = "2026-11-01T00:00:00.000Z";
+  let etag = '"v1"';
+  const revisions = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (k: string) => revisions.get(k) || etag, setItem: (k: string, v: string) => revisions.set(k, v) });
+  m.request.mockReset().mockImplementation(async (_path: string, init: RequestInit = {}) => {
+    if (init.method === "PUT") {
+      if (when === "commit") etag = '"v2"';
+      if (new Headers(init.headers).get("If-Match") !== etag)
+        throw Object.assign(Error("Precondition failed"), { status: 412 });
+      throw Error("Must not overwrite");
+    }
+    return Response.json({ id: "json", eTag: etag, "@microsoft.graph.downloadUrl": "https://storage.example/json" });
+  });
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ id: "r", home: { ...home, syncedAt: when === "before" ? "2026-11-02T00:00:00.000Z" : baseline } })));
+  const pending = async () => {
+    const pinned = await readOneDriveArchiveRevision({ id: "r", home: { ...home, reportId: "json", syncedAt: when === "commit" ? undefined : baseline }, archiveBaseSyncedAt: when === "commit" ? baseline : undefined });
+    if (when === "during") etag = '"v2"';
+    for (const key of revisions.keys()) revisions.set(key, '"v2"');
+    await writeOneDriveText(home, "bericht_daten.json", "{}", "json", pinned);
+  };
+  await expect(pending()).rejects.toThrow(/Dateiversion|wiederherstellen/);
+  expect(m.request.mock.calls.filter(([, init]) => init.method === "PUT")).toHaveLength(when === "commit" ? 1 : 0);
+  if (when === "commit") expect(m.request).toHaveBeenLastCalledWith(
+    "/drives/d/items/json/content", expect.objectContaining({ headers: expect.objectContaining({ "If-Match": '"v1"' }) }), "c",
+  );
+});
 it('updates bounded text with native Graph If-Match rather than a Personal-only deferred commit',async()=>{
   m.api.mockReset().mockRejectedValue(Error('Deferred update is not supported by Business OneDrive'));
   m.request.mockReset().mockResolvedValueOnce(Response.json({id:'json',eTag:'v1'})).mockResolvedValueOnce(Response.json({id:'json',size:5,eTag:'v2'}));

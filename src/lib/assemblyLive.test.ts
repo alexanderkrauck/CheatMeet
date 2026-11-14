@@ -88,6 +88,34 @@ const begin = async () => {
       configuration: { model: "universal-3-5-pro", mode: "max_accuracy" },
     });
 };
+it.each(["open", "retry"])("drops a system source with an %s connection without resurrection or affecting mic", async mode => {
+  const changed = vi.fn();
+  live = startAssemblyLive({ mic: {} as MediaStream, system: {} as MediaStream }, () => clock, changed, "meeting", ["de"]);
+  await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  sockets.forEach(socket => socket.message({ type: "Begin", configuration: { model: "universal-3-5-pro", mode: "max_accuracy" } }));
+  vi.useFakeTimers();
+  if (mode === "retry") sockets[1].close();
+  live.dropSource!("system");
+  const sent = sockets[1].sent.length;
+  nodes[1].port.onmessage!({ data: { pcm: new ArrayBuffer(3200), contextTime: 1 } });
+  expect(sockets[1].sent).toHaveLength(sent);
+  expect(sockets[1].readyState).toBe(3);
+  expect(sockets[0].readyState).toBe(1);
+  expect(changed.mock.calls.at(-1)?.[0].liveConnection).toBe("live");
+  nodes[0].port.onmessage!({ data: { pcm: new ArrayBuffer(3200), contextTime: 1 } });
+  expect(sockets[0].sent.filter(value => typeof value !== "string")).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(40_000);
+  expect(sockets).toHaveLength(2);
+  const paused = live.pause();
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].message({ type: "Termination" });
+  await paused;
+  await live.resume();
+  expect(sockets).toHaveLength(3);
+  const calls = vi.mocked(fetch).mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+  expect(calls.filter(call => call.source === "system")).toHaveLength(1);
+});
+
 it("sends a frame once, retains visible text, and ignores global closing speaker revisions", async () => {
   const changed = vi.fn();
   live = startAssemblyLive(

@@ -1,4 +1,9 @@
-import { dayIntensity, dayKeyLabel, plural, type DayCell } from "../lib/meetingMeta";
+import {
+  dayIntensity,
+  dayKeyLabel,
+  plural,
+  type DayCell,
+} from "../lib/meetingMeta";
 
 const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 /** More than three dots in a cell this small is texture, not a count. */
@@ -23,7 +28,11 @@ export default function MonthGrid({
   onSelect: (day: string) => void;
 }) {
   return (
-    <div className="month-grid">
+    <div
+      className="month-grid"
+      role="group"
+      aria-label="Monatsübersicht: Aufzeichnungen und geplante Termine"
+    >
       <div className="month-weekdays" aria-hidden="true">
         {WEEKDAYS.map((day) => (
           <span key={day}>{day}</span>
@@ -34,6 +43,8 @@ export default function MonthGrid({
           {week.map((cell) => (
             <button
               key={cell.key}
+              type="button"
+              aria-current={cell.isToday ? "date" : undefined}
               className={`day level-${dayIntensity(cell)}${
                 cell.inMonth ? "" : " is-outside"
               }${cell.isToday ? " is-today" : ""}${
@@ -58,16 +69,23 @@ export default function MonthGrid({
             >
               <span className="day-number">{cell.day}</span>
               <span className="day-marks">
-                {cell.count > 0 && <span className="day-count">{cell.count}</span>}
+                {cell.count > 0 && (
+                  <span className="day-count">{cell.count}</span>
+                )}
                 {cell.events > 0 &&
-                  Array.from({ length: Math.min(cell.events, MAX_DOTS) }, (_, i) => (
-                    <span
-                      key={i}
-                      className={`day-dot${
-                        i === MAX_DOTS - 1 && cell.events > MAX_DOTS ? " is-more" : ""
-                      }`}
-                    />
-                  ))}
+                  Array.from(
+                    { length: Math.min(cell.events, MAX_DOTS) },
+                    (_, i) => (
+                      <span
+                        key={i}
+                        className={`day-dot${
+                          i === MAX_DOTS - 1 && cell.events > MAX_DOTS
+                            ? " is-more"
+                            : ""
+                        }`}
+                      />
+                    ),
+                  )}
               </span>
             </button>
           ))}

@@ -117,24 +117,19 @@ beforeEach(async () => {
   vi.stubGlobal("navigator", {
     onLine: false,
     mediaDevices: {
-      getUserMedia: vi.fn().mockResolvedValue(new FakeStream()),
+      getUserMedia: vi.fn(async () => new FakeStream()),
       getDisplayMedia,
     },
   });
   vi.stubGlobal("MediaRecorder", FakeRecorder);
   vi.stubGlobal("MediaStream", FakeStream);
-  vi.stubGlobal("window", { MediaRecorder: FakeRecorder, setInterval: () => undefined });
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { MediaRecorder: FakeRecorder, setInterval: () => undefined }));
   vi.stubGlobal("document", {});
   await capture.openDraft("capture-test", undefined, true);
 });
 
 afterEach(async () => {
-  // stopCapture first: disarming a running session would drop the recorder
-  // without stopping it, and the next test would inherit it.
-  capture.stopCapture();
-  await capture.finishTranscription();
-  capture.disarmCapture();
-  await capture.discardCapture();
+  await capture.handleCaptureOwnerChange(null);
   vi.unstubAllGlobals();
 });
 
@@ -343,6 +338,7 @@ describe("sharing the live transcript with an assistant", () => {
     expect(share.end).toHaveBeenCalledTimes(1);
     share.end.mockClear();
     await startRecording(true, async () => {}, "mic");
+    expect(capture.captureSnapshot()).toMatchObject({ state: "recording", error: "" });
     await capture.discardCapture();
     expect(share.end).toHaveBeenCalledTimes(1);
     share.end.mockClear();
@@ -480,6 +476,230 @@ it("persists independent single-person choices, passes them to streaming and loc
   await capture.finishTranscription();
   await capture.importAudio(new File(["test"], "import.wav", {type: "audio/wav"}));
   expect(capture.captureSnapshot().draft.report.singleSpeakerSources).toBeUndefined();
+});
+
+it("requires renewed confirmation instead of storing different wording from the approved notice", async () => {
+  const systemTrack = new FakeTrack();
+  getDisplayMedia.mockResolvedValue(new FakeStream([systemTrack]));
+  await capture.armCapture(true, async () => {}, "mic+system");
+  const approved = { ...DECISION, parts: { means: "Das Mikrofon und der Call werden mit AssemblyAI und Google Gemini verarbeitet." } };
+  systemTrack.end();
+  await capture.beginRecording(approved);
+  expect(capture.captureSnapshot().state).toBe("ready");
+  expect(capture.captureSnapshot().error).toContain("Hinweis");
+  expect(startAssemblyLive).not.toHaveBeenCalled();
+  expect(startLiveShare).not.toHaveBeenCalled();
+});
+
+it.each(["cancel", "owner"])("releases late permission results after %s instead of arming another attempt", async mode => {
+  const micTrack = new FakeTrack();
+  const systemTrack = new FakeTrack();
+  getDisplayMedia.mockResolvedValue(new FakeStream([systemTrack]));
+  let resolve!: (stream: MediaStream) => void;
+  vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  const pending = capture.armCapture(true, async () => {}, "mic+system");
+  await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
+  if (mode === "owner") {
+    account.uid = "next-owner";
+    await capture.handleCaptureOwnerChange(account.uid);
+  } else capture.disarmCapture();
+  resolve(new FakeStream([micTrack]) as unknown as MediaStream);
+  await pending;
+  expect(micTrack.readyState).toBe("ended");
+  expect(systemTrack.readyState).toBe("ended");
+  expect(capture.captureSnapshot()).toMatchObject({ owner: account.uid, state: "ready", busy: "" });
+  expect(startAssemblyLive).not.toHaveBeenCalled();
+  let resolveLock!: (lock: WakeLockSentinel) => void;
+  Object.assign(navigator, { wakeLock: { request: () => new Promise(done => { resolveLock = done; }) } });
+  Object.assign(document, { visibilityState: "visible" });
+  await capture.armCapture(true, async () => {}, "mic");
+  capture.disarmCapture();
+  const release = vi.fn(async () => {});
+  resolveLock({ release, addEventListener() {} } as unknown as WakeLockSentinel);
+  await Promise.resolve();
+  expect(release).toHaveBeenCalledOnce();
+  expect(capture.captureSnapshot().state).toBe("ready");
+});
+
+it.each(["recording", "paused"])("fences a %s owner transition immediately while preserving the old checkpoint", async phase => {
+  const { deleteDraft, putDraft, appendRecordingChunk, getDraft } = await import("./local");
+  await startRecording(true, async () => {}, "mic");
+  const oldId = capture.captureSnapshot().draft.report.id;
+  expect(await capture.openDraft(account.uid, undefined, true)).toBe(oldId);
+  await capture.handleCaptureOwnerChange(account.uid);
+  expect(FakeRecorder.last?.state).toBe("recording");
+  vi.mocked(startAssemblyLive).mock.calls[0][2]({ provider: "assemblyai", phase: "live", languages: ["de"], speakerNames: {},
+    turns: [{ id: "private", speaker: "mic:0:A", text: "Privates Gespräch", startMs: 0, endMs: 1000, final: true }] });
+  FakeRecorder.last!.ondataavailable?.({ data: new Blob(["private-audio"]) });
+  if (phase === "paused") capture.pauseCapture();
+  const rec = FakeRecorder.last!;
+  rec.stop = () => {
+    rec.state = "inactive";
+    queueMicrotask(() => {
+      rec.ondataavailable?.({ data: new Blob(["trailing-audio"]) });
+      rec.onstop?.();
+    });
+  };
+  account.uid = "next-owner";
+  const transition = capture.handleCaptureOwnerChange(account.uid);
+  const foreignTranscript = capture.finishTranscription();
+  expect(capture.captureSnapshot().draft.report.id).not.toBe(oldId);
+  expect(capture.isCapturing()).toBe(false);
+  capture.pauseCapture();
+  expect(FakeRecorder.last?.state).toBe("inactive");
+  await transition;
+  expect(await foreignTranscript).toBe("");
+  expect(deleteDraft).not.toHaveBeenCalled();
+  expect(appendRecordingChunk).toHaveBeenCalledWith("capture-test", oldId, 0, expect.any(Blob), expect.any(Number), false);
+  expect(appendRecordingChunk).toHaveBeenCalledWith("capture-test", oldId, 1, expect.any(Blob), expect.any(Number), false);
+  expect(vi.mocked(putDraft).mock.calls.some(([owner, draft]) => owner === "capture-test" && draft.report.id === oldId && draft.report.captureState === "stopped")).toBe(true);
+  const newId = await capture.openDraft(account.uid, undefined, true);
+  expect(newId).not.toBe(oldId);
+  expect(capture.captureSnapshot().owner).toBe(account.uid);
+  expect(getDraft).not.toHaveBeenCalledWith("next-owner", oldId);
+});
+
+it("recovers the newer in-memory take on return after an owner checkpoint fails", async () => {
+  const { appendRecordingChunk, getDraft, putDraft, deleteDraft } = await import("./local");
+  const mic = new FakeTrack();
+  vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(new FakeStream([mic]) as unknown as MediaStream);
+  await startRecording(true, async () => {}, "mic");
+  const rec = FakeRecorder.last!;
+  rec.ondataavailable?.({ data: new Blob(["older-"]) });
+  await capture.captureQueue();
+  const older = structuredClone(capture.captureSnapshot().draft);
+  const changed = vi.mocked(startAssemblyLive).mock.calls[0][2];
+  changed({ provider: "assemblyai", phase: "live", languages: ["de"], speakerNames: {},
+    turns: [{ id: "new", speaker: "mic:0:A", text: "Neuere Worte", startMs: 0, endMs: 1000, final: true }] });
+  vi.mocked(appendRecordingChunk).mockRejectedValue(new Error("journal unavailable"));
+  rec.ondataavailable?.({ data: new Blob(["newer-"]) });
+  await capture.captureQueue().catch(() => {});
+  rec.stop = () => {
+    rec.state = "inactive";
+    queueMicrotask(() => {
+      rec.ondataavailable?.({ data: new Blob(["trailing"]) });
+      rec.onstop?.();
+    });
+  };
+  try {
+    account.uid = "next-owner";
+    const transition = capture.handleCaptureOwnerChange(account.uid);
+    expect(mic.readyState).toBe("ended");
+    expect(share.end).toHaveBeenCalled();
+    expect(capture.captureSnapshot().draft.report.transcription).toBe("");
+    await expect(transition).rejects.toThrow("journal unavailable");
+  } finally {
+    vi.mocked(appendRecordingChunk).mockResolvedValue(undefined);
+  }
+  account.uid = "capture-test";
+  vi.mocked(getDraft).mockResolvedValueOnce(older);
+  await capture.handleCaptureOwnerChange(account.uid);
+  expect(await capture.openDraft(account.uid, older.report.id, false)).toBe(older.report.id);
+  const recovered = capture.captureSnapshot();
+  expect(await recovered.draft.audio!.text()).toBe("older-newer-trailing");
+  expect(recovered.draft.report.transcription).toContain("Neuere Worte");
+  expect(recovered).toMatchObject({ state: "review", saved: true });
+  expect(getDraft).not.toHaveBeenCalled();
+  expect(vi.mocked(putDraft).mock.calls.at(-1)?.[1].report.transcription).toContain("Neuere Worte");
+  expect(deleteDraft).not.toHaveBeenCalled();
+  vi.mocked(getDraft).mockReset().mockResolvedValue(undefined);
+});
+
+it("keeps release blocked by private state while a failed owner's take is hidden", async () => {
+  const { appendRecordingChunk } = await import("./local");
+  expect(capture.canReleaseCapture()).toBe(true);
+  capture.setCaptureBusy("Speichern …");
+  expect(capture.canReleaseCapture()).toBe(false);
+  capture.setCaptureBusy("");
+  await capture.armCapture(true, async () => {}, "mic");
+  expect(capture.canReleaseCapture()).toBe(false);
+  await capture.beginRecording(DECISION);
+  expect(capture.canReleaseCapture()).toBe(false);
+  capture.pauseCapture();
+  await capture.captureQueue();
+  expect(capture.canReleaseCapture()).toBe(false);
+  vi.mocked(appendRecordingChunk).mockRejectedValue(new Error("journal unavailable"));
+  FakeRecorder.last!.ondataavailable?.({ data: new Blob(["only-in-memory"]) });
+  await capture.captureQueue().catch(() => {});
+  try {
+    account.uid = "next-owner";
+    const transition = capture.handleCaptureOwnerChange(account.uid);
+    expect(capture.captureSnapshot()).toMatchObject({ state: "ready", busy: "", error: "" });
+    expect(capture.canReleaseCapture()).toBe(false);
+    await expect(transition).rejects.toThrow("journal unavailable");
+    expect(capture.captureSnapshot().draft.audio).toBeUndefined();
+    expect(capture.canReleaseCapture()).toBe(false);
+  } finally {
+    vi.mocked(appendRecordingChunk).mockResolvedValue(undefined);
+  }
+  await capture.handleCaptureOwnerChange(account.uid);
+  expect(capture.canReleaseCapture()).toBe(true);
+});
+
+it("protects unload after a failed metadata checkpoint until the retained take is durable", async () => {
+  const { putDraft, getDraft, deleteDraft } = await import("./local");
+  const unloading = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  expect(unloading()).toBe(false);
+  await startRecording(true, async () => {}, "mic");
+  FakeRecorder.last!.ondataavailable?.({ data: new Blob(["retained-audio"]) });
+  await capture.captureQueue();
+  const id = capture.captureSnapshot().draft.report.id;
+  vi.mocked(startAssemblyLive).mock.calls[0][2]({ provider: "assemblyai", phase: "live", languages: ["de"], speakerNames: {},
+    turns: [{ id: "new", speaker: "mic:0:A", text: "Nur im Speicher", startMs: 0, endMs: 1000, final: true }] });
+  vi.mocked(putDraft).mockRejectedValue(new Error("metadata unavailable"));
+  try {
+    account.uid = "next-owner";
+    await expect(capture.handleCaptureOwnerChange(account.uid)).rejects.toThrow("metadata unavailable");
+    expect(capture.captureSnapshot().draft.report.transcription).toBe("");
+    expect(unloading()).toBe(true);
+    account.uid = "capture-test";
+    expect(await capture.openDraft(account.uid, undefined, true)).toBe(id);
+    expect(getDraft).not.toHaveBeenCalled();
+    expect(capture.captureSnapshot()).toMatchObject({ state: "review", saved: false });
+    expect(capture.captureSnapshot().draft.report.transcription).toContain("Nur im Speicher");
+    expect(await capture.captureSnapshot().draft.audio!.text()).toBe("retained-audio");
+    const attempts = vi.mocked(putDraft).mock.calls.length;
+    await expect(capture.handleCaptureOwnerChange(account.uid)).rejects.toThrow("metadata unavailable");
+    expect(putDraft).toHaveBeenCalledTimes(attempts + 1);
+    expect(capture.canReleaseCapture()).toBe(false);
+    expect(unloading()).toBe(true);
+  } finally {
+    vi.mocked(putDraft).mockResolvedValue(undefined);
+  }
+  await capture.handleCaptureOwnerChange(account.uid);
+  expect(capture.canReleaseCapture()).toBe(true);
+  expect(unloading()).toBe(false);
+  capture.releaseAfterHandoff();
+  expect(capture.canReleaseCapture()).toBe(true);
+  expect(deleteDraft).not.toHaveBeenCalled();
+});
+
+it.each(["cancel", "owner"])("invalidates %s while consent persistence is pending", async mode => {
+  const { putDraft, appendRecordingChunk } = await import("./local");
+  await capture.armCapture(true, async () => {}, "mic");
+  let resolve!: () => void;
+  vi.mocked(putDraft).mockImplementationOnce(() => new Promise<void>(done => { resolve = done; }));
+  const pending = capture.beginRecording(DECISION);
+  await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
+  const busy = capture.captureSnapshot().busy;
+  let transition: Promise<void> | undefined;
+  if (mode === "owner") {
+    account.uid = "next-owner";
+    transition = capture.handleCaptureOwnerChange(account.uid);
+  } else capture.disarmCapture();
+  resolve();
+  await pending;
+  await transition;
+  expect(busy).not.toBe("");
+  expect(capture.captureSnapshot().state).toBe("ready");
+  expect(startAssemblyLive).not.toHaveBeenCalled();
+  expect(startLiveShare).not.toHaveBeenCalled();
+  expect(appendRecordingChunk).not.toHaveBeenCalled();
+  expect(FakeRecorder.last?.state).not.toBe("recording");
 });
 
 describe("the consent gate", () => {

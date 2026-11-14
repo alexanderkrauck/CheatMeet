@@ -17,3 +17,8 @@ it('existing Google accounts retain their workspace and do not restart setup',as
 it('Google identity linking requires an existing UID and never swaps that workspace',async()=>{
  const s=await import('./session');await expect(s.linkGoogleIdentity()).rejects.toThrow('bestehenden');f.auth.currentUser={uid:'original'};f.link.mockResolvedValue({user:{uid:'original'}});await s.linkGoogleIdentity();expect(f.link.mock.calls[0][1].getScopes()).toEqual(['profile']);f.link.mockResolvedValue({user:{uid:'other'}});await expect(s.linkGoogleIdentity()).rejects.toThrow('geändert');
 });
+
+it('preserves supported internal destinations and their exact signed-request query',async()=>{
+ const {safeWorkspaceReturnTo}=await import('./identitySetup');
+ for(const path of ['/usage','/report/qa-meeting','/record?draft=qa-take','/setup?returnTo=%2Fconnect%3Frequest%3Dqa','/connect?request=qa%2Frequest&scope=read#confirm'])expect(safeWorkspaceReturnTo?.(path)).toBe(path);
+});

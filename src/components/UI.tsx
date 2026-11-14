@@ -111,11 +111,11 @@ const CALENDAR_TONE: Record<CalendarState, string> = {
 export function CalendarStatus({
   report,
 }: {
-  report: Parameters<typeof calendarState>[0] & {calendarProvider?:ServiceProvider};
+  report: Parameters<typeof calendarState>[0] & {calendarProvider?:ServiceProvider;calendarConnectionId?:string};
 }) {
   const granted = useSyncExternalStore(
     subscribeCalendar,
-    ()=>hasAnyCalendarGrant(report.calendarEventId ? report.calendarProvider || "google" : undefined),
+    ()=>hasAnyCalendarGrant(report.calendarEventId ? report.calendarProvider || "google" : undefined, report.calendarEventId ? report.calendarConnectionId : undefined),
     () => false,
   );
   // Without a grant every row would claim "Kein Termin", which is a statement

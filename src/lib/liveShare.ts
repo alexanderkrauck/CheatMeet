@@ -27,6 +27,8 @@ export interface LiveShareOptions {
   startedAt: string;
   languages: string[];
   getToken: () => Promise<string | undefined>;
+  /** Rechecked around async credentials; old text must never use another login. */
+  isOwnerCurrent?: () => boolean;
   fetchImpl?: typeof fetch;
   /** Called whenever the status changes (never with the same value twice). */
   onStatus?: (status: ShareStatus) => void;
@@ -57,6 +59,8 @@ export function startLiveShare(options: LiveShareOptions): LiveShare {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let lastSentAt = -Infinity;
   let endWaiters: (() => void)[] = [];
+  const requests = new Set<AbortController>();
+  const owned = () => options.isOwnerCurrent?.() !== false;
 
   const clock = () => Date.now();
   let announced: ShareStatus | null = null;
@@ -79,29 +83,42 @@ export function startLiveShare(options: LiveShareOptions): LiveShare {
   const finish = () => {
     off = true;
     clearTimeout(timer);
+    for (const request of requests) request.abort();
     announce();
     for (const wake of endWaiters.splice(0)) wake();
   };
 
   async function request(body: unknown): Promise<Response | null> {
+    let controller: AbortController | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
+      if (off || !owned()) { finish(); return null; }
       const token = await options.getToken();
+      if (off || !owned()) { finish(); return null; }
       if (!token) return null;
+      controller = new AbortController();
+      requests.add(controller);
+      timeout = setTimeout(() => controller?.abort(), REQUEST_TIMEOUT_MS);
       return await fetchImpl(url, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: controller.signal,
       });
     } catch {
       return null;
+    } finally {
+      clearTimeout(timeout);
+      if (controller) requests.delete(controller);
     }
   }
 
   async function probe() {
     const response = await request({ probe: true });
+    if (off || !owned()) return finish();
     if (response?.status === 401) return finish();
     const answer = response?.ok ? ((await response.json().catch(() => ({}))) as { listening?: boolean }) : null;
+    if (off || !owned()) return finish();
     listening = Boolean(answer?.listening);
     if (listening) needReset = true; // everything said so far goes out first
     announce();
@@ -133,6 +150,7 @@ export function startLiveShare(options: LiveShareOptions): LiveShare {
     const sentState = state;
     const response = await request(body);
     inFlight = false;
+    if (off || !owned()) return finish();
     if (response?.ok) {
       seq = body.seq;
       known = turns.map((t) => ({ ...t }));
@@ -189,6 +207,7 @@ export function startLiveShare(options: LiveShareOptions): LiveShare {
       if (listening && !inFlight) schedule(0);
     },
     async end() {
+      if (!owned()) return finish();
       if (ended) {
         await new Promise<void>((resolve) => (off ? resolve() : endWaiters.push(resolve)));
         return;

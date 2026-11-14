@@ -3,10 +3,13 @@ import { useLocation } from "react-router-dom";
 import { Download, RefreshCw, X } from "lucide-react";
 import {
   applyUpdate,
+  canApplyUpdate,
   installState,
   runInstall,
   subscribeInstall,
 } from "../lib/install";
+import { captureSnapshot, subscribeCapture } from "../lib/capture";
+import { activeJobs, subscribeJobs } from "../lib/pipeline";
 
 /**
  * Mounted once after sign-in. On small login/consent screens a fixed nudge
@@ -22,11 +25,16 @@ export default function InstallApp({
   );
   const [dismissed, setDismissed] = useState(false);
   const location = useLocation();
+  useSyncExternalStore(subscribeCapture, captureSnapshot, captureSnapshot);
+  useSyncExternalStore(subscribeJobs, activeJobs, activeJobs);
+  const updateBlocked = Boolean(update && !canApplyUpdate());
 
   // The capture screen owns its bottom edge, exactly as JobProgress respects.
   if (
     !signedIn ||
     dismissed ||
+    location.pathname === "/setup" ||
+    location.pathname === "/connect" ||
     location.pathname.startsWith("/record") ||
     (!update && !prompt && !ios)
   )
@@ -39,8 +47,8 @@ export default function InstallApp({
       <p>
         {update ? (
           <>
-            <strong>Neue Version verfügbar.</strong> Aufnahme zuerst sichern,
-            dann aktualisieren.
+            <strong>Neue Version verfügbar.</strong>{" "}
+            {updateBlocked ? "Nach der laufenden Aufnahme oder dem Upload aktualisieren." : "Mit einem Neuladen bist du auf dem neuesten Stand."}
           </>
         ) : (
           <>
@@ -57,6 +65,7 @@ export default function InstallApp({
             type="button"
             className="btn btn-primary"
             onClick={applyUpdate}
+            disabled={updateBlocked}
           >
             <RefreshCw size={16} /> Aktualisieren
           </button>

@@ -5,6 +5,8 @@ import { reportIndexCollection } from "../../shared/storage";
 import { trashDriveFile } from "./drive";
 import { deleteDraft, dropLocal } from "./local";
 import { ensureDriveToken } from "./session";
+import { forgetServerProcessing } from "./serverProcessing";
+import { jobFor, clearJob } from "./pipeline";
 import type { ReportData } from "../types";
 
 export interface DeleteOutcome {
@@ -38,6 +40,19 @@ export async function deleteReport(
       );
   };
   check();
+  const index = reportIndexCollection(report);
+  const job = jobFor(report.id, report);
+  if (job?.owner === uid && ["saving", "uploading", "analyzing", "exporting"].includes(job.stage))
+    return { removed: false, warnings: ["Dieses Meeting wird noch verarbeitet. Bitte vor dem Löschen das Ende der Verarbeitung abwarten."] };
+  try {
+    // First remove terminal recovery authority, otherwise a later poll can
+    // recreate the deleted index from its retained exported checkpoint.
+    await forgetServerProcessing(uid, report.id, report);
+    check();
+    clearJob(report.id, report);
+  } catch (cause) {
+    return { removed: false, warnings: [cause instanceof Error ? cause.message : "Der Verarbeitungsauftrag konnte nicht entfernt werden. Bitte erneut versuchen."] };
+  }
 
   if (fromDrive) {
     if (report.home?.folderId) {
@@ -87,7 +102,7 @@ export async function deleteReport(
   let timer: ReturnType<typeof setTimeout>;
   check();
   const pending = deleteDoc(
-    doc(db, "users", uid, reportIndexCollection(report), report.id),
+    doc(db, "users", uid, index, report.id),
   );
   pending.catch(() => {});
   try {
@@ -108,8 +123,9 @@ export async function deleteReport(
   }
 
   check();
-  await deleteDraft(uid, report.id).catch(() => {});
+  await deleteDraft(uid, report.id, { index }).catch(() => {});
   check();
-  await dropLocal(uid, report.id);
+  await dropLocal(uid, report.id, { index });
+  check();
   return { removed: true, warnings };
 }

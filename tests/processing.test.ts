@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { createProcessingRouter, type ProcessingJob, type ProcessingOptions } from '../server/processing';
 import { memoryDocStore } from '../server/mcp/docStore';
 import type { ReportData } from '../src/types';
+import { processingSourceKey } from '../shared/processing';
 
 const servers: Server[] = [];
 afterEach(async () => { await Promise.all(servers.splice(0).map(s => new Promise<void>(r => { s.closeAllConnections(); s.close(() => r()); }))); });
@@ -30,10 +31,34 @@ async function setup(extra: Partial<ProcessingOptions> = {}) {
   const base = `http://127.0.0.1:${(server.address() as any).port}/api`;
   const call = async (path: string, body?: unknown, token='alice', microsoft=false) => {
     const res=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(microsoft?{'X-CheatMeet-Storage':'microsoft'}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});
-    return {status:res.status,body:await res.json()};
+    return {status:res.status,body:await res.json().catch(() => ({}))};
   };
   return {store,queue,io,analyze,call,artifacts};
 }
+it.each(['microsoft', 'google-folder', 'google-json', 'microsoft-root'] as const)('rejects concurrent distinct %s same-ID sources inside native mutation', async kind => {
+  const h = await setup();
+  const home = {provider:'microsoft' as const,connectionId:'c',driveId:'d',rootId:'root',rootName:'Meetings',folderId:'f',reportId:'j'};
+  const first = kind === 'microsoft-root' ? {...report,driveFolderId:undefined,driveReportId:undefined,home} : report;
+  const other = kind === 'microsoft' ? {...report,driveFolderId:undefined,driveReportId:undefined,home}
+    : kind === 'microsoft-root' ? {...first,home:{...home,rootId:'other-root'}}
+    : {...report,[kind === 'google-folder' ? 'driveFolderId' : 'driveReportId']:'other'};
+  let release!: () => void;
+  h.io.load.mockImplementationOnce(async () => {
+    await new Promise<void>(resolve => { release = resolve; });
+    return {report:first,revision:'source-v1',indexRevision:'index-v1'};
+  });
+  const pending = h.call('/processing/meeting-1',{report:first,analyze:false},'alice',true);
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  expect((await h.call('/processing/meeting-1',{report:other,analyze:false},'alice',true)).status).toBe(202);
+  release();
+  expect((await pending).status).toBe(409);
+  expect(h.queue).toHaveBeenCalledTimes(1);
+});
+it.each(['driveFolderId','driveReportId'] as const)('rejects sequential Google reuse with a different %s',async field=>{
+  const h=await setup();
+  await h.call('/processing/meeting-1',{report,analyze:false});
+  expect((await h.call('/processing/meeting-1',{report:{...report,[field]:'other'},analyze:false})).status).toBe(409);
+});
 it('accepts Microsoft-only homes and hides their jobs from legacy Google-only clients',async()=>{
   const h=await setup({identify:async token=>({uid:token,googleSub:''})});
   const home={provider:'microsoft' as const,connectionId:'ms-account',driveId:'b!drive',rootId:'root',rootName:'Meetings',folderId:'ms-folder',reportId:'ms-json'};
@@ -44,7 +69,8 @@ it('accepts Microsoft-only homes and hides their jobs from legacy Google-only cl
   expect((await h.call('/processing')).body.jobs).toEqual([]);
   expect((await h.call('/processing',undefined,'alice',true)).body.jobs).toHaveLength(1);
   expect((await h.call('/processing/meeting-1')).status).toBe(404);
-  expect((await h.call('/processing/meeting-1',undefined,'alice',true)).status).toBe(200);
+  expect((await h.call('/processing/meeting-1',undefined,'alice',true)).status).toBe(404);
+  expect((await h.call('/processing/meeting-1?storage=microsoft',undefined,'alice',true)).status).toBe(200);
   expect((await h.call('/processing/meeting-1',undefined,'bob',true)).status).toBe(404);
 });
 it('coalesces owner lists while authenticating and filtering every request, with bounded idle caching',async()=>{
@@ -94,6 +120,61 @@ it('invalidates cached lists on acceptance and every worker transition including
   expect(query).toHaveBeenCalledTimes(5);
   await h.call('/processing');expect(query).toHaveBeenCalledTimes(5);
 });
+it('forgets only owner terminal jobs before deletion, invalidates cached lists and refuses active or foreign work', async () => {
+  const h = await setup();
+  await h.call('/processing/meeting-1', { report, analyze: false });
+  expect((await h.call('/processing/meeting-1/forget', {})).status).toBe(409);
+  for (let n = 0; n < 3; n++) await h.call('/processing/worker', h.queue.mock.calls.at(-1)![0], 'worker');
+  expect((await h.call('/processing')).body.jobs).toHaveLength(1);
+  expect((await h.call('/processing/meeting-1/forget', {}, 'bob')).status).toBe(200);
+  expect((await h.call('/processing/meeting-1')).status).toBe(200);
+  const before = h.io.checkpoint.mock.calls.length;
+  const task = h.queue.mock.calls.at(-1)![0];
+  expect((await h.call('/processing/meeting-1/forget', {})).status).toBe(200);
+  expect((await h.call('/processing')).body.jobs).toEqual([]);
+  expect((await h.call('/processing/meeting-1')).status).toBe(404);
+  await h.call('/processing/worker', task, 'worker');
+  expect(h.io.checkpoint).toHaveBeenCalledTimes(before);
+  expect(h.artifacts.has('exported')).toBe(true); // Keeping archive files is independent.
+});
+
+it('constrains terminal lookup and forget to stable source, ignoring consumed audio', async () => {
+  const h=await setup();
+  await h.call('/processing/meeting-1',{report,analyze:false});
+  for(let n=0;n<3;n++)await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
+  const sibling={...report,driveFolderId:'sibling-folder'};
+  const query=(r:ReportData)=>`/processing/meeting-1?source=${encodeURIComponent(processingSourceKey(r))}`;
+  expect((await h.call(query(sibling),undefined,'alice',true)).status).toBe(409);
+  expect((await h.call('/processing/meeting-1/forget',{source:processingSourceKey(sibling)},'alice',true)).status).toBe(409);
+  expect((await h.call(query({...report,rawAudioUrl:undefined}))).status).toBe(200);
+  expect((await h.call('/processing/meeting-1/forget',{source:processingSourceKey(report)})).status).toBe(200);
+  expect((await h.call(query(report))).status).toBe(404);
+});
+it.each([false,true])('invalidates changed managed calendar notes before export (changed=%s)',async changed=>{
+  const h=await setup();
+  const previous={...report,summary:changed?'Alt':'Zusammenfassung',calendarEventId:'event',calendarSyncedAt:'old-success'};
+  h.io.load.mockResolvedValue({report:previous,revision:'source-v1',indexRevision:'index-v1'});
+  await h.call('/processing/meeting-1',{report:previous,analyze:true,regenerate:true});
+  for(let n=0;n<2;n++)await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
+  expect(h.artifacts.get('analyzed')?.calendarSyncedAt).toBe(changed?undefined:'old-success');
+  expect(h.artifacts.get('analyzed')?.calendarEventId).toBe('event');
+  h.io.export.mockImplementationOnce(async (_job,value)=>({...value,calendarSyncedAt:'new-success'}));
+  await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
+  expect(h.artifacts.get('exported')?.calendarSyncedAt).toBe('new-success');
+});
+it('does not return an exported checkpoint after its job was forgotten mid-read', async () => {
+  const h = await setup();
+  await h.call('/processing/meeting-1', { report, analyze: false });
+  for (let n = 0; n < 3; n++) await h.call('/processing/worker', h.queue.mock.calls.at(-1)![0], 'worker');
+  let release!: (value: ReportData) => void;
+  h.io.readCheckpoint.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+  const read = h.call('/processing/meeting-1');
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  await h.call('/processing/meeting-1/forget', {});
+  release(report);
+  expect((await read).status).toBe(404);
+});
+
 it('rejects browser tokens at worker and never does work on GET',async()=>{
   const h=await setup();await h.call('/processing/meeting-1',{report,analyze:true});
   const task=h.queue.mock.calls[0][0];
@@ -243,10 +324,11 @@ it('does not rerun a completed job when Drive now contains its exported revision
 it('regenerates an edited report only when explicitly requested, otherwise preserves its summary',async()=>{
   for(const regenerate of [false,true]){
     const h=await setup();
-    h.io.load.mockResolvedValue({report:{...report,summary:'Bestehende Zusammenfassung'},revision:'edited-v2',indexRevision:'index-v2'});
+    h.io.load.mockResolvedValue({report:{...report,summary:'Bestehende Zusammenfassung',summaryNeedsRefresh:true},revision:'edited-v2',indexRevision:'index-v2'});
     await h.call('/processing/meeting-1',{report,analyze:true,regenerate});
     for(let n=0;n<4;n++)await h.call('/processing/worker',h.queue.mock.calls.at(-1)![0],'worker');
     expect(h.analyze).toHaveBeenCalledTimes(regenerate?1:0);
+    expect((await h.call('/processing/meeting-1')).body.report.summaryNeedsRefresh).toBe(!regenerate);
     expect((await h.call('/processing/meeting-1')).body.report.summary).toBe(regenerate?'Zusammenfassung':'Bestehende Zusammenfassung');
   }
 });

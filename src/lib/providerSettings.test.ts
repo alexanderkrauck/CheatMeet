@@ -17,6 +17,9 @@ import {
   savedCalendarProvider,
   saveCalendarProvider,
   loadMeetingHome,
+  loadProviderSettings,
+  savedCalendarConnectionId,
+  savedCalendarId,
 } from "./providerSettings";
 const home = {
   provider: "microsoft" as const,
@@ -38,6 +41,7 @@ beforeEach(() => {
 });
 it("persists an owner-scoped home and calendar preference without moving existing meetings", async () => {
   await saveMeetingHome(home);
+  s.getDoc.mockResolvedValue({ data: () => ({ meetingHome: home }) });
   await saveCalendarProvider("microsoft");
   expect(savedMeetingHome()).toEqual(home);
   expect(savedCalendarProvider()).toBe("microsoft");
@@ -51,6 +55,31 @@ it("persists an owner-scoped home and calendar preference without moving existin
   s.user.uid = "b";
   expect(savedMeetingHome()).toBeNull();
   expect(savedCalendarProvider()).toBe("google");
+});
+it("keeps an explicit calendar destination and never replaces a failed cold lookup with Google", async () => {
+  s.getDoc.mockRejectedValue(new Error("offline"));
+  await expect(loadProviderSettings()).rejects.toThrow("offline");
+  s.getDoc.mockResolvedValue({
+    data: () => ({ calendarProvider: "unknown-provider" }),
+  });
+  await expect(loadProviderSettings()).rejects.toThrow("Kalenderauswahl");
+  s.getDoc.mockResolvedValue({ data: () => undefined });
+  await loadProviderSettings();
+  expect(savedCalendarProvider()).toBe("google");
+  await saveCalendarProvider("microsoft", "work", "team-calendar");
+  expect(savedCalendarConnectionId()).toBe("work");
+  expect(savedCalendarId()).toBe("team-calendar");
+  expect(s.setDoc.mock.calls.at(-1)?.[1]).toMatchObject({
+    calendarProvider: "microsoft",
+    calendarConnectionId: "work",
+    calendarId: "team-calendar",
+  });
+  s.getDoc.mockRejectedValue(new Error("offline"));
+  expect(await loadProviderSettings()).toMatchObject({
+    calendarProvider: "microsoft",
+    calendarConnectionId: "work",
+    calendarId: "team-calendar",
+  });
 });
 it("does not cache remote settings after an account switch", async () => {
   s.getDoc.mockImplementation(async () => {

@@ -1,6 +1,6 @@
 import { auth } from "./firebase";
 import { transcriptIsElsewhere } from "./reportProjection";
-import { putDraft, putLocal } from "./local";
+import { getLocal, putDraft, putLocal, ReportConflictError } from "./local";
 import { audioExtension } from "../../shared/analysis";
 import {
   renderTranscript,
@@ -22,7 +22,7 @@ export function prepareTranscript(
    * does — it is what finalises a live capture, and skipping it would throw
    * the live turns away with the draft.
    */
-  { batch = true }: { batch?: boolean } = {},
+  { batch = true, expectedUpdatedAt }: { batch?: boolean; expectedUpdatedAt?: string | null } = {},
 ): Promise<void> {
   const retranscribe = batch && draft.retranscribe === true;
   if (
@@ -50,7 +50,7 @@ export function prepareTranscript(
     return Promise.resolve();
   const owner = auth.currentUser?.uid;
   if (!owner) return Promise.reject(new Error("Bitte erneut anmelden."));
-  const key = `${owner}:${draft.report.id}`;
+  const key = `${owner}:${draft.report.home ? "microsoft" : "google"}:${draft.report.id}`;
   const assertOwner = () => {
     if (auth.currentUser?.uid !== owner)
       throw new Error("Das angemeldete Konto hat sich geändert.");
@@ -61,13 +61,17 @@ export function prepareTranscript(
       // Concurrent callers may hold different Draft objects. Re-read the result,
       // instead of letting one caller summarize its old provisional copy.
       const { getDraft } = await import("./local");
-      const stored = await getDraft(owner, draft.report.id);
+      const stored = await getDraft(draft.report.home ? `${owner}:microsoft` : owner, draft.report.id, true);
       assertOwner();
       if (stored?.report.speech?.phase !== "final")
         throw new Error("Transkript fehlt.");
+      const latest = await getLocal(owner, draft.report.id, { index: draft.report.home ? "meetings" : "reports" });
+      assertOwner();
+      if ((latest?.report.updatedAt ?? null) !== (stored.report.updatedAt ?? null)) throw new ReportConflictError();
       draft.retranscribe = stored.retranscribe;
       draft.report = {
         ...draft.report,
+        updatedAt: stored.report.updatedAt,
         speech: stored.report.speech,
         transcriptionOrigin: stored.report.transcriptionOrigin,
         transcription: stored.report.transcription,
@@ -75,6 +79,21 @@ export function prepareTranscript(
     });
   const run = async () => {
     const report = draft.report;
+    const stored = await getLocal(owner, report.id, { index: report.home ? "meetings" : "reports" });
+    assertOwner();
+    let expected = expectedUpdatedAt === undefined ? stored?.report.updatedAt ?? null : expectedUpdatedAt;
+    if (stored && ((stored.report.updatedAt ?? null) !== expected || expected !== (report.updatedAt ?? null))) throw new ReportConflictError();
+    const checkpoint = async (clearRetranscribe = false) => {
+      assertOwner();
+      const next = { ...draft.report, updatedAt: new Date(Math.max(Date.now(), (Date.parse(expected || "") || 0) + 1)).toISOString() };
+      await putLocal(owner, next, true, expected);
+      assertOwner();
+      expected = next.updatedAt;
+      draft.report = next;
+      if (clearRetranscribe) draft.retranscribe = false;
+      await putDraft(owner, draft);
+      assertOwner();
+    };
     const recorded =
       report.transcriptionOrigin === "live" ||
       (report.transcriptionOrigin !== "import" &&
@@ -100,11 +119,7 @@ export function prepareTranscript(
           ? renderTranscript(speech)
           : report.transcription,
       };
-      assertOwner();
-      await putDraft(owner, draft);
-      assertOwner();
-      await putLocal(owner, draft.report);
-      assertOwner();
+      await checkpoint();
       return;
     }
     if (!batch)
@@ -192,12 +207,7 @@ export function prepareTranscript(
       transcriptionOrigin: recorded ? "live" : "import",
       transcription: renderTranscript(speech),
     };
-    draft.retranscribe = false;
-    assertOwner();
-    await putDraft(owner, draft);
-    assertOwner();
-    await putLocal(owner, draft.report);
-    assertOwner();
+    await checkpoint(true);
   };
   const result = run().finally(() => active.delete(key));
   active.set(key, result);

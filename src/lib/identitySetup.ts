@@ -17,3 +17,9 @@ export function subscribeIdentitySetup(callback:()=>void){
   window.addEventListener(event,callback);
   return()=>window.removeEventListener(event,callback);
 }
+
+/** Preserve an internal destination, never a provider/external redirect. */
+export function safeWorkspaceReturnTo(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 8192 || /[\\\u0000-\u001f\u007f]/.test(value)) return null;
+  return /^\/(?:dashboard|calendar|settings|usage|record|setup|connect|report\/[^/?#]+)\/?(?:[?#]|$)/.test(value) ? value : null;
+}

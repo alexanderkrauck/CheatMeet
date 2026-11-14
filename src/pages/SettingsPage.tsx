@@ -1,7 +1,7 @@
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { RetentionSettings } from "../components/RetentionSettings";
-import { signOut } from "firebase/auth";
+import { onIdTokenChanged, signOut } from "firebase/auth";
 import { LogOut, Mic, ShieldOff, UserRound } from "lucide-react";
 import DriveSettings from "../components/DriveSettings";
 import MicrosoftSettings from "../components/MicrosoftSettings";
@@ -12,7 +12,10 @@ import Preferences from "../components/Preferences";
 import StorageSettings from "../components/StorageSettings";
 import { Notice } from "../components/UI";
 import { auth } from "../lib/firebase";
-import { linkMicrosoftIdentity } from "../lib/microsoftIdentity";
+import {
+  linkMicrosoftIdentity,
+  unlinkMicrosoftIdentity,
+} from "../lib/microsoftIdentity";
 import {
   calendarSyncEnabled,
   consentStepEnabled,
@@ -26,6 +29,7 @@ import {
 import {
   errorMessage,
   linkGoogleIdentity,
+  unlinkGoogleIdentity,
   revokeDriveGrant,
   subscribeDriveSession,
   driveToken,
@@ -67,15 +71,62 @@ export default function SettingsPage() {
     () => user?.providerData.map((p) => p.providerId) || [],
   );
   const [error, setError] = useState("");
-  const googleDriveConnected=useSyncExternalStore(subscribeDriveSession,()=>Boolean(driveToken()),()=>false);
+  const [feedback, setFeedback] = useState("");
+  const googleDriveConnected = useSyncExternalStore(
+    subscribeDriveSession,
+    () => Boolean(driveToken()),
+    () => false,
+  );
+  useEffect(
+    () =>
+      onIdTokenChanged(auth, (current) =>
+        setMethods(current?.providerData.map((p) => p.providerId) || []),
+      ),
+    [],
+  );
 
   async function linkIdentity(provider: "google" | "microsoft") {
     setLinking(true);
     setError("");
+    setFeedback("");
     try {
       if (provider === "google") await linkGoogleIdentity();
       else await linkMicrosoftIdentity();
       setMethods(auth.currentUser?.providerData.map((p) => p.providerId) || []);
+      setFeedback(
+        "Anmeldemethode verknüpft. Speicher und Kalender bleiben unverändert.",
+      );
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  async function unlinkIdentity(provider: "google" | "microsoft") {
+    const name = provider === "google" ? "Google" : "Microsoft";
+    if (methods.length < 2) {
+      setError(
+        "Die letzte Anmeldemethode kann nicht entfernt werden. Verknüpfe zuerst eine weitere.",
+      );
+      return;
+    }
+    if (
+      !window.confirm(
+        `${name}-Anmeldung von diesem Arbeitsbereich entfernen? Eine weitere Anmeldemethode bleibt erhalten. Dateien, Meetings sowie Speicher- und Kalenderverbindungen werden nicht gelöscht.`,
+      )
+    )
+      return;
+    setLinking(true);
+    setError("");
+    setFeedback("");
+    try {
+      if (provider === "google") await unlinkGoogleIdentity();
+      else await unlinkMicrosoftIdentity();
+      setMethods(auth.currentUser?.providerData.map((p) => p.providerId) || []);
+      setFeedback(
+        `${name}-Anmeldung entfernt. Speicher- und Kalenderzugriff bleiben separat verwaltet.`,
+      );
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -88,17 +139,21 @@ export default function SettingsPage() {
     // which is why signing out deliberately does not do it.
     if (
       !window.confirm(
-        "Der Zugriff auf Google Drive wird auf allen deinen Geräten entzogen. Bereits gespeicherte Dateien bleiben in Drive. Fortfahren?",
+        "Google-Zugriff für diesen Arbeitsbereich auf allen Geräten entziehen? Das betrifft Google Drive und eine vorhandene Kalenderfreigabe. Noch laufende Uploads und Verarbeitungen können anhalten. Dateien, Meetings und Anmeldemethoden bleiben erhalten. Bestehende Meetings wechseln nicht den Speicheranbieter. Fortfahren?",
       )
     )
       return;
     setRevoking(true);
     setError("");
+    setFeedback("");
     try {
       await revokeDriveGrant();
-      await signOut(auth);
+      setFeedback(
+        "Google-Zugriff widerrufen. Deine CheatMeet-Anmeldung bleibt erhalten; bestehende Dateien werden nicht gelöscht.",
+      );
     } catch (cause) {
       setError(errorMessage(cause));
+    } finally {
       setRevoking(false);
     }
   }
@@ -113,12 +168,37 @@ export default function SettingsPage() {
       </div>
 
       {error && <Notice>{error}</Notice>}
+      {feedback && (
+        <p className="notice" role="status">
+          {feedback}
+        </p>
+      )}
+      <nav className="settings-nav actions" aria-label="Einstellungsbereiche">
+        {[
+          ["konto", "Konto"],
+          ["verbindungen", "Speicher"],
+          ["kalender", "Kalender"],
+          ["aufnahme", "Aufnahme"],
+          ["zusammenfassung", "KI-Anweisung"],
+          ["aufbewahrung", "Aufbewahrung"],
+          ["assistenten", "Assistenten"],
+          ["geraet", "Dieses Gerät"],
+        ].map(([id, name]) => (
+          <a className="btn" href={`#${id}`} key={id}>
+            {name}
+          </a>
+        ))}
+      </nav>
 
       <div className="settings-stack">
-        <section className="panel" aria-labelledby="account-title">
+        <section
+          id="konto"
+          className="panel settings-account"
+          aria-labelledby="account-title"
+        >
           <div>
             <span className="eyebrow">KONTO</span>
-            <h2 id="account-title">Dein CheatMeet-Arbeitsbereich</h2>
+            <h2 id="account-title">Dein Arbeitsbereich</h2>
           </div>
           <p className="account-identity">
             <span className="avatar" aria-hidden="true">
@@ -133,26 +213,44 @@ export default function SettingsPage() {
               <small className="muted">{user?.email}</small>
             </span>
           </p>
-          <h3>Anmeldemethoden</h3>
           <p className="muted small">
-            Verknüpfe weitere Anmeldemethoden ausdrücklich mit diesem
-            Arbeitsbereich, statt ein neues Konto anzulegen. Speicher- und
-            Kalenderzugriff werden separat eingerichtet.
+            Anmeldemethoden gehören zu diesem Arbeitsbereich. Speicher und
+            Kalender werden separat freigegeben.
           </p>
           <div className="actions">
             {(["google", "microsoft"] as const).map((provider) => {
               const linked = methods.includes(`${provider}.com`);
               const name = provider === "google" ? "Google" : "Microsoft";
               return (
-                <button
-                  key={provider}
-                  className="btn"
-                  disabled={linking || linked}
-                  onClick={() => void linkIdentity(provider)}
-                >
-                  {name}
-                  {linked ? " · Anmeldung verknüpft" : "-Anmeldung verknüpfen"}
-                </button>
+                <div className="identity-method" key={provider}>
+                  {linked ? (
+                    <>
+                      <span className="badge">
+                        {name} · Anmeldung verknüpft
+                      </span>
+                      {methods.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={linking}
+                          onClick={() => void unlinkIdentity(provider)}
+                          aria-label={`${name}-Anmeldung entfernen`}
+                        >
+                          Entfernen
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={linking}
+                      onClick={() => void linkIdentity(provider)}
+                    >
+                      {name}-Anmeldung verknüpfen
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -160,20 +258,28 @@ export default function SettingsPage() {
             <button
               type="button"
               className="btn"
-              onClick={() => void signOut(auth).catch(() => {})}
+              onClick={() =>
+                void signOut(auth).catch((cause) =>
+                  setError(errorMessage(cause)),
+                )
+              }
             >
               <LogOut size={16} /> Abmelden
             </button>
-
           </div>
           <p className="muted small">
-            Abmelden beendet nur diese Sitzung; bestehende Verbindungen bleiben
-            erhalten.
-
+            {methods.length === 1
+              ? "Die letzte Anmeldemethode bleibt geschützt. "
+              : ""}
+            Abmelden beendet nur diese Sitzung; Verbindungen bleiben erhalten.
           </p>
         </section>
 
-        <section className="panel" aria-labelledby="connections-title">
+        <section
+          id="verbindungen"
+          className="panel"
+          aria-labelledby="connections-title"
+        >
           <span className="eyebrow">VERBINDUNGEN</span>
           <h2 id="connections-title">Speicher und Kalender</h2>
           <p className="muted">
@@ -188,8 +294,24 @@ export default function SettingsPage() {
         <div className="connection-provider-grid">
           <div>
             <DriveSettings />
-            {googleDriveConnected&&<button type="button" className="btn danger" disabled={revoking} onClick={()=>void revoke()}><ShieldOff size={16}/>{revoking?'Wird entzogen …':'Google-Drive-Zugriff entziehen'}</button>}
-            {googleDriveConnected&&<p className="muted small">Entziehen gilt für Google Drive auf allen Geräten und meldet diesen Arbeitsbereich ab. Gespeicherte Dateien bleiben erhalten.</p>}
+            {googleDriveConnected && (
+              <button
+                type="button"
+                className="btn danger"
+                disabled={revoking}
+                onClick={() => void revoke()}
+              >
+                <ShieldOff size={16} />
+                {revoking ? "Wird entzogen …" : "Google-Zugriff entziehen"}
+              </button>
+            )}
+            {googleDriveConnected && (
+              <p className="muted small">
+                Betrifft Drive und vorhandene Kalenderfreigaben auf allen
+                Geräten. Die Anmeldung bleibt erhalten; laufende Verarbeitung
+                kann anhalten.
+              </p>
+            )}
           </div>
           <MicrosoftSettings storageOnly />
         </div>
@@ -200,7 +322,11 @@ export default function SettingsPage() {
 
         <Preferences />
 
-        <section className="panel" aria-labelledby="capture-title">
+        <section
+          id="aufnahme"
+          className="panel"
+          aria-labelledby="capture-title"
+        >
           <div>
             <span className="eyebrow">AUFNAHME</span>
             <h2 id="capture-title">Standards für neue Meetings</h2>
@@ -283,7 +409,11 @@ export default function SettingsPage() {
           </p>
         </section>
 
-        <section className="panel" aria-labelledby="calendar-title">
+        <section
+          id="kalender"
+          className="panel"
+          aria-labelledby="calendar-title"
+        >
           <div>
             <span className="eyebrow">KALENDER</span>
             <h2 id="calendar-title">Termine und Zusammenfassungen</h2>

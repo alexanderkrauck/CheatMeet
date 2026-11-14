@@ -3,19 +3,15 @@ import {
   hasAnyCalendarGrant,
   getEvent,
   isEventGone,
-  summaryBlock,
   updateEventDescription,
   type CalendarEvent,
 } from "./calendar";
-import { formatTodoLine } from "../../shared/analysis";
-import { savedCalendarProvider } from "./providerSettings";
+import { calendarReportBlock } from "../../shared/calendarNotes";
+import { loadProviderSettings } from "./providerSettings";
 import type { ReportData } from "../types";
 import { auth } from "./firebase";
 
-const driveLink = (id?: string) =>
-  id
-    ? `https://drive.google.com/drive/folders/${encodeURIComponent(id)}`
-    : undefined;
+export { calendarReportBlock } from "../../shared/calendarNotes";
 
 /**
  * Puts the finished meeting back where it was planned.
@@ -36,23 +32,29 @@ export async function syncReportToCalendar(
       throw new Error("Das angemeldete Konto hat sich geändert.");
   };
   const linked = !!(report.calendarEventId && report.calendarId);
+  // The automatic path must not resolve defaults or create an unrequested event.
+  if (!linked && !create)
+    return {
+      calendarError:
+        "Diesem Meeting ist kein Termin zugeordnet. Über „In den Kalender“ kannst du einen anlegen.",
+    };
+  const defaults = linked ? null : await loadProviderSettings();
+  checkOwner();
   const provider = linked
     ? report.calendarProvider || "google"
-    : savedCalendarProvider();
-  if (!hasAnyCalendarGrant(provider))
-    throw new Error("Der Kalender ist nicht freigegeben.");
+    : defaults!.calendarProvider;
+  const connectionId = linked
+    ? report.calendarConnectionId
+    : defaults?.calendarConnectionId;
+  if (!hasAnyCalendarGrant(provider, connectionId))
+    throw new Error(
+      "Der Kalender ist nicht freigegeben. Bitte die gewählte Verbindung in den Einstellungen prüfen.",
+    );
   if (linked && provider === "microsoft" && !report.calendarConnectionId)
     throw new Error(
       "Die Microsoft-Kalender-Verbindung fehlt. Bitte den Termin erneut zuordnen.",
     );
-  const block = summaryBlock({
-    summary: report.summary,
-    todos: (report.todos || []).map(formatTodoLine),
-    link:
-      report.home?.provider === "microsoft"
-        ? report.home.webUrl
-        : driveLink(report.driveFolderId),
-  });
+  const block = calendarReportBlock(report);
   const syncedAt = new Date().toISOString();
 
   if (report.calendarEventId && report.calendarId) {
@@ -107,17 +109,11 @@ export async function syncReportToCalendar(
     };
   }
 
-  // Creating is the destructive-ish half: an unmatched recording would put a
-  // new event on the calendar every time. The automatic path never does it.
-  if (!create)
-    return {
-      calendarError:
-        "Diesem Meeting ist kein Termin zugeordnet. Über „In den Kalender“ kannst du einen anlegen.",
-    } as Partial<ReportData>;
-
   const startMs = Date.parse(report.date) || Date.now();
   const created = await createEvent({
     provider,
+    connectionId,
+    calendarId: defaults?.calendarId || "primary",
     title: report.title || "Meeting",
     startMs,
     endMs: startMs + (report.durationMs || 0),

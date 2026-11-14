@@ -90,7 +90,13 @@ beforeEach(() => {
 
 describe("sweepRetention", () => {
   it("deletes the audio and nothing else", async () => {
+    const local = await import("./local");
+    const read = vi.spyOn(local, "getLocal");
+    const remove = vi.spyOn(local, "deleteDraft");
     expect(await sweepRetention(NOW)).toEqual({ deleted: 1, failed: 0 });
+    expect(read).toHaveBeenCalledWith("u1", "r1", { index: "reports" });
+    expect(remove).toHaveBeenCalledWith("u1", "r1", { index: "reports" });
+    read.mockRestore(); remove.mockRestore();
 
     expect(calls).toEqual([
       "trash:audio-id",

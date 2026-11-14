@@ -88,7 +88,10 @@ const HOUR = 60 * 60 * 1000;
 const MINUTE = 60 * 1000;
 
 const clock = (ms: number) =>
-  new Date(ms).toLocaleTimeString("de-AT", { hour: "2-digit", minute: "2-digit" });
+  new Date(ms).toLocaleTimeString("de-AT", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
 /** "09:30–10:30", or the honest label for a day-long entry. */
 const sameDay = (a: Date, b: Date) =>
@@ -125,7 +128,8 @@ export function countdownLabel(
   // A whole-day entry has no start moment to count down to; "in 10 Min"
   // would be counting to midnight.
   if (!event.allDay && delta <= MINUTE) return "gleich";
-  if (!event.allDay && delta < HOUR) return `in ${Math.round(delta / MINUTE)} Min`;
+  if (!event.allDay && delta < HOUR)
+    return `in ${Math.round(delta / MINUTE)} Min`;
   if (!event.allDay && delta < 12 * HOUR) {
     const hours = Math.floor(delta / HOUR);
     const minutes = Math.round((delta % HOUR) / MINUTE);
@@ -169,6 +173,36 @@ export function eventLine(event: CalendarEvent, withDate = false): string {
   return [day, timeLabel(event), guests === event.title ? "" : guests]
     .filter(Boolean)
     .join(" · ");
+}
+
+/** Use only a provider-supplied event URL, never a guessed URL built from an ID. */
+export function providerEventUrl(
+  event: Pick<CalendarEvent, "provider" | "htmlLink">,
+): string | undefined {
+  if (!event.htmlLink) return undefined;
+  try {
+    const url = new URL(event.htmlLink);
+    if (url.protocol !== "https:" || url.username || url.password || url.port)
+      return undefined;
+    const hosts =
+      event.provider === "microsoft"
+        ? [
+            "outlook.office.com",
+            "outlook.office365.com",
+            "outlook.live.com",
+            "outlook.cloud.microsoft",
+          ]
+        : ["calendar.google.com", "www.google.com"];
+    if (!hosts.includes(url.hostname)) return undefined;
+    if (
+      url.hostname === "www.google.com" &&
+      !url.pathname.startsWith("/calendar/")
+    )
+      return undefined;
+    return url.href;
+  } catch {
+    return undefined;
+  }
 }
 
 /** At most three names, then a count — a guest list is context, not content. */

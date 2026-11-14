@@ -24,6 +24,7 @@ import {
   speakerCount,
 } from "./meetingMeta";
 import type { ReportData } from "../types";
+import { mergeRemoteReport } from "./reportProjection";
 
 const report = (over: Partial<ReportData> = {}): ReportData => ({
   id: "r1",
@@ -418,6 +419,9 @@ describe("plural", () => {
 });
 
 describe("summarise", () => {
+  it("retains the stable Google JSON reference needed for exact-source progress", () => {
+    expect(summarise(report({ driveReportId: "pinned-json" }))).toHaveProperty("driveReportId", "pinned-json");
+  });
   const speech = {
     provider: "assemblyai" as const,
     phase: "final" as const,
@@ -492,6 +496,42 @@ describe("knownSpeakers", () => {
 });
 
 describe("summarise for a report whose transcript is elsewhere", () => {
+  it.each([false, true])("keeps stale recovery bytes out of search and uses incoming review metadata %s", speakerReviewPending => {
+    const local = report({
+      transcription: "NurAlteWörter aus der lokalen Wiederherstellung",
+      speech: {
+        provider: "assemblyai", phase: "final", languages: ["de"],
+        turns: [turn("old", "mic:1", 90_000)],
+        speakerNames: { "mic:1": "AlterName" },
+        speakerReview: speakerReviewPending ? "reviewed" : "pending",
+      },
+    });
+    const recovery = structuredClone(local);
+    const merged = mergeRemoteReport(local, report({
+      summary: "Aktuelle Zusammenfassung", participants: ["NeuerName"],
+      speakerReviewPending, transcriptRevision: "sha256:incoming", transcriptChars: 100,
+      durationMs: 0,
+      todos: [{ text: "AktuelleAufgabe" }],
+    }));
+    expect(merged.transcriptStale).toBe(true);
+    const result = summarise(merged);
+    expect(result).toMatchObject({
+      transcription: "", speakers: ["NeuerName"], needsReview: speakerReviewPending,
+      transcriptLocal: false, durationMs: 0,
+    });
+    expect(matchesQuery(result, "nuraltewörter")).toBe(false);
+    expect(matchesQuery(result, "altername")).toBe(false);
+    expect(matchesQuery(result, "neuername")).toBe(true);
+    expect(matchesQuery(result, "aktuelleaufgabe")).toBe(true);
+    expect(searchSnippet(result, "nuraltewörter")).toBeNull();
+    expect(searchSnippet(result, "zusammenfassung")?.match).toBe("Zusammenfassung");
+    expect(knownSpeakers([result])).toEqual(["NeuerName"]);
+    // Projection is read-only: the full recovery copy is still available on-device.
+    expect(merged.transcription).toBe(recovery.transcription);
+    expect(merged.speech).toEqual(recovery.speech);
+    expect(local).toEqual(recovery);
+  });
+
   const base = {
     id: "r1",
     date: "2026-09-15T12:00:00.000Z",

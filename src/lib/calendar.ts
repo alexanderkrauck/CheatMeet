@@ -6,6 +6,9 @@ import {
 import {
   savedCalendarProvider,
   hasMicrosoftCalendar,
+  savedCalendarConnectionId,
+  savedCalendarId,
+  loadProviderSettings,
 } from "./providerSettings";
 import { cachedMicrosoftConnections } from "./microsoft";
 import { auth } from "./firebase";
@@ -16,18 +19,33 @@ import {
   getMicrosoftEvent,
   updateMicrosoftEventDescription,
   createMicrosoftEvent,
+  availableMicrosoftCalendars,
 } from "./microsoftCalendar";
 
 /** Grant for the selected calendar; storage home never selects a calendar. */
 export function hasAnyCalendarGrant(
   provider: ServiceProvider = savedCalendarProvider(),
+  connectionId = savedCalendarConnectionId(),
 ): boolean {
-  return provider === "microsoft" ? hasMicrosoftCalendar() : hasCalendarGrant();
+  return provider === "microsoft"
+    ? hasMicrosoftCalendar(connectionId)
+    : hasCalendarGrant();
 }
-const calendarConnection = () =>
-  cachedMicrosoftConnections().find((c) => c.calendar)?.connectionId;
 export const calendarSelectionSnapshot = () =>
-  `${auth.currentUser?.uid || ""}:${savedCalendarProvider()}:${calendarConnection() || ""}:${hasAnyCalendarGrant()}`;
+  `${auth.currentUser?.uid || ""}:${savedCalendarProvider()}:${savedCalendarConnectionId() || ""}:${savedCalendarId()}:${hasAnyCalendarGrant()}`;
+
+function requireCalendarConnection(connectionId?: string): string {
+  if (
+    !connectionId ||
+    !cachedMicrosoftConnections().some(
+      (c) => c.connectionId === connectionId && c.calendar,
+    )
+  )
+    throw new Error(
+      "Das gewählte Outlook-Konto ist nicht verfügbar. Bitte die Kalenderverbindung in den Einstellungen auswählen oder erneut verbinden.",
+    );
+  return connectionId;
+}
 export function subscribeCalendar(listener: () => void): () => void {
   const drive = subscribeDriveSession(listener);
   const account = onAuthStateChanged(auth, listener);
@@ -98,6 +116,7 @@ export interface CalendarEvent {
 
 interface RawEvent {
   id?: string;
+  etag?: string;
   summary?: string;
   description?: string;
   htmlLink?: string;
@@ -155,6 +174,7 @@ export function toEvent(
     kind: raw.eventType || "default",
     description: raw.description || "",
     htmlLink: raw.htmlLink,
+    etag: raw.etag,
   };
 }
 
@@ -192,6 +212,10 @@ async function call(path: string, init: RequestInit = {}) {
             ? "Google Kalender ist gerade ausgelastet. Bitte kurz später erneut versuchen."
             : "Der Kalenderzugriff fehlt. Bitte Google erneut verbinden und den Kalender freigeben.",
       );
+    if (response.status === 412)
+      throw fail(
+        "Der Termin wurde inzwischen geändert. Bitte erneut laden und die Ergänzung erneut versuchen.",
+      );
     if (response.status === 404 || response.status === 410)
       throw fail("Der Kalendereintrag existiert nicht mehr.");
     throw fail(`Google Kalender: Anfrage fehlgeschlagen (${response.status}).`);
@@ -199,48 +223,166 @@ async function call(path: string, init: RequestInit = {}) {
   return response.json();
 }
 
-/** Events in a time range on the primary calendar, in start order. */
-/** How many events are worth fetching at all; a week of a busy calendar. */
+/** Array-compatible API; completeness is metadata, not an invented empty answer. */
+export type CalendarEvents = CalendarEvent[] & { truncated?: boolean };
+export interface CalendarSelection {
+  provider: ServiceProvider;
+  connectionId?: string;
+  calendarId?: string;
+}
+export function calendarResult(
+  events: CalendarEvent[],
+  truncated = false,
+): CalendarEvents {
+  Object.defineProperty(events, "truncated", {
+    value: truncated,
+    enumerable: false,
+  });
+  return events;
+}
 const EVENT_BUDGET = 250;
 const PAGE_SIZE = 100;
+
+async function resolveSelection(
+  selection?: CalendarSelection,
+): Promise<CalendarSelection> {
+  if (selection) return selection;
+  const defaults = await loadProviderSettings();
+  return {
+    provider: defaults.calendarProvider,
+    connectionId: defaults.calendarConnectionId || undefined,
+    calendarId: defaults.calendarId,
+  };
+}
 
 export async function eventsBetween(
   fromMs: number,
   toMs: number,
   budget = EVENT_BUDGET,
-): Promise<CalendarEvent[]> {
-  if (!hasAnyCalendarGrant()) return [];
-  if (savedCalendarProvider() === "microsoft") {
-    const connectionId = calendarConnection();
-    return microsoftEventsBetween(fromMs, toMs, budget, connectionId);
+  selection?: CalendarSelection,
+): Promise<CalendarEvents> {
+  if (budget <= 0) return calendarResult([]);
+  const owner = auth.currentUser?.uid;
+  const target = await resolveSelection(selection);
+  if (auth.currentUser?.uid !== owner)
+    throw new Error("Das angemeldete Konto hat sich geändert.");
+  const calendarId = target.calendarId || "primary";
+  if (target.provider === "microsoft") {
+    const connectionId = requireCalendarConnection(target.connectionId);
+    return microsoftEventsBetween(
+      fromMs,
+      toMs,
+      budget,
+      connectionId,
+      calendarId,
+    );
   }
+  if (!hasAnyCalendarGrant("google")) return calendarResult([]);
   const events: CalendarEvent[] = [];
+  const seen = new Set<string>();
   let pageToken: string | undefined;
-  // Results come back in start order, so a single capped page silently drops
-  // the later days of the range — a meeting on day six would never appear.
+  let requests = 0;
+  let remainder = false;
   do {
     const params = new URLSearchParams({
       timeMin: new Date(fromMs).toISOString(),
       timeMax: new Date(toMs).toISOString(),
-      // Expands recurring series into the individual occurrences a person sees.
       singleEvents: "true",
       orderBy: "startTime",
       maxResults: String(Math.min(PAGE_SIZE, budget - events.length)),
       ...(pageToken ? { pageToken } : {}),
     });
-    const data = await call(`/calendars/primary/events?${params}`);
-    for (const raw of (data.items || []) as RawEvent[]) {
-      const event = toEvent(raw, "primary");
-      if (event) events.push(event);
+    if (auth.currentUser?.uid !== owner)
+      throw new Error("Das angemeldete Konto hat sich geändert.");
+    const data = await call(
+      `/calendars/${encodeURIComponent(calendarId)}/events?${params}`,
+    );
+    if (auth.currentUser?.uid !== owner)
+      throw new Error("Das angemeldete Konto hat sich geändert.");
+    requests++;
+    const items = (data.items || []) as RawEvent[];
+    for (const [index, raw] of items.entries()) {
+      const event = toEvent(raw, calendarId);
+      if (event && !seen.has(event.id)) {
+        events.push(event);
+        seen.add(event.id);
+      }
+      if (events.length >= budget) {
+        remainder = index < items.length - 1;
+        break;
+      }
     }
     pageToken = data.nextPageToken;
-  } while (pageToken && events.length < budget);
-  return events;
+  } while (
+    pageToken &&
+    events.length < budget &&
+    requests < Math.max(3, Math.ceil(budget / PAGE_SIZE))
+  );
+  return calendarResult(events, remainder || !!pageToken);
 }
 
 /** What you are plausibly in right now — the record screen's question. */
-export const eventsAround = (atMs: number, windowMs = 3 * 60 * 60 * 1000) =>
-  eventsBetween(atMs - windowMs, atMs + windowMs, 50);
+export const eventsAround = (
+  atMs: number,
+  windowMs = 3 * 60 * 60 * 1000,
+  selection?: CalendarSelection,
+) => eventsBetween(atMs - windowMs, atMs + windowMs, 50, selection);
+
+/** Calendar IDs come from the actual provider; never synthesize an Outlook account. */
+export async function availableCalendars(
+  provider: ServiceProvider,
+  connectionId?: string,
+): Promise<{ id: string; name: string }[]> {
+  const owner = auth.currentUser?.uid;
+  if (!owner) throw new Error("Bitte zuerst anmelden.");
+  const checkOwner = () => {
+    if (auth.currentUser?.uid !== owner)
+      throw new Error("Das angemeldete Konto hat sich geändert.");
+  };
+  if (provider === "microsoft") {
+    const pinned =
+      connectionId ||
+      (await loadProviderSettings()).calendarConnectionId ||
+      undefined;
+    checkOwner();
+    const calendars = await availableMicrosoftCalendars(
+      requireCalendarConnection(pinned),
+    );
+    checkOwner();
+    return calendars;
+  }
+  const calendars: { id: string; name: string }[] = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < 3; page++) {
+    const params = new URLSearchParams({
+      maxResults: "100",
+      ...(pageToken ? { pageToken } : {}),
+    });
+    checkOwner();
+    const data = await call(`/users/me/calendarList?${params}`);
+    checkOwner();
+    for (const item of data.items || [])
+      if (
+        typeof item.id === "string" &&
+        !item.deleted &&
+        !calendars.some((c) => c.id === item.id)
+      )
+        calendars.push({
+          id: item.id,
+          name:
+            typeof item.summaryOverride === "string"
+              ? item.summaryOverride
+              : typeof item.summary === "string"
+                ? item.summary
+                : item.id,
+        });
+    pageToken = data.nextPageToken;
+    if (!pageToken) return calendars;
+  }
+  throw new Error(
+    "Die Kalenderliste ist zu groß und wurde nicht vollständig geladen. Bitte beim Anbieter prüfen.",
+  );
+}
 
 const MARKER_START = "--- CheatMeet ---";
 const MARKER_END = "--- Ende CheatMeet ---";
@@ -296,20 +438,7 @@ export function mergeDescription(existing: string, block: string): string {
   return [before, fresh, after].filter(Boolean).join("\n\n");
 }
 
-export function summaryBlock({
-  summary,
-  todos,
-  link,
-}: {
-  summary: string;
-  todos: string[];
-  link?: string;
-}): string {
-  const lines = [summary.trim()].filter(Boolean);
-  if (todos.length) lines.push("", "Aufgaben:", ...todos.map((t) => `• ${t}`));
-  if (link) lines.push("", `Bericht & Aufnahme: ${link}`);
-  return lines.join("\n");
-}
+export { summaryBlock } from "../../shared/calendarNotes";
 
 /** The current state of one event, so a patch can merge rather than replace. */
 export async function getEvent(
@@ -343,10 +472,15 @@ export const updateEventDescription = async (
   if (event.provider === "microsoft") {
     return updateMicrosoftEventDescription(event, block);
   }
+  if (!event.etag)
+    throw new Error(
+      "Die Version des Termins fehlt. Bitte den Termin erneut laden.",
+    );
   return call(
     `/calendars/${encodeURIComponent(event.calendarId)}/events/${encodeURIComponent(event.id)}`,
     {
       method: "PATCH",
+      headers: { "If-Match": event.etag },
       body: JSON.stringify({
         description: mergeDescription(event.description, block),
       }),
@@ -360,8 +494,9 @@ export async function createEvent({
   startMs,
   endMs,
   block,
-  provider = savedCalendarProvider(),
+  provider,
   connectionId,
+  calendarId,
 }: {
   title: string;
   startMs: number;
@@ -369,6 +504,7 @@ export async function createEvent({
   block: string;
   provider?: ServiceProvider;
   connectionId?: string;
+  calendarId?: string;
 }): Promise<{
   id: string;
   calendarId: string;
@@ -376,32 +512,54 @@ export async function createEvent({
   calendarProvider: ServiceProvider;
   calendarConnectionId?: string;
 }> {
-  if (provider === "microsoft") {
-    const pinned = connectionId || calendarConnection();
+  const owner = auth.currentUser?.uid;
+  const defaults =
+    !provider || !calendarId || (provider === "microsoft" && !connectionId)
+      ? await loadProviderSettings()
+      : null;
+  if (auth.currentUser?.uid !== owner)
+    throw new Error("Das angemeldete Konto hat sich geändert.");
+  const targetProvider = provider || defaults!.calendarProvider;
+  const targetCalendar =
+    calendarId ||
+    (targetProvider === defaults?.calendarProvider
+      ? defaults.calendarId
+      : "primary");
+  if (targetProvider === "microsoft") {
+    const pinned = requireCalendarConnection(
+      connectionId ||
+        (defaults?.calendarProvider === "microsoft"
+          ? defaults.calendarConnectionId || undefined
+          : undefined),
+    );
     return createMicrosoftEvent({
       title,
       startMs,
       endMs,
       block,
       connectionId: pinned,
+      calendarId: targetCalendar,
     });
   }
-  const data = await call("/calendars/primary/events", {
-    method: "POST",
-    body: JSON.stringify({
-      summary: title,
-      description: mergeDescription("", block),
-      start: { dateTime: new Date(startMs).toISOString() },
-      // A zero-length event is invalid; a recording always occupied some time.
-      end: {
-        dateTime: new Date(Math.max(endMs, startMs + 60_000)).toISOString(),
-      },
-      transparency: "transparent",
-    }),
-  });
+  const data = await call(
+    `/calendars/${encodeURIComponent(targetCalendar)}/events`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        summary: title,
+        description: mergeDescription("", block),
+        start: { dateTime: new Date(startMs).toISOString() },
+        // A zero-length event is invalid; a recording always occupied some time.
+        end: {
+          dateTime: new Date(Math.max(endMs, startMs + 60_000)).toISOString(),
+        },
+        transparency: "transparent",
+      }),
+    },
+  );
   return {
     id: data.id,
-    calendarId: "primary",
+    calendarId: targetCalendar,
     htmlLink: data.htmlLink,
     calendarProvider: "google",
   };

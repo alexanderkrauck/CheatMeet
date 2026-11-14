@@ -8,9 +8,11 @@ vi.mock("./firebase", () => ({ auth: account }));
 let switchOwner = false;
 let grant = true;
 let selectedProvider: "google" | "microsoft" = "google";
+const defaults = vi.hoisted(() => ({ load: vi.fn() }));
 const metadata: unknown[][] = [];
 vi.mock("./providerSettings", () => ({
   savedCalendarProvider: () => selectedProvider,
+  loadProviderSettings: defaults.load,
 }));
 const calls: string[] = [];
 let existing: { description: string; htmlLink?: string } | null = {
@@ -52,18 +54,22 @@ vi.mock("./calendar", () => ({
   createEvent: async ({
     title,
     provider,
+    connectionId,
+    calendarId,
   }: {
     title: string;
     provider?: string;
+    connectionId?: string;
+    calendarId?: string;
   }) => {
-    metadata.push(["create", provider]);
+    metadata.push(["create", provider, connectionId, calendarId]);
     calls.push(`create:${title}`);
     return {
       id: "new-1",
-      calendarId: "primary",
+      calendarId: calendarId || "primary",
       htmlLink: "https://cal/new-1",
       calendarProvider: provider,
-      calendarConnectionId: provider === "microsoft" ? "work" : undefined,
+      calendarConnectionId: provider === "microsoft" ? connectionId : undefined,
     };
   },
   summaryBlock: ({ summary }: { summary: string }) => summary,
@@ -91,9 +97,41 @@ beforeEach(() => {
   grant = true;
   getFails = null;
   existing = { description: "Agenda" };
+  defaults.load.mockReset().mockImplementation(async () => ({
+    calendarProvider: selectedProvider,
+    calendarConnectionId: selectedProvider === "microsoft" ? "work" : undefined,
+    calendarId: "primary",
+    meetingHome: null,
+  }));
 });
 
 describe("syncReportToCalendar", () => {
+  it("waits for authoritative defaults and fails closed instead of publishing to Google", async () => {
+    let reject!: (error: Error) => void;
+    defaults.load.mockImplementation(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    const pending = syncReportToCalendar(report());
+    expect(calls).toEqual([]);
+    expect(defaults.load).toHaveBeenCalledOnce();
+    reject(new Error("Kalendereinstellungen nicht erreichbar"));
+    await expect(pending).rejects.toThrow("Kalendereinstellungen");
+    expect(calls).toEqual([]);
+    defaults.load.mockResolvedValue({
+      calendarProvider: "microsoft",
+      calendarConnectionId: "work",
+      calendarId: "team",
+    });
+    const result = await syncReportToCalendar(report());
+    expect(metadata[0]).toEqual(["create", "microsoft", "work", "team"]);
+    expect(result).toMatchObject({
+      calendarConnectionId: "work",
+      calendarId: "team",
+    });
+  });
   it("does not patch a different owner after the linked-event read", async () => {
     switchOwner = true;
     await expect(
@@ -148,7 +186,7 @@ describe("syncReportToCalendar", () => {
   it("returns provider and connection for an explicitly created Outlook event", async () => {
     selectedProvider = "microsoft";
     const result = await syncReportToCalendar(report(), { create: true });
-    expect(metadata[0]).toEqual(["create", "microsoft"]);
+    expect(metadata[0]).toEqual(["create", "microsoft", "work", "primary"]);
     expect(result).toMatchObject({
       calendarProvider: "microsoft",
       calendarConnectionId: "work",

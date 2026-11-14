@@ -1,20 +1,21 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { captureSnapshot, subscribeCapture } from "./capture";
 import { listDrafts, watchDrafts } from "./local";
-import { activeJobs, subscribeJobs } from "./pipeline";
-import { uid, watchReports } from "./reports";
+import { activeJobs, jobFor, subscribeJobs } from "./pipeline";
+import { reportHref, uid, watchReports } from "./reports";
+import { auth } from "./firebase";
 import { errorMessage } from "./session";
 import type { ReportSummary } from "./meetingMeta";
 import type { Draft } from "../types";
 
 export interface Workspace {
   reports: ReportSummary[];
-  /** Report ids saved locally but not yet acknowledged by Firestore. */
+  /** Namespace-qualified report hrefs saved locally but not acknowledged. */
   dirty: string[];
   drafts: Draft[];
   /** Separate from `error`: the meeting list can be fine while drafts are not. */
   draftsError: string;
-  /** Report ids with a save/analysis running in this tab right now. */
+  /** Namespace-qualified report hrefs with work running in this tab. */
   running: Set<string>;
   loading: boolean;
   error: string;
@@ -89,12 +90,18 @@ export function useReports(): Workspace {
     };
   }, [epoch, captureState, jobs.length]);
 
+  const owner = auth.currentUser?.uid;
+  const running = new Set(reports.filter(report => {
+    const job = jobFor(report.id, report);
+    return !!owner && job?.owner === owner && jobs.includes(job);
+  }).map(reportHref));
+
   return {
     reports,
     dirty,
     drafts,
     draftsError,
-    running: new Set(jobs.map((job) => job.reportId)),
+    running,
     loading,
     error,
     reload,

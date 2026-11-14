@@ -5,7 +5,7 @@ import { ConfidentialClientApplication, type AuthorizationUrlRequest, type Autho
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import firebaseConfig from "../firebase-applet-config.json";
 import { fileDocStore, firestoreDocStore, type DocStore } from "./mcp/docStore";
-import { serviceAccountToken } from "./tokenStore";
+import { serviceAccountToken, resolveOwnerGoogleKey, type RefreshTokenStore } from "./tokenStore";
 
 const FILES = "https://graph.microsoft.com/Files.ReadWrite";
 const CALENDAR = "https://graph.microsoft.com/Calendars.ReadWrite";
@@ -16,14 +16,17 @@ const GRANT_LIFETIME = 365 * 24 * 3600_000;
 const keys = createRemoteJWKSet(new URL("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"), { timeoutDuration: 10_000 });
 
 /** Firebase is the existing identity platform, independent of the linked storage provider. */
-export async function firebaseAccountFor(token: string, projectId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId): Promise<{ uid: string; googleSub: string }> {
+export async function firebaseAccountFor(token: string, projectId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId, grantStore?: RefreshTokenStore | null): Promise<{ uid: string; googleSub: string }> {
   const { payload } = await jwtVerify(token, keys, { algorithms: ["RS256"], audience: projectId, issuer: `https://securetoken.google.com/${projectId}`, requiredClaims: ["sub", "iat", "exp", "auth_time"] });
   const now = Date.now() / 1000;
   if (!payload.sub || payload.sub.length > 128 || typeof payload.iat !== "number" || payload.iat > now || typeof payload.auth_time !== "number" || payload.auth_time < 0 || payload.auth_time > now)
     throw new Error("Ungültige Anmeldung.");
   const identities = (payload.firebase as { identities?: Record<string, unknown> } | undefined)?.identities;
   const google = identities?.["google.com"];
-  return { uid: payload.sub, googleSub: Array.isArray(google) && typeof google[0] === "string" ? google[0] : "" };
+  const identity = { uid: payload.sub, googleSub: Array.isArray(google) && typeof google[0] === "string" ? google[0] : "" };
+  // Workers/MCP already carry this opaque lookup key. Resolve new owner-bound
+  // grants without requiring a Firebase Google login, leaving legacy keys valid.
+  return { ...identity, googleSub: grantStore === null ? identity.googleSub : await resolveOwnerGoogleKey(identity, grantStore) };
 }
 
 interface MicrosoftResult {
@@ -41,7 +44,7 @@ export interface MicrosoftClient {
   getTokenCache(): { serialize(): string; getAccountByHomeId(id: string): Promise<AccountInfo | null> };
 }
 export interface MicrosoftConnection { connectionId: string; accountName: string; calendar: boolean }
-interface Grant extends MicrosoftConnection { homeAccountId: string; cache: string; revision: string }
+interface Grant extends MicrosoftConnection { homeAccountId: string; cache: string; revision: string; calendarIntent?: boolean }
 interface OwnerDocument { kind: "owner"; owner: string; grants: Grant[] }
 interface StateDocument { kind: "state"; owner: string; nonce: string; verifier: string; browserHash: string; calendar: boolean; expiresAt: number; claim?: string }
 export type MicrosoftAuthDocument = OwnerDocument | StateDocument;
@@ -138,14 +141,20 @@ export function createMicrosoftAuthService(options: MicrosoftAuthOptions = {}) {
     if (!result?.account?.homeAccountId || !safeEqual(String((result.idTokenClaims as { nonce?: string } | undefined)?.nonce || ""), pending.nonce)) throw denied();
     const granted = result.scopes.map(s => s.toLowerCase());
     if (!granted.some(s => s === "files.readwrite" || s === FILES.toLowerCase())) throw denied();
-    const calendar = pending.calendar && granted.some(s => s === "calendars.readwrite" || s === CALENDAR.toLowerCase());
+    const hasCalendarScope = granted.some(s => s === "calendars.readwrite" || s === CALENDAR.toLowerCase());
     // Stable opaque identity keeps report homes usable after an explicit reconnect.
     // Fresh revision still prevents an old in-flight refresh from restoring a disconnected cache.
     const connectionId = digest(JSON.stringify([pending.owner, result.account.homeAccountId]));
-    const grant: Grant = { connectionId, homeAccountId: result.account.homeAccountId, accountName: result.account.username || "Microsoft-Konto", calendar, cache: app.getTokenCache().serialize(), revision: randomUUID() };
+    const grant: Grant = { connectionId, homeAccountId: result.account.homeAccountId, accountName: result.account.username || "Microsoft-Konto", calendar: false, cache: app.getTokenCache().serialize(), revision: randomUUID() };
     await docs().mutate(ownerId(pending.owner), current => {
       if (current && (current.kind !== "owner" || current.owner !== pending.owner)) throw denied();
-      return { kind: "owner", owner: pending.owner, grants: [...(current?.kind === "owner" ? current.grants.filter(g => g.connectionId !== connectionId) : []), grant] };
+      const grants = current?.kind === "owner" ? current.grants : [];
+      const previous = grants.find(g => g.connectionId === connectionId);
+      // Files-only repair preserves a prior explicit Outlook choice, never a new
+      // account's incidental scope. Actual provider scopes always bound usability.
+      const calendarIntent = pending.calendar || previous?.calendarIntent === true || previous?.calendar === true;
+      const next = { ...grant, calendarIntent, calendar: calendarIntent && hasCalendarScope };
+      return { kind: "owner", owner: pending.owner, grants: previous ? grants.map(g => g.connectionId === connectionId ? next : g) : [...grants, next] };
     }, metadata(pending.owner));
   }
   async function getAccess(owner: string, connectionId?: string, attempt = 0): Promise<{ accessToken: string; expiresInSeconds: number; connectionId: string; accountName: string; calendar: boolean }> {

@@ -1,12 +1,19 @@
 import express from "express";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createRemoteJWKSet, jwtVerify, decodeJwt } from "jose";
 import firebaseConfig from "../firebase-applet-config.json";
 import {
   fileGrantStore,
   firestoreStore,
   type RefreshTokenStore,
+  ownerGoogleGrant,
+  ownerGoogleGrantState,
+  disconnectOwnerGoogleGrant,
+  invalidateOwnerGoogleGrant,
+  saveOwnerGoogleGrant,
+  preserveOwnerGoogleGrant,
 } from "./tokenStore";
+import { firebaseAccountFor } from "./microsoftAuth";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -249,7 +256,7 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
   const clientSecret =
     options.clientSecret ?? (process.env.GOOGLE_OAUTH_CLIENT_SECRET || "");
   const identify =
-    options.identify || ((token: string) => googleAccountFor(token, projectId));
+    options.identify || ((token: string) => firebaseAccountFor(token, projectId, null));
 
   let store = options.store;
   // Same split as the transcription store: Firestore in production, private
@@ -263,6 +270,40 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
   const configured = () => Boolean(clientId && clientSecret);
   const redirectUri = (req: express.Request) =>
     `${req.protocol}://${req.get("host")}/api/auth/google/callback`;
+  const bindingSignature = (value: string) => createHmac("sha256", clientSecret).update(value).digest("base64url");
+  const authenticated = async (req: express.Request) => {
+    const token = /^Bearer (\S+)$/i.exec(req.headers.authorization || "")?.[1];
+    if (!token) throw Error("Bitte erneut anmelden.");
+    const identity = await identify(token);
+    if (!identity.uid) throw Error("Bitte erneut anmelden.");
+    return identity;
+  };
+
+  // Owner-bound data consent, independent from Firebase sign-in/linking. A MAC
+  // prevents a browser from changing the owner encoded in its HttpOnly cookie.
+  router.post("/auth/google/start", async (req, res) => {
+    if (!configured()) { res.status(503).json({error: "Server-Anmeldung ist nicht eingerichtet."}); return; }
+    let identity: {uid: string; googleSub: string};
+    try { identity = await authenticated(req); }
+    catch { res.status(401).json({error: "Bitte erneut anmelden."}); return; }
+    const state = randomBytes(24).toString("base64url");
+    const verifier = randomBytes(32).toString("base64url");
+    const startedAt = Date.now();
+    const binding = Buffer.from(JSON.stringify({...identity, startedAt, expiresAt: startedAt + 10 * 60_000})).toString("base64url");
+    const value = `${state}.${verifier}.${binding}`;
+    res.cookie(STATE_COOKIE, `${value}.${bindingSignature(value)}`, {httpOnly: true, sameSite: "lax", secure: req.protocol === "https", path: "/api/auth", maxAge: 10 * 60_000});
+    res.set("Cache-Control", "no-store").json({url: buildAuthUrl({clientId, redirectUri: redirectUri(req), state, verifier})});
+  });
+  router.post("/auth/google/preserve", async (req, res) => {
+    if (!configured()) { res.status(503).json({error: "Die serverseitige Google-Verbindung ist nicht eingerichtet. Der Google-Login bleibt verknüpft, damit vorhandene Archive erreichbar bleiben."}); return; }
+    let identity: {uid: string; googleSub: string};
+    try { identity = await authenticated(req); }
+    catch { res.status(401).json({error: "Bitte erneut anmelden."}); return; }
+    try {
+      await preserveOwnerGoogleGrant(grantStore(), identity);
+      res.set("Cache-Control", "no-store").json({preserved: true});
+    } catch { res.status(503).json({error: "Der Google-Zugriff konnte nicht sicher vom Login getrennt werden. Bitte später erneut versuchen."}); }
+  });
 
   // The client falls back to the popup flow while this is false, so an
   // incomplete deployment degrades instead of locking everyone out. The two
@@ -284,7 +325,11 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
     }
     const state = randomBytes(24).toString("base64url");
     const verifier = randomBytes(32).toString("base64url");
-    res.cookie(STATE_COOKIE, `${state}.${verifier}`, {
+    // Cached clients still use GET, but cannot authenticate their own start time.
+    const startedAt = Date.now();
+    const binding = Buffer.from(JSON.stringify({startedAt, expiresAt:startedAt + 10 * 60_000})).toString("base64url");
+    const value = `${state}.${verifier}.${binding}`;
+    res.cookie(STATE_COOKIE, `${value}.${bindingSignature(value)}`, {
       httpOnly: true,
       sameSite: "lax",
       secure: req.protocol === "https",
@@ -319,10 +364,26 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
       const state = typeof req.query.state === "string" ? req.query.state : "";
       if (!expected || !state || !sameSecret(expected, state))
         throw new Error("Ungültiger Anmeldevorgang. Bitte erneut versuchen.");
+      const parts = cookie.split(".");
+      let bound: {uid: string; googleSub: string; expiresAt: number} | undefined;
+      // Unsigned pre-deployment in-flight flows must restart; accepting them
+      // would let a browser invent a start after the revocation cutoff.
+      if (parts.length !== 4 || !sameSecret(bindingSignature(parts.slice(0, 3).join(".")), parts[3])) throw Error("Ungültiger Anmeldevorgang.");
+      const binding = JSON.parse(Buffer.from(parts[2], "base64url").toString());
+      if (!Number.isFinite(binding.expiresAt) || binding.expiresAt <= Date.now()) throw Error("Anmeldevorgang abgelaufen.");
+      if (binding.uid) bound = binding;
+      const startedAt = binding.startedAt;
+      if (!bound && (!Number.isSafeInteger(startedAt) || startedAt > Date.now() || binding.expiresAt !== startedAt + 10 * 60_000)) throw Error("Ungültiger Anmeldevorgang.");
       const code = typeof req.query.code === "string" ? req.query.code : "";
       if (!code) throw new Error("Google hat die Freigabe abgebrochen.");
 
       // Same expression as /start: a mismatch here silently breaks the exchange.
+      // Snapshot before provider I/O: revoke/reconnect during exchange fences
+      // this callback too; UID + alias + binding publish in one atomic commit.
+      const pendingGrant = bound ? await ownerGoogleGrantState(grantStore(), bound) : undefined;
+      if (pendingGrant?.owned.revokedAt !== undefined &&
+          (!Number.isSafeInteger(startedAt) || startedAt <= pendingGrant.owned.revokedAt))
+        throw Error("Die Google-Verbindung wurde inzwischen geändert. Bitte erneut versuchen.");
       const tokens = await exchangeCode(
         { code, clientId, clientSecret, redirectUri: redirectUri(req), verifier },
         fetchImpl,
@@ -330,12 +391,23 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
       if (!tokens.idToken) throw new Error("Google lieferte keine Identität.");
       const googleSub = String(decodeJwt(tokens.idToken).sub || "");
       if (!googleSub) throw new Error("Google lieferte keine Identität.");
-      if (tokens.refreshToken)
-        await grantStore().set(googleSub, tokens.refreshToken);
-      else if (!(await grantStore().get(googleSub)))
-        throw new Error(
-          "Google hat keinen dauerhaften Zugriff erteilt. Bitte erneut versuchen.",
-        );
+      if (bound?.googleSub && !bound.googleSub.startsWith("uid-") && bound.googleSub !== googleSub)
+        throw Error("Bitte dasselbe Google-Konto wie bei der Anmeldung verwenden.");
+      if (bound) {
+        await saveOwnerGoogleGrant(grantStore(), bound, googleSub, tokens.refreshToken, pendingGrant);
+      } else {
+        // The subject is unknown before exchange. A signed start plus durable
+        // cutoff rejects older flows even if the revoked token was recreated.
+        const previous = await grantStore().read!(googleSub);
+        if (previous.revokedAt !== undefined && startedAt <= previous.revokedAt)
+          throw Error("Die Google-Verbindung wurde inzwischen geändert. Bitte erneut versuchen.");
+        if (tokens.refreshToken) {
+          if (!await grantStore().compare!([previous], [{...previous,refreshToken:tokens.refreshToken}]))
+            throw Error("Die Google-Verbindung wurde inzwischen geändert. Bitte erneut versuchen.");
+        } else if (!previous.refreshToken) {
+          throw Error("Google hat keinen dauerhaften Zugriff erteilt. Bitte erneut versuchen.");
+        }
+      }
       finish({ idToken: tokens.idToken });
     } catch (error) {
       console.error("OAuth callback failed:", error);
@@ -358,15 +430,17 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
       res.status(503).json({ error: "Server-Anmeldung ist nicht eingerichtet." });
       return;
     }
-    let googleSub: string;
+    let identity: {uid: string; googleSub: string};
+    let grant: Awaited<ReturnType<typeof ownerGoogleGrant>>;
     try {
-      ({ googleSub } = await identify(match[1]));
+      identity = await identify(match[1]);
     } catch {
       res.status(401).json({ error: "Bitte erneut anmelden." });
       return;
     }
     try {
-      const refreshToken = await grantStore().get(googleSub);
+      grant = await ownerGoogleGrant(grantStore(), identity);
+      const refreshToken = grant?.refreshToken;
       if (!refreshToken) {
         // No stored grant: the user must consent once before Drive works.
         res.status(403).json({
@@ -381,6 +455,10 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
         { refreshToken, clientId, clientSecret },
         fetchImpl,
       );
+      if ((await grantStore().read!(grant!.key)).version !== grant!.version) {
+        res.status(403).json({error:"Die Google-Verbindung wurde inzwischen geändert. Bitte erneut verbinden.", reauth:true, reason:"revoked"});
+        return;
+      }
       res.json({
         accessToken: tokens.accessToken,
         expiresInSeconds: tokens.expiresInSeconds,
@@ -392,10 +470,8 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
     } catch (error) {
       const code = (error as { code?: string }).code;
       if (code === "invalid_grant") {
-        // The grant is gone for good; drop it so the next attempt re-consents.
-        await grantStore()
-          .remove(googleSub)
-          .catch(() => {});
+        // A late failure has authority only over the exact attempted version.
+        if (grant) await invalidateOwnerGoogleGrant(grantStore(), identity, grant).catch(() => {});
         res.status(403).json({
           error:
             "Der Google-Drive-Zugriff wurde entzogen. Bitte erneut anmelden.",
@@ -421,20 +497,33 @@ export function createAuthRouter(options: AuthRouterOptions = {}) {
       res.status(503).json({ error: "Server-Anmeldung ist nicht eingerichtet." });
       return;
     }
+    let identity: {uid: string; googleSub: string};
+    try { identity = await authenticated(req); }
+    catch { res.status(401).json({error: "Bitte erneut anmelden."}); return; }
+    const warning = "CheatMeet hat die gespeicherte Google-Verbindung getrennt. Der Widerruf bei Google ist nicht bestätigt. Bereits ausgegebene Drive-/Kalender-Tokens können bis zum Ablauf gültig bleiben; laufende Uploads und Verarbeitung können unterbrochen werden. Bitte den Zugriff im Google-Konto unter „Drittanbieter-Apps“ prüfen und dort entziehen.";
     try {
-      const { googleSub } = await identify(match[1]);
-      const refreshToken = await grantStore().get(googleSub);
-      if (refreshToken)
-        await fetchImpl("https://oauth2.googleapis.com/revoke", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ token: refreshToken }),
-          signal: AbortSignal.timeout(10_000),
-        }).catch(() => undefined);
-      await grantStore().remove(googleSub);
-      res.json({ revoked: true });
+      // Atomically contain exactly the still-current grant and its owned alias.
+      // A competing reconnect is not deleted, nor reported as disconnected.
+      const tokens = await disconnectOwnerGoogleGrant(grantStore(), identity);
+      const results = await Promise.all(tokens.map(async token => {
+        try {
+          const response = await fetchImpl("https://oauth2.googleapis.com/revoke", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({ token }),
+            signal: AbortSignal.timeout(8_000),
+          });
+          // A 400 invalid_token only describes this token, not global access.
+          return response.ok;
+        } catch { return false; }
+      }));
+      const current = await ownerGoogleGrantState(grantStore(), identity);
+      const localDisconnected = !current.owned.refreshToken && !(current.aliasOwned && current.legacy?.refreshToken);
+      const revoked = localDisconnected && results.length > 0 && results.every(Boolean);
+      const changedWarning = "Die Google-Verbindung wurde während des Widerrufs erneut geändert. Die aktuelle Verbindung ist nicht als getrennt bestätigt. Bitte den Zugriff prüfen und erneut trennen.";
+      res.status(!localDisconnected ? 503 : revoked ? 200 : 502).json({revoked, localDisconnected, ...(revoked ? {} : {warning:localDisconnected ? warning : changedWarning})});
     } catch {
-      res.status(401).json({ error: "Bitte erneut anmelden." });
+      res.status(503).json({revoked: false, localDisconnected: false, warning: "Der Google-Zugriff konnte nicht vollständig getrennt werden. Bitte im Google-Konto unter „Drittanbieter-Apps“ den Zugriff entziehen und anschließend erneut versuchen."});
     }
   });
 

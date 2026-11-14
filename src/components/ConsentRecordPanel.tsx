@@ -79,8 +79,7 @@ export function ConsentRecordPanel({ report }: { report: ReportData }) {
         </>
       ) : (
         <p className="muted">
-          Keine Einwilligung dokumentiert. Dieses Meeting wurde aufgenommen,
-          bevor CheatMeet den Hinweis festgehalten hat.
+          Für dieses Meeting ist in CheatMeet keine Einwilligung dokumentiert.
         </p>
       )}
 

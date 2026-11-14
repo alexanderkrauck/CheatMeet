@@ -1,10 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const identity = vi.hoisted(() => ({ currentUser: { uid: "A" } as { uid: string } | null }));
 const session = vi.hoisted(() => ({
+  cached: "synthetic-A" as string | undefined,
   rememberToken: vi.fn(),
   ensureDriveToken: vi.fn().mockResolvedValue(null),
 }));
+vi.mock("./firebase", () => ({ auth: identity }));
 vi.mock("./session", () => session);
-import { getDriveFolder, listDriveReports, verifyDriveAccess, uploadTimeoutMs } from "./drive";
+import { createSubFolder, getDriveFolder, listDriveReports, trashDriveFile, verifyDriveAccess, uploadTimeoutMs, uploadFileToFolder, readDriveArchiveRevision } from "./drive";
+beforeEach(() => {
+  identity.currentUser = { uid: "A" };
+  session.cached = "synthetic-A";
+  session.ensureDriveToken.mockReset().mockResolvedValue(null);
+  session.rememberToken.mockImplementation(token => { session.cached = token; });
+});
 import { rememberToken } from "./session";
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -14,6 +23,127 @@ function response(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status });
 }
 describe("Drive storage", () => {
+  it.each(["folder", "upload", "canonical", "preflight", "trash"])("preserves B's session when A's %s returns a late authorization failure", async operation => {
+    let finish!: (response: Response) => void;
+    const send = vi.fn().mockReturnValueOnce(new Promise<Response>(resolve => { finish = resolve; }))
+      .mockResolvedValue(response({ id: "foreign-write" }));
+    vi.stubGlobal("fetch", send);
+    session.ensureDriveToken.mockResolvedValueOnce("synthetic-B");
+    const pending = operation === "folder" ? createSubFolder("Only A", undefined, "synthetic-A")
+      : operation === "upload" ? uploadFileToFolder(new Blob(["Only A"]), "a.txt", "text/plain", "A-folder", "synthetic-A")
+      : operation === "canonical" ? uploadFileToFolder(new Blob(['{"id":"A"}']), "bericht_daten.json", "application/json", "A-folder", "synthetic-A", "A-json", '"v1"')
+      : operation === "preflight" ? verifyDriveAccess("synthetic-A")
+      : trashDriveFile("A-folder", "synthetic-A");
+    identity.currentUser = { uid: "B" };
+    session.cached = "synthetic-B";
+    finish(response({}, 401));
+    await expect(pending).rejects.toThrow(/Konto.*geändert/);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(session.ensureDriveToken).not.toHaveBeenCalled();
+    expect(rememberToken).not.toHaveBeenCalled();
+    expect(session.cached).toBe("synthetic-B");
+  });
+
+  it("checks the owner again before renewal after clearing an expired token", async () => {
+    const send = vi.fn().mockResolvedValueOnce(response({}, 401)).mockResolvedValue(response({ id: "foreign-write" }));
+    vi.stubGlobal("fetch", send);
+    session.rememberToken.mockImplementationOnce(() => {
+      // Clearing the cache synchronously notifies session subscribers.
+      identity.currentUser = { uid: "B" };
+      session.cached = "synthetic-B";
+    });
+    session.ensureDriveToken.mockResolvedValueOnce("synthetic-B");
+    await expect(createSubFolder("Only A", undefined, "synthetic-A")).rejects.toThrow(/Konto.*geändert/);
+    expect(session.ensureDriveToken).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(session.cached).toBe("synthetic-B");
+  });
+
+  it("does not resend A's mutation when the account switches during renewal", async () => {
+    let renew!: (token: string) => void;
+    const send = vi.fn().mockResolvedValueOnce(response({}, 401)).mockResolvedValue(response({ id: "foreign-write" }));
+    vi.stubGlobal("fetch", send);
+    session.ensureDriveToken.mockImplementationOnce(() => new Promise(resolve => { renew = resolve; }));
+    const pending = createSubFolder("Only A", undefined, "synthetic-A");
+    await vi.waitFor(() => expect(session.ensureDriveToken).toHaveBeenCalledTimes(1));
+    identity.currentUser = { uid: "B" };
+    session.cached = "synthetic-B";
+    renew("synthetic-renewed-A");
+    await expect(pending).rejects.toThrow(/Konto.*geändert/);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rememberToken).toHaveBeenCalledTimes(1);
+    expect(session.cached).toBe("synthetic-B");
+  });
+
+  it("retains A's owner fence on the retried request's late 401", async () => {
+    let finish!: (response: Response) => void;
+    const send = vi.fn().mockResolvedValueOnce(response({}, 401))
+      .mockReturnValueOnce(new Promise<Response>(resolve => { finish = resolve; }));
+    vi.stubGlobal("fetch", send);
+    session.ensureDriveToken.mockResolvedValueOnce("synthetic-renewed-A");
+    const pending = createSubFolder("Only A", undefined, "synthetic-A");
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(new Headers(send.mock.calls[1][1].headers).get("Authorization")).toBe("Bearer synthetic-renewed-A");
+    identity.currentUser = { uid: "B" };
+    session.cached = "synthetic-B";
+    finish(response({}, 401));
+    await expect(pending).rejects.toThrow(/Konto.*geändert/);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(rememberToken).toHaveBeenCalledTimes(1);
+    expect(session.ensureDriveToken).toHaveBeenCalledTimes(1);
+    expect(session.cached).toBe("synthetic-B");
+  });
+
+  it("keeps the same conditional v2 URL, bytes and ETag on a same-owner token retry", async () => {
+    const body = new Blob(['{"id":"r1","title":"Only A"}']);
+    const send = vi.fn().mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({ id: "json" }));
+    vi.stubGlobal("fetch", send);
+    session.ensureDriveToken.mockResolvedValueOnce("synthetic-renewed-A");
+    await expect(uploadFileToFolder(body, "bericht_daten.json", "application/json", "folder", "synthetic-A", "json", '"v1"')).resolves.toBe("json");
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[1][0]).toBe(send.mock.calls[0][0]);
+    expect(send.mock.calls[1][0]).toContain("/upload/drive/v2/files/json");
+    for (const [, init] of send.mock.calls) {
+      expect(init).toMatchObject({ method: "PUT", body, headers: expect.objectContaining({ "If-Match": '"v1"' }) });
+      expect(init.body).toBe(body);
+    }
+    expect(new Headers(send.mock.calls[1][1].headers).get("Authorization")).toBe("Bearer synthetic-renewed-A");
+  });
+
+  it.each(["before", "during", "unchanged"])("guards canonical JSON when its baseline is %s save", async (when) => {
+    const baseline = "2026-11-01T00:00:00.000Z";
+    let canonical = { id: "r1", driveSyncedAt: when === "before" ? "2026-11-02T00:00:00.000Z" : baseline, title: "Other client" };
+    let etag = '"v1"';
+    const send = vi.fn(async (url: string, init: RequestInit = {}) => {
+      if (url.includes("/upload/")) {
+        if (init.method !== "PUT" || new Headers(init.headers).get("If-Match") !== etag)
+          return response({}, 412);
+        canonical = JSON.parse(await (init.body as Blob).text());
+        return response({ id: "json" });
+      }
+      if (url.includes("alt=media")) return response(canonical);
+      return response({ id: "json", version: "1", etag, parents: ["folder"] });
+    });
+    vi.stubGlobal("fetch", send);
+    const pending = async () => {
+      const revision = await readDriveArchiveRevision({ id: "r1", driveReportId: "json", driveFolderId: "folder", driveSyncedAt: when === "unchanged" ? "" : baseline, archiveBaseSyncedAt: when === "unchanged" ? baseline : undefined }, "token");
+      if (when === "during") etag = '"v2"';
+      await uploadFileToFolder(new Blob(['{"id":"r1","title":"Stale"}']), "bericht_daten.json", "application/json", "folder", "token", "json", revision);
+    };
+    if (when === "unchanged") {
+      await expect(pending()).resolves.toBeUndefined();
+      expect(canonical.title).toBe("Stale");
+    } else {
+      await expect(pending()).rejects.toThrow(/geändert|wiederherstellen/);
+      expect(canonical.title).toBe("Other client");
+    }
+    if (when === "before") expect(send.mock.calls.some(([url]) => url.includes("/upload/"))).toBe(false);
+    else {
+      const [url, init] = send.mock.calls.find(([url]) => url.includes("/upload/"))!;
+      expect(url).toContain("/upload/drive/v2/files/json");
+      expect(init).toMatchObject({ method: "PUT", headers: expect.objectContaining({ "If-Match": '"v1"' }) });
+    }
+  });
   it("rejects a folder without write access", async () => {
     vi.stubGlobal(
       "fetch",

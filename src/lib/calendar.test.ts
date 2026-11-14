@@ -2,11 +2,26 @@ import { describe, expect, it, vi } from "vitest";
 const selection = vi.hoisted(() => ({
   provider: "google" as "google" | "microsoft",
   granted: false,
+  connectionId: "work",
+  calendarId: "primary",
+  connections: [
+    { connectionId: "work", calendar: true },
+    { connectionId: "personal", calendar: true },
+  ],
+}));
+vi.mock("./firebase", () => ({
+  auth: { currentUser: { uid: "calendar-owner" } },
+}));
+vi.mock("./session", () => ({
+  ensureDriveToken: async () => "token",
+  hasCalendarGrant: () => selection.granted,
+  subscribeDriveSession: () => () => {},
 }));
 const ms = vi.hoisted(() => ({
   events: vi.fn(async () => []),
   get: vi.fn(async () => null),
   patch: vi.fn(async () => {}),
+  calendars: vi.fn(async () => [{ id: "team", name: "Team" }]),
   create: vi.fn(async () => ({
     id: "m",
     calendarId: "primary",
@@ -16,17 +31,26 @@ const ms = vi.hoisted(() => ({
 }));
 vi.mock("./providerSettings", () => ({
   savedCalendarProvider: () => selection.provider,
-  hasMicrosoftCalendar: () => selection.granted,
+  hasMicrosoftCalendar: (connectionId: string) =>
+    selection.granted && connectionId === "work",
+  savedCalendarConnectionId: () => selection.connectionId,
+  savedCalendarId: () => selection.calendarId,
+  loadProviderSettings: async () => ({
+    calendarProvider: selection.provider,
+    calendarConnectionId: selection.connectionId,
+    calendarId: selection.calendarId,
+  }),
 }));
 vi.mock("./microsoft", () => ({
   cachedMicrosoftConnections: () =>
-    selection.granted ? [{ connectionId: "work", calendar: true }] : [],
+    selection.granted ? selection.connections : [],
 }));
 vi.mock("./microsoftCalendar", () => ({
   microsoftEventsBetween: ms.events,
   getMicrosoftEvent: ms.get,
   updateMicrosoftEventDescription: ms.patch,
   createMicrosoftEvent: ms.create,
+  availableMicrosoftCalendars: ms.calendars,
 }));
 import {
   mergeDescription,
@@ -37,15 +61,57 @@ import {
   getEvent,
   createEvent,
   updateEventDescription,
+  availableCalendars,
 } from "./calendar";
 
 describe("calendar provider facade", () => {
+  it("uses Google's original etag and surfaces a concurrent edit without overwriting it", async () => {
+    const raw = {
+      id: "g",
+      etag: '"revision-1"',
+      description: "Organizer",
+      start: { dateTime: "2026-11-13T09:00:00Z" },
+    };
+    const event = toEvent(raw, "team")!;
+    const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (new Headers(init?.headers).get("If-Match") !== '"revision-2"')
+        return Response.json({ error: {} }, { status: 412 });
+      return Response.json({ id: "g" });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    try {
+      expect(event.etag).toBe('"revision-1"');
+      await expect(
+        updateEventDescription(event, "Summary"),
+      ).rejects.toMatchObject({ status: 412 });
+      expect(
+        new Headers(fetcher.mock.calls[0][1]?.headers).get("If-Match"),
+      ).toBe('"revision-1"');
+      await expect(
+        updateEventDescription({ ...event, etag: undefined }, "Summary"),
+      ).rejects.toThrow("Version");
+      expect(fetcher).toHaveBeenCalledOnce();
+      await updateEventDescription(
+        {
+          ...event,
+          etag: '"revision-2"',
+          description: "Organizer + concurrent note",
+        },
+        "Summary",
+      );
+      expect(
+        JSON.parse(String(fetcher.mock.calls[1][1]?.body)).description,
+      ).toContain("concurrent note");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("reads the chosen Outlook calendar even without Google authorization", async () => {
     selection.provider = "microsoft";
     selection.granted = true;
     expect(hasAnyCalendarGrant()).toBe(true);
     await eventsBetween(0, 1000, 10);
-    expect(ms.events).toHaveBeenCalledWith(0, 1000, 10, "work");
+    expect(ms.events).toHaveBeenCalledWith(0, 1000, 10, "work", "primary");
     await getEvent("primary", "linked", "microsoft", "personal");
     expect(ms.get).toHaveBeenCalledWith("primary", "linked", "personal");
     const linked = {
@@ -66,6 +132,26 @@ describe("calendar provider facade", () => {
       block: "Summary",
     });
     expect(created.calendarProvider).toBe("microsoft");
+    selection.calendarId = "team";
+    selection.connections.reverse(); // Reauthorization/list order must not move the destination.
+    await eventsBetween(0, 1000, 10);
+    expect(ms.events).toHaveBeenLastCalledWith(0, 1000, 10, "work", "team");
+    expect(await availableCalendars("microsoft", "personal")).toEqual([
+      { id: "team", name: "Team" },
+    ]);
+    expect(ms.calendars).toHaveBeenCalledWith("personal");
+    selection.connectionId = "missing-account";
+    await expect(eventsBetween(0, 1000)).rejects.toThrow("Outlook-Konto");
+    await expect(
+      createEvent({
+        title: "No fallback",
+        startMs: 0,
+        endMs: 1000,
+        block: "Private",
+      }),
+    ).rejects.toThrow("Outlook-Konto");
+    selection.connectionId = "work";
+    selection.calendarId = "primary";
     selection.provider = "google";
     selection.granted = false;
   });

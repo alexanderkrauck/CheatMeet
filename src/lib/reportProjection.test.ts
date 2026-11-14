@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildConsentRecord, consentFacts } from "../../shared/consent";
 import {
@@ -107,6 +108,7 @@ describe("projectReport", () => {
         "title",
         "todos",
         "transcriptChars",
+        "transcriptRevision",
         "transcription",
         "transcriptionOrigin",
         "updatedAt",
@@ -144,6 +146,11 @@ describe("projectReport", () => {
     expect(transcriptIsElsewhere(twice)).toBe(true);
   });
 
+  it("retains names and pending review when an index-only report is saved again", () => {
+    const projected = projectReport(full({ speech: speech({ speakerReview: "pending" }) }));
+    expect(projectReport(projected)).toEqual(projected);
+  });
+
   it("resolves what cannot be recomputed without the turns", () => {
     const imported = projectReport(
       full({
@@ -169,6 +176,31 @@ describe("mergeRemoteReport", () => {
     expect(merged.speech?.turns).toHaveLength(1);
     // Everything else still comes from the remote document.
     expect(merged.transcriptChars).toBe("Alles Gesagte".length);
+  });
+
+  it("versions exact content and refreshes stale same-length transcripts without losing metadata", () => {
+    for (const transcription of ["abc", "Grüße 🌍", "a".repeat(56), "b".repeat(64), "c".repeat(1000)]) {
+      const expected = createHash("sha256").update(JSON.stringify({ speech: null, transcription })).digest("hex");
+      expect(projectReport(full({ speech: undefined, transcription })).transcriptRevision).toBe(`sha256:${expected}`);
+    }
+    const old = full();
+    const corrected = full({ transcription: "Neues Gesagte", speech: speech({ speakerNames: { "mic:0:A": "Neu" } }) });
+    const oldProjection = projectReport(old);
+    const remote = projectReport(corrected);
+    expect(remote.transcriptRevision).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(remote.transcriptRevision).not.toBe(oldProjection.transcriptRevision);
+    expect(projectReport({ ...old, title: "Metadata edit" }).transcriptRevision).toBe(oldProjection.transcriptRevision);
+    const merged = mergeRemoteReport(old, { ...remote, updatedAt: "2026-11-14T00:00:00.000Z", title: "Latest" });
+    expect(merged.transcriptStale).toBe(true);
+    expect(transcriptIsElsewhere(merged)).toBe(true);
+    expect(merged.transcription).toBe(old.transcription); // retain recovery bytes
+    expect(projectReport(merged).participants).toEqual(["Neu"]);
+    expect(projectReport(merged).transcriptRevision).toBe(remote.transcriptRevision);
+    expect(mergeRestoredReport({ report: merged, dirty: false }, old)).toBeNull();
+    const fresh = mergeRestoredReport({ report: merged, dirty: false }, corrected);
+    expect(fresh).toMatchObject({ title: "Latest", transcription: corrected.transcription, transcriptStale: false });
+    expect(mergeRemoteReport(fresh!, { ...remote, updatedAt: "2026-11-15" }).transcriptStale).not.toBe(true);
+    expect(mergeRestoredReport({ report: { ...merged, driveReportId: undefined, driveSyncedAt: undefined }, dirty: false }, corrected)).toBeNull();
   });
 
   it("takes the remote transcript when this device has none", () => {
@@ -208,6 +240,12 @@ describe("transcriptIsElsewhere", () => {
 });
 
 describe("mergeRestoredReport", () => {
+  it("hydrates only content, never rolling newer saved task/calendar/retention metadata back", () => {
+    const latest = { ...projectReport(full()), title: "Neuer Titel", todos: [{ text: "machen", done: true }], takeaways: ["Neu"], calendarEventId: "new-event", audioDeletedAt: "2026-11-14" };
+    const hydrated = mergeRestoredReport({ report: latest, dirty: false }, full());
+    expect(hydrated).toMatchObject({ ...latest, transcriptChars: undefined, transcription: "Alles Gesagte", speech: speech() });
+  });
+
   it("brings the transcript back even though the local copy looks newer", () => {
     // Syncing writes the Drive file and then bumps the local revision twice,
     // so a timestamp comparison would skip every restore forever.

@@ -38,7 +38,7 @@ export default function Login({ notice = "" }: { notice?: string }) {
           </h1>
           <p>
             Lass die KI mitschreiben. Zeichne deine Meetings auf und erhalte
-            sofort strukturierte Zusammenfassungen und To-Dos.
+            strukturierte Zusammenfassungen und Aufgaben.
           </p>
           <div className="story-flow">
             <span>
@@ -109,8 +109,9 @@ export default function Login({ notice = "" }: { notice?: string }) {
             </p>
           </div>
           <p className="small muted">
-            Für die Analyse werden deine ausgewählten Aufnahmen an Google Gemini
-            übermittelt. KI-Befunde bitte vor der Weitergabe prüfen.
+            Aufnahmen erst nach Zustimmung aller Beteiligten starten. AssemblyAI
+            erstellt das Transkript; Google Gemini analysiert den Text.
+            KI-Ergebnisse bitte vor der Weitergabe prüfen.
           </p>
         </div>
         <span className="login-bottom">Für effiziente Teams gemacht.</span>

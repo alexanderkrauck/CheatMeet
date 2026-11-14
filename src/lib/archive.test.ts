@@ -99,11 +99,26 @@ describe("toArchive", () => {
         "takeaways",
         "title",
         "todos",
+        "transcriptRevision",
         "transcription",
         "transcriptionOrigin",
         "updatedAt",
       ].sort(),
     );
+  });
+
+  it("round-trips content identity and summary refresh intent, but never stale cache state", () => {
+    const archived = toArchive(full({ summaryNeedsRefresh: true, transcriptStale: false }), DATE);
+    expect(archived.transcriptRevision).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(archived).not.toHaveProperty("transcriptStale");
+    const restored = fromArchive(archived, IDS);
+    expect(restored.summaryNeedsRefresh).toBe(true);
+    expect(restored.transcriptRevision).toBe(archived.transcriptRevision);
+    expect(() => toArchive(full({ transcriptStale: true }), DATE)).toThrow(/Transkript/);
+    const home = { provider: "microsoft" as const, connectionId: "c", driveId: "d", rootId: "root", rootName: "Meetings", folderId: "f", reportId: "j" };
+    const ms = toArchive(full({ home }), DATE);
+    expect(fromArchive({ ...ms, home: { ...home, reportId: undefined } }, { home }).home?.reportId).toBe("j");
+    expect(() => fromArchive({ ...ms, home: { ...home, reportId: "other" } }, { home })).toThrow(/Archiv/);
   });
 
   it("omits this session's internals", () => {

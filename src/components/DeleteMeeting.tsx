@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Trash2 } from "lucide-react";
-import { deleteReport } from "../lib/deleteReport";
+import { deleteReport, type DeleteOutcome } from "../lib/deleteReport";
 import { errorMessage } from "../lib/session";
-import { uid } from "../lib/reports";
+import { auth } from "../lib/firebase";
 import { getLocal } from "../lib/local";
+import { sameReportHome } from "../lib/reportProjection";
 import type { ReportData } from "../types";
 
 /**
@@ -25,12 +26,14 @@ export default function DeleteMeeting({
   title: string;
   driveFolderId?: string;
   home?:ReportData["home"];
-  onDeleted?: () => void;
+  onDeleted?: (outcome: DeleteOutcome) => void;
   onOpenChange?: (open: boolean) => void;
   /** Survives this component being unmounted by the delete it just performed. */
   onWarning?: (message: string) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const pending = useRef(false);
+  const returnFocus = useRef<HTMLElement | null>(null);
   const [fromDrive, setFromDrive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -39,25 +42,44 @@ export default function DeleteMeeting({
     const node = dialog.current;
     if (!node) return;
     const close = () => {
-      setBusy(false);
       onOpenChange?.(false);
+      const opener = returnFocus.current;
+      const target = opener?.isConnected && opener.getClientRects().length && !opener.closest("[inert]")
+        ? opener : document.querySelector<HTMLElement>("main h1, h1");
+      if (target) {
+        if (!target.hasAttribute("tabindex") && target.tagName !== "SUMMARY" && target.tagName !== "BUTTON") target.setAttribute("tabindex", "-1");
+        target.focus({ preventScroll: true });
+      }
     };
     node.addEventListener("close", close);
     return () => node.removeEventListener("close", close);
   }, [onOpenChange]);
 
   async function confirm() {
-    const owner = uid();
+    if (pending.current) return;
+    const owner = auth.currentUser?.uid;
+    if (!owner) { setError("Bitte zuerst anmelden."); return; }
+    pending.current = true;
     setBusy(true);
     setError("");
-    // Whatever happens, the dialog must not lock the user in.
+    // These writes cannot be cancelled; keep their bounded operation locked.
     try {
-      const stored = await getLocal(owner, id);
+      const pinned = { id, title, driveFolderId, home: home && { ...home } } as ReportData;
+      const stored = await getLocal(owner, id, { index: home ? "meetings" : "reports" });
+      if (auth.currentUser?.uid !== owner) return;
+      if (stored && !sameReportHome(stored.report, pinned))
+        throw new Error("Der gespeicherte Bericht gehört zu einem anderen Archiv oder Speicherort. Es wurde nichts gelöscht.");
       // The folder id comes from the row, not only from the local copy: a
       // report restored on another device may not be in this IndexedDB.
-      const report =
-        stored?.report ?? ({ id, title, driveFolderId,home } as ReportData);
-      const { removed, warnings } = await deleteReport(owner, report, { fromDrive });
+      const report = stored ? {
+        ...stored.report,
+        ...(pinned.home
+          ? { home: { ...stored.report.home!, ...pinned.home } }
+          : { driveFolderId: pinned.driveFolderId ?? stored.report.driveFolderId }),
+      } : pinned;
+      const outcome = await deleteReport(owner, report, { fromDrive });
+      if (auth.currentUser?.uid !== owner) return;
+      const { removed, warnings } = outcome;
       if (!removed) {
         // Nothing was removed; the dialog is still mounted and can be retried.
         setError(warnings.join(" "));
@@ -67,11 +89,13 @@ export default function DeleteMeeting({
       // any warning has to reach the page instead.
       if (warnings.length) onWarning?.(warnings.join(" "));
       dialog.current?.close();
-      onDeleted?.();
+      onDeleted?.(outcome);
     } catch (cause) {
+      if (auth.currentUser?.uid !== owner) return;
       setError(errorMessage(cause));
       onWarning?.(errorMessage(cause));
     } finally {
+      pending.current = false;
       setBusy(false);
     }
   }
@@ -81,7 +105,10 @@ export default function DeleteMeeting({
       <button
         type="button"
         className="danger"
-        onClick={() => {
+        disabled={busy}
+        onClick={(event) => {
+          if (pending.current) return;
+          returnFocus.current = event.currentTarget.closest("details")?.querySelector<HTMLElement>("summary") || event.currentTarget;
           setError("");
           setFromDrive(false);
           onOpenChange?.(true);
@@ -97,6 +124,7 @@ export default function DeleteMeeting({
           className="confirm is-danger"
           ref={dialog}
           aria-labelledby={`del-${id}`}
+          onCancel={(event) => { if (pending.current) event.preventDefault(); }}
         >
           <h2 id={`del-${id}`}>„{title || "Unbenanntes Meeting"}“ löschen?</h2>
           <p className="muted">
@@ -110,6 +138,7 @@ export default function DeleteMeeting({
               <input
                 type="checkbox"
                 checked={fromDrive}
+                disabled={busy}
                 onChange={(event) => setFromDrive(event.target.checked)}
               />
               <span>
@@ -126,13 +155,13 @@ export default function DeleteMeeting({
               {error}
             </p>
           )}
+          {busy && <p role="status">Löschen läuft. Bitte warten; begonnene Löschschritte können nicht abgebrochen werden.</p>}
           <div className="confirm-actions">
-            {/* Never disabled: an in-flight delete is resumable by design, and
-                a dialog with no exit is worse than a re-run. */}
             <button
               type="button"
               className="btn"
-              onClick={() => dialog.current?.close()}
+              disabled={busy}
+              onClick={() => { if (!pending.current) dialog.current?.close(); }}
             >
               Abbrechen
             </button>

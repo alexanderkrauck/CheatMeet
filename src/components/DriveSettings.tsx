@@ -15,23 +15,46 @@ import {
   listDriveReports,
 } from "../lib/drive";
 import { connectGoogle, ensureDriveToken, errorMessage } from "../lib/session";
-import { getLocal, putLocal } from "../lib/local";
+import { getLocal, putLocal, ReportConflictError } from "../lib/local";
 import { uid } from "../lib/reports";
-import { saveMeetingHome } from "../lib/providerSettings";
+import {
+  saveMeetingHome,
+  savedMeetingHome,
+  loadProviderSettings,
+} from "../lib/providerSettings";
 export default function DriveSettings({
   onImported,
   onSelected,
   defaultSelectionDisabled = false,
+  meetingOnly = false,
+  selected = false,
 }: {
   onImported?: () => void;
   onSelected?: () => void;
   defaultSelectionDisabled?: boolean;
+  meetingOnly?: boolean;
+  selected?: boolean;
 }) {
   const [folder, setFolder] = useState<DriveFolder | null>(savedDriveFolder);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [googleDefault, setGoogleDefault] = useState(() => !savedMeetingHome());
+  const [ready, setReady] = useState(false);
   useEffect(() => {
     let active = true;
+    const refresh = () => {
+      if (active) setGoogleDefault(!savedMeetingHome());
+    };
+    window.addEventListener("cheatmeet:provider-settings", refresh);
+    if (!meetingOnly)
+      void loadProviderSettings()
+        .then(() => {
+          if (active) {
+            refresh();
+            setReady(true);
+          }
+        })
+        .catch((e) => active && setMessage(errorMessage(e)));
     void loadDriveFolder()
       .then((value) => {
         if (active) setFolder(value);
@@ -39,8 +62,9 @@ export default function DriveSettings({
       .catch(() => {});
     return () => {
       active = false;
+      window.removeEventListener("cheatmeet:provider-settings", refresh);
     };
-  }, []);
+  }, [meetingOnly]);
   async function select(useDefault = false) {
     const owner = uid();
     setBusy(true);
@@ -62,7 +86,7 @@ export default function DriveSettings({
         setFolder(selected);
         setMessage(
           warning ||
-            "Speicherort gespeichert. Neue Meetings werden hier abgelegt.",
+            "Google-Drive-Ordner gespeichert. Die Anbieterwahl bleibt unverändert; der Ordner gilt nur für neue Meetings mit Google Drive.",
         );
       }
     } catch (error) {
@@ -76,25 +100,36 @@ export default function DriveSettings({
     setMessage("Berichte in Drive suchen …");
     try {
       const user = uid();
-      const token = (await ensureDriveToken()) || (await connectGoogle());
-      const { reports, warnings } = await listDriveReports(
-        token,
-        await getRootFolder(token),
-      );
-      if (uid() !== user)
-        throw new Error(
-          "Das Google-Konto wurde gewechselt. Bitte die Wiederherstellung erneut starten.",
-        );
+      const check = () => {
+        if (uid() !== user)
+          throw new Error("Das Google-Konto wurde gewechselt. Bitte die Wiederherstellung erneut starten.");
+      };
+      const run = async <T,>(operation: () => Promise<T>) => {
+        check();
+        const value = await operation();
+        check();
+        return value;
+      };
+      const token = (await run(() => ensureDriveToken())) || (await run(() => connectGoogle()));
+      const root = await run(() => getRootFolder(token));
+      const { reports, warnings } = await run(() => listDriveReports(token, root));
       let count = 0;
       let skipped = 0;
       for (const report of reports) {
-        const local = await getLocal(user, report.id);
+        const local = await run(() => getLocal(user, report.id, { index: "reports" }));
         const merged = mergeRestoredReport(local, report);
         if (!merged) {
           skipped++;
           continue;
         }
-        await putLocal(user, merged);
+        try {
+          await run(() => putLocal(user, merged, local?.dirty ?? true, local?.report.updatedAt ?? null));
+        } catch (error) {
+          check();
+          if (!(error instanceof ReportConflictError)) throw error;
+          skipped++;
+          continue;
+        }
         count++;
       }
       onImported?.();
@@ -107,6 +142,47 @@ export default function DriveSettings({
       setBusy(false);
     }
   }
+  if (meetingOnly)
+    return (
+      <section
+        className="panel drive-settings"
+        aria-label="Google Drive für dieses Meeting"
+      >
+        <h2>Google Drive</h2>
+        <p className="muted">
+          Ordner: <strong>{folder?.name || DEFAULT_FOLDER_NAME}</strong>. Nur
+          den Speicher dieses Meetings wählen; der Standard für künftige
+          Meetings bleibt unverändert.
+        </p>
+        <button
+          type="button"
+          className="btn"
+          aria-pressed={selected}
+          disabled={busy || !onSelected}
+          onClick={() => {
+            const owner = uid();
+            setBusy(true);
+            setMessage("");
+            void (async () => {
+              (await ensureDriveToken()) || (await connectGoogle());
+              if (uid() !== owner)
+                throw Error("Das angemeldete Konto hat sich geändert.");
+              onSelected?.();
+              setMessage("Google Drive für dieses Meeting gewählt.");
+            })()
+              .catch((e) => setMessage(errorMessage(e)))
+              .finally(() => setBusy(false));
+          }}
+        >
+          Google Drive für dieses Meeting wählen
+        </button>
+        {message && (
+          <p className="notice" role="status">
+            {message}
+          </p>
+        )}
+      </section>
+    );
   return (
     <section
       className="panel drive-settings"
@@ -172,13 +248,18 @@ export default function DriveSettings({
         </button>
       </div>
       <p className="muted small">
-        Eine Änderung gilt für neue Meetings. Bestehende Berichte bleiben in
-        ihrem bisherigen Ordner.
+        {!ready
+          ? "Die Anbieterwahl ist noch nicht bestätigt."
+          : googleDefault
+            ? "Auswahl für neue Meetings: Google Drive."
+            : "Auswahl für neue Meetings: OneDrive. Ein Google-Ordner ändert das nicht."}{" "}
+        Bestehende Meetings behalten ihren Ordner.
       </p>
       <button
         type="button"
         className="btn"
         disabled={busy || defaultSelectionDisabled}
+        aria-pressed={ready && googleDefault}
         onClick={() => {
           setBusy(true);
           setMessage("");
@@ -193,6 +274,8 @@ export default function DriveSettings({
             if (uid() !== owner)
               throw new Error("Das angemeldete Konto hat sich geändert.");
             onSelected?.();
+            setReady(true);
+            setGoogleDefault(true);
             setMessage(
               "Google Drive als Standard für neue Meetings gespeichert. Bestehende Meetings bleiben unverändert.",
             );

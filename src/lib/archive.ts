@@ -2,6 +2,7 @@ import { microsoftHome, type MicrosoftHome } from "../../shared/storage";
 import { asTodos } from "../../shared/analysis";
 import { validateConsentRecord } from "../../shared/consent";
 import type { ReportData } from "../types";
+import { transcriptRevisionOf } from "./reportProjection";
 
 export const ARCHIVE_VERSION = 1;
 
@@ -30,6 +31,7 @@ const INTERNAL = [
   "transcriptChars",
   "participants",
   "speakerReviewPending",
+  "transcriptStale",
   // Self-referential: both are re-derived from where the file was found.
   "driveFolderId",
   "driveReportId",
@@ -39,7 +41,10 @@ export function toArchive(
   report: ReportData,
   generatedAt: string,
 ): Record<string, unknown> {
+  if (report.transcriptStale) throw new Error("Das lokale Transkript ist nicht aktuell. Bitte zuerst aus dem Archiv laden.");
   const out: Record<string, unknown> = { ...report };
+  const revision = transcriptRevisionOf(report);
+  if (revision) out.transcriptRevision = revision;
   for (const key of INTERNAL) delete out[key];
   if (report.home) {
     out.home = microsoftHome(report.home);
@@ -162,8 +167,12 @@ export function fromArchive(
   }
 
   const home = "home" in ids ? microsoftHome(ids.home) : undefined;
+  const storedHome = raw.home ? microsoftHome(raw.home) : undefined;
+  if (home && storedHome && (["driveId", "rootId", "folderId", "reportId"] as const).some(k => storedHome[k] && home[k] && storedHome[k] !== home[k])) {
+    throw new Error("Die Dateireferenzen passen nicht zum gewählten Archiv.");
+  }
   const legacy = !home;
-  return {
+  const report: ReportData = {
     id: raw.id,
     date: raw.date,
     title: raw.title,
@@ -176,6 +185,7 @@ export function fromArchive(
     ...("home" in ids ? { home: { ...((raw.home && typeof raw.home === "object") ? microsoftHome(raw.home) : ids.home), provider:"microsoft", connectionId:ids.home.connectionId,driveId:ids.home.driveId,rootId:ids.home.rootId,rootName:ids.home.rootName,folderId:ids.home.folderId,reportId:ids.home.reportId,...(ids.home.webUrl?{webUrl:ids.home.webUrl}:{}) } } : {driveFolderId:ids.driveFolderId,driveReportId:ids.driveReportId}),
     ...(raw.calendarProvider === "microsoft" || raw.calendarProvider === "google" ? {calendarProvider:raw.calendarProvider} : {}),
     ...(updatedAt ? { updatedAt } : {}),
+    ...(typeof raw.summaryNeedsRefresh === "boolean" ? { summaryNeedsRefresh: raw.summaryNeedsRefresh } : {}),
     ...(text(raw.projectName) ? { projectName: text(raw.projectName) } : {}),
     ...(text(raw.suggestedTitle)
       ? { suggestedTitle: text(raw.suggestedTitle) }
@@ -223,4 +233,9 @@ export function fromArchive(
       : {}),
     ...calendar,
   };
+  // Derive rather than trust a hand-edited marker; legacy v0/v2 content gains
+  // the same identity as a current full report without rewriting any archive.
+  const revision = transcriptRevisionOf(report);
+  if (revision) report.transcriptRevision = revision;
+  return report;
 }

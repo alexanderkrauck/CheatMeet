@@ -5,6 +5,28 @@ import {
   microsoftRetryAfter,
 } from "./microsoft";
 import type { MicrosoftHome } from "../../shared/storage";
+import type { ReportData } from "../types";
+const archiveConflict = () => new Error(
+  "Die OneDrive-Dateiversion ist neu oder unbekannt. Bitte zuerst aus OneDrive wiederherstellen und die Änderungen prüfen; die vorhandene Datei wurde nicht überschrieben.",
+);
+
+/** The cache is shared across tabs; the save must retain its own baseline. */
+export async function readOneDriveArchiveRevision(report: Pick<ReportData, "id" | "home"> & { archiveBaseSyncedAt?: string }): Promise<string> {
+  const { check } = microsoftOwner();
+  const home = report.home;
+  const baseline = report.archiveBaseSyncedAt || home?.syncedAt;
+  if (!home?.reportId || !baseline) throw archiveConflict();
+  const etag = await assertOneDriveRevision(home, home.reportId);
+  check();
+  const blob = await downloadOneDrive(home, home.reportId, etag);
+  check();
+  const raw = JSON.parse(await blob.text());
+  check();
+  if (raw.id !== report.id || raw.home?.syncedAt !== baseline ||
+      ["driveId", "rootId", "folderId", "reportId"].some(k => raw.home?.[k] && raw.home[k] !== home[k as keyof MicrosoftHome]))
+    throw archiveConflict();
+  return etag;
+}
 export interface OneDriveItem {
   id: string;
   name?: string;
@@ -122,6 +144,7 @@ export async function listOneDriveItems(home: MicrosoftHome, parentId: string) {
 export async function downloadOneDrive(
   home: MicrosoftHome,
   id: string,
+  expectedEtag?: string,
 ): Promise<Blob> {
   // Graph /content redirects to a preauthenticated URL. Resolve it from metadata,
   // then fetch without a Graph bearer. Never persist that capability.
@@ -130,6 +153,7 @@ export async function downloadOneDrive(
     OneDriveItem & { "@microsoft.graph.downloadUrl"?: string }
   >(itemPath(home, id), {}, home.connectionId);
   check();
+  if (expectedEtag && item.eTag !== expectedEtag) throw archiveConflict();
   const url = item["@microsoft.graph.downloadUrl"];
   if (!url || new URL(url).protocol !== "https:")
     throw new Error("OneDrive hat keinen sicheren Download bereitgestellt.");
@@ -288,6 +312,7 @@ export async function writeOneDriveText(
   name: string,
   text: string,
   itemId?: string,
+  expectedEtag?: string,
 ) {
   const { check } = microsoftOwner();
   let etag: string | undefined;
@@ -313,6 +338,7 @@ export async function writeOneDriveText(
       home,
       itemId,
       name === "bericht_daten.json",
+      expectedEtag,
     );
     check();
     // Small archive text uses Graph's native atomic update on both account types.
@@ -321,7 +347,11 @@ export async function writeOneDriveText(
     if(size>250*1024*1024)throw Error('Die Textdatei ist für eine sichere OneDrive-Aktualisierung zu groß.');
     const item=await json<OneDriveItem>(`${itemPath(home,itemId)}/content`,{
       method:'PUT',headers:{'Content-Type':name.endsWith('.json')?'application/json':'text/markdown;charset=utf-8','If-Match':etag},body:text,
-    },home.connectionId);
+    },home.connectionId).catch(error => {
+      check();
+      if ([409, 412].includes((error as { status?: number }).status || 0)) throw archiveConflict();
+      throw error;
+    });
     check();
     if(item.id!==itemId||item.size!==size||!item.eTag)throw Error('OneDrive konnte die aktualisierte Datei nicht bestätigen.');
     rememberRevision(home,item);
@@ -342,9 +372,10 @@ export async function assertOneDriveRevision(
   home: MicrosoftHome,
   itemId: string,
   required = true,
+  expectedEtag?: string,
 ) {
   const { check } = microsoftOwner();
-  const expected = knownRevision(home, itemId);
+  const expected = expectedEtag ?? knownRevision(home, itemId);
   const etag = (await getOneDriveItem(home, itemId)).eTag;
   check();
   if (!etag || (expected && expected !== etag) || (required && !expected))

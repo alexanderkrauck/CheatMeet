@@ -21,7 +21,8 @@ vi.mock("./local", () => ({
   getLocal: async () => ({ report: m.report }),
   putLocal: vi.fn(),
 }));
-vi.mock("./pipeline", () => ({ activeJobs: () => [] }));
+vi.mock("./pipeline", () => ({ activeJobs: () => [], jobFor: () => undefined, clearJob: vi.fn() }));
+vi.mock("./serverProcessing", () => ({ forgetServerProcessing: vi.fn(async () => {}) }));
 vi.mock("./workflow", () => ({
   ownedOperation: () => ({
     owner: "u",

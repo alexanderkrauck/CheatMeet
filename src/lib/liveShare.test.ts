@@ -46,6 +46,31 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it.each(["owner", "ended"])("does not send a token-waiting request after the session is %s", async reason => {
+  listening = true;
+  let ownerCurrent = true;
+  let delayed = false;
+  let resolve!: (token: string) => void;
+  make({
+    isOwnerCurrent: () => ownerCurrent,
+    getToken: () => delayed ? new Promise(done => { resolve = done; }) : Promise.resolve("id-token"),
+  });
+  await flush(3000);
+  sent.length = 0;
+  delayed = true;
+  share.update(speech([turn("1", 0, "privater alter Text")]));
+  await flush(2000);
+  expect(resolve).toBeTypeOf("function");
+  if (reason === "owner") ownerCurrent = false;
+  const ending = share.end();
+  if (reason === "ended") await flush(5000);
+  resolve("late-token");
+  await flush(60_000);
+  await ending;
+  expect(sent).toEqual([]);
+  expect(share.status()).toBe("off");
+});
+
 describe("while nobody is listening", () => {
   it("sends only a probe, never any transcript text", async () => {
     make();

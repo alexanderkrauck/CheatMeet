@@ -6,15 +6,24 @@ const firebase = vi.hoisted(() => ({
   reauthenticate: vi.fn(),
   signIn: vi.fn(),
   credential: vi.fn(),
+  unlink: vi.fn(),
+  reload: vi.fn(),
+  link: vi.fn(),
+  credentialSignIn: vi.fn(),
 }));
 vi.mock("./firebase", () => ({
   auth: firebase.auth,
   provider: firebase.provider,
 }));
 vi.mock("firebase/auth", () => ({
-  GoogleAuthProvider: { credentialFromResult: firebase.credential },
+  GoogleAuthProvider: class { static credentialFromResult = firebase.credential; static credential = vi.fn(); },
   reauthenticateWithPopup: firebase.reauthenticate,
   signInWithPopup: firebase.signIn,
+  unlink: firebase.unlink,
+  reload: firebase.reload,
+  linkWithPopup: firebase.link,
+  linkWithCredential: firebase.link,
+  signInWithCredential: firebase.credentialSignIn,
 }));
 const stored = new Map<string, string>();
 const key = "cheatmeet:drive-session";
@@ -176,6 +185,27 @@ describe("server-held drive authorization", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/drive-token"))).toBe(true);
   });
 
+  it("blocks new mints throughout partial revocation and permits a later reconnect", async () => {
+    const { session, fetchMock } = await load();
+    let finishRevoke!: (response: Response) => void;
+    const response = new Promise<Response>(resolve => { finishRevoke = resolve; });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/config")) return Response.json({ serverAuth: true });
+      if (url.endsWith("/revoke")) return response;
+      return Response.json({ accessToken: "fresh-after-reconnect", expiresInSeconds: 3600 });
+    });
+    const pending = session.revokeDriveGrant();
+    const failure = expect(pending).rejects.toThrow("Widerruf nicht bestätigt");
+    await vi.advanceTimersByTimeAsync(0);
+    const mintedDuringRevoke = await session.ensureDriveToken();
+    finishRevoke(Response.json({ revoked: false, localDisconnected: true, warning: "Widerruf nicht bestätigt" }, { status: 502 }));
+    await failure;
+    expect(mintedDuringRevoke).toBeNull();
+    expect(session.driveToken()).toBeNull();
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/drive-token"))).toHaveLength(0);
+    expect(await session.ensureDriveToken()).toBe("fresh-after-reconnect");
+  });
+
   it("issues one request even when several uploads start at once", async () => {
     const { session, fetchMock } = await load();
     await Promise.all([
@@ -223,6 +253,66 @@ describe("server-held drive authorization", () => {
     expect(
       fetchMock.mock.calls.some(([u]) => String(u).includes("/api/drive-token")),
     ).toBe(false);
+  });
+});
+
+describe("grant and identity boundaries", () => {
+  it("connects data without adding a Firebase login and retains a partial-revoke warning while clearing the local token", async () => {
+    const user = {uid:"microsoft-owner", providerData:[{providerId:"microsoft.com"}], getIdToken:vi.fn(async()=>"firebase-id")};
+    vi.doMock("./firebase", () => ({auth:{currentUser:user},provider:firebase.provider}));
+    const popup = {closed:false,close:vi.fn()};
+    const target = Object.assign(new EventTarget(), {location:{origin:"https://app.example"},open:vi.fn(()=>popup),setInterval,clearInterval,setTimeout,clearTimeout});
+    vi.stubGlobal("window",target);
+    const fetcher = vi.fn(async (url:string) => {
+      if(url.endsWith("/config"))return Response.json({serverAuth:true});
+      if(url.endsWith("/start"))return Response.json({url:"https://accounts.google.com/fixture"});
+      if(url.endsWith("/revoke"))return Response.json({revoked:false,localDisconnected:true,warning:"Widerruf nicht bestätigt. Bitte im Google-Konto prüfen."},{status:502});
+      return Response.json({accessToken:"data-access",expiresInSeconds:3600});
+    });
+    vi.stubGlobal("fetch",fetcher);
+    const session = await import("./session");
+    const connected = session.connectGoogle();
+    await vi.advanceTimersByTimeAsync(0);
+    target.dispatchEvent(Object.assign(new Event("message"), {origin:target.location.origin,source:popup,data:{source:"cheatmeet-oauth",idToken:`e30.${btoa(JSON.stringify({sub:"data-google"}))}.sig`}}));
+    expect(await connected).toBe("data-access");
+    expect(firebase.link).not.toHaveBeenCalled();
+    expect(firebase.credentialSignIn).not.toHaveBeenCalled();
+    expect(firebase.signIn).not.toHaveBeenCalled();
+    expect(fetcher.mock.calls.some(([url])=>url.endsWith("/start"))).toBe(true);
+    await expect(session.revokeDriveGrant()).rejects.toThrow(/nicht bestätigt.*Google-Konto/);
+    expect(session.driveToken()).toBeNull();
+    expect(stored.has(key)).toBe(false);
+    session.stopDriveTokenRefresh();
+    vi.stubGlobal("fetch",vi.fn(async()=>Response.json({serverAuth:false})));
+    await expect(session.connectGoogle()).rejects.toThrow(/benötigt.*serverseitige/);
+    expect(firebase.link).not.toHaveBeenCalled();
+  });
+
+  it("unlinks Google only after refreshed last-method checks and grant preservation, retaining identity on recent-auth failure", async () => {
+    const user = {uid:"owner",providerData:[{providerId:"google.com"}],getIdToken:vi.fn(async()=>"firebase-id")};
+    const holder = {currentUser:user};
+    vi.doMock("./firebase",()=>({auth:holder,provider:firebase.provider}));
+    const preserve = vi.fn(async()=>Response.json({preserved:true}));
+    vi.stubGlobal("fetch",preserve);
+    firebase.reload.mockResolvedValue(undefined);
+    const session = await import("./session");
+    await expect(session.unlinkGoogleIdentity()).rejects.toThrow(/letzte/);
+    expect(firebase.unlink).not.toHaveBeenCalled();
+    user.providerData.push({providerId:"microsoft.com"});
+    preserve.mockResolvedValueOnce(Response.json({error:"Die serverseitige Google-Verbindung ist nicht eingerichtet."},{status:503}));
+    await expect(session.unlinkGoogleIdentity()).rejects.toThrow(/serverseitige Google-Verbindung/);
+    expect(firebase.unlink).not.toHaveBeenCalled();
+    firebase.unlink.mockRejectedValueOnce(Object.assign(Error("private"),{code:"auth/requires-recent-login"}));
+    await expect(session.unlinkGoogleIdentity()).rejects.toThrow(/erneut anmelden/);
+    expect(user.providerData).toHaveLength(2);
+    firebase.unlink.mockResolvedValueOnce(user);
+    await session.unlinkGoogleIdentity();
+    expect(firebase.unlink).toHaveBeenLastCalledWith(user,"google.com");
+    expect(user.getIdToken).toHaveBeenLastCalledWith(true);
+    const calls = firebase.unlink.mock.calls.length;
+    firebase.reload.mockImplementationOnce(async()=>{holder.currentUser={...user,uid:"other"};});
+    await expect(session.unlinkGoogleIdentity()).rejects.toThrow(/Konto.*geändert/);
+    expect(firebase.unlink).toHaveBeenCalledTimes(calls);
   });
 });
 

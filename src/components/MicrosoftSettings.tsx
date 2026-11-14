@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-
+import { Link } from "react-router-dom";
+import { auth } from "../lib/firebase";
 import {
   cachedMicrosoftConnections,
   connectMicrosoft,
@@ -7,7 +8,6 @@ import {
   loadMicrosoftConnections,
   type MicrosoftConnection,
 } from "../lib/microsoft";
-
 import {
   listOneDriveFolders,
   oneDriveRoot,
@@ -16,15 +16,13 @@ import {
 import {
   savedMeetingHome,
   saveMeetingHome,
-  savedCalendarProvider,
-  saveCalendarProvider,
   loadProviderSettings,
 } from "../lib/providerSettings";
 import { errorMessage } from "../lib/session";
 import { restoreMicrosoftArchive } from "../lib/microsoftWorkflow";
-import type { MicrosoftHome } from "../../shared/storage";
-import { safeMicrosoftLink } from "../../shared/storage";
-/** Account and archive are intentionally independent. A new default never moves old meetings. */
+import { safeMicrosoftLink, type MicrosoftHome } from "../../shared/storage";
+
+/** A missing pinned account never selects another account or provider. */
 export default function MicrosoftSettings({
   onSelect,
   meetingOnly = false,
@@ -46,26 +44,32 @@ export default function MicrosoftSettings({
   const [home, setHome] = useState<MicrosoftHome | null>(
     value === undefined ? savedMeetingHome : value,
   );
-  const [calendar, setCalendar] = useState(savedCalendarProvider);
-  const [connection, setConnection] = useState(
-    home?.connectionId || connections[0]?.connectionId || "",
-  );
+  const [connection, setConnection] = useState(home?.connectionId || "");
   const [current, setCurrent] = useState<OneDriveItem | null>(null);
   const [trail, setTrail] = useState<OneDriveItem[]>([]);
   const [folders, setFolders] = useState<OneDriveItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [ready, setReady] = useState(meetingOnly);
+  const [checked, setChecked] = useState(false);
   useEffect(() => {
     if (value !== undefined) setHome(value);
   }, [value]);
   useEffect(() => {
     let live = true;
+    const refresh = () => {
+      if (live) {
+        setConnections(cachedMicrosoftConnections());
+        if (!meetingOnly) setHome(savedMeetingHome());
+      }
+    };
+    window.addEventListener("cheatmeet:provider-settings", refresh);
     void loadMicrosoftConnections()
       .then((c) => {
         if (live) {
           setConnections(c);
-          setConnection((old) => old || c[0]?.connectionId || "");
+          setChecked(true);
         }
       })
       .catch((e) => live && setError(errorMessage(e)));
@@ -74,20 +78,25 @@ export default function MicrosoftSettings({
         .then((s) => {
           if (live) {
             setHome(s.meetingHome);
-            setCalendar(s.calendarProvider);
+            setConnection((old) => old || s.meetingHome?.connectionId || "");
+            setReady(true);
           }
         })
         .catch((e) => live && setError(errorMessage(e)));
     return () => {
       live = false;
+      window.removeEventListener("cheatmeet:provider-settings", refresh);
     };
   }, [meetingOnly]);
   async function act(fn: () => Promise<void>) {
+    const owner = auth.currentUser?.uid;
     setBusy(true);
     setError("");
     setMessage("");
     try {
       await fn();
+      if (auth.currentUser?.uid !== owner)
+        throw Error("Das angemeldete Konto hat sich geändert.");
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -113,18 +122,18 @@ export default function MicrosoftSettings({
     setMessage(
       onSelect
         ? "Speicherort für dieses Meeting gewählt."
-        : "Standard für zukünftige Meetings gespeichert. Bestehende Meetings bleiben unverändert.",
+        : "Standard für künftige Meetings gespeichert. Bestehende Meetings bleiben unverändert.",
     );
   }
+  const connectedHome =
+    home && connections.some((c) => c.connectionId === home.connectionId);
   return (
     <section className="panel" aria-label="Microsoft und Meeting-Speicherort">
-      <h2>{meetingOnly ? "Speicherort dieses Meetings" : "OneDrive"}</h2>
+      <h2>{meetingOnly ? "OneDrive für dieses Meeting" : "OneDrive"}</h2>
       <p className="muted">
-        Anmeldung und Microsoft-Dateizugriff sind getrennt. OneDrive benötigt
-        „Files.ReadWrite“: Zugriff auf deine eigenen Dateien, nicht nur diesen
-        Ordner. Bestehende Freigaben bleiben unverändert.
+        Dateizugriff ist keine Anmeldemethode. OneDrive benötigt
+        „Files.ReadWrite“ für deine eigenen Dateien, nicht nur diesen Ordner.
       </p>
-
       <div className="actions">
         <button
           className="btn"
@@ -132,81 +141,85 @@ export default function MicrosoftSettings({
           onClick={() =>
             void act(async () => {
               await connectMicrosoft(false);
-              const c = await loadMicrosoftConnections();
-              setConnections(c);
-              setConnection(c[0]?.connectionId || "");
+              setConnections(await loadMicrosoftConnections());
+              setChecked(true);
+              setMessage(
+                "OneDrive verbunden. Prüfe die Kalenderfreigabe beim gewünschten Konto. Der Standardspeicher bleibt unverändert.",
+              );
             })
           }
         >
           OneDrive verbinden
         </button>
         {!meetingOnly && !storageOnly && (
-          <button
-            className="btn"
-            disabled={busy}
-            onClick={() =>
-              void act(async () => {
-                await connectMicrosoft(true);
-                setConnections(await loadMicrosoftConnections());
-              })
-            }
-          >
-            Outlook-Kalender freigeben
-          </button>
+          <Link className="btn" to="/setup">
+            Kalenderanbieter, Konto und Kalender auswählen
+          </Link>
         )}
       </div>
-      {connections.map((c) => (
-        <p key={c.connectionId}>
-          {c.accountName}
-          {c.calendar ? " · Kalender freigegeben" : " · Dateien"}{" "}
-          {!meetingOnly && (
-            <button
-              className="btn"
-              disabled={busy}
-              onClick={() =>
-                void act(async () => {
-                  await disconnectMicrosoft(c.connectionId);
-                  setConnections(await loadMicrosoftConnections());
-                })
-              }
-            >
-              Verbindung entfernen
-            </button>
-          )}
-        </p>
-      ))}
-      {!meetingOnly && !storageOnly && (
-        <label className="form-field">
-          Kalender für neue Zuordnungen
-          <select
-            className="field"
-            value={calendar}
-            disabled={busy}
-            onChange={(e) => {
-              const next = e.target.value as "google" | "microsoft";
-              void act(async () => {
-                await saveCalendarProvider(next);
-                setCalendar(next);
-              });
-            }}
-          >
-            <option value="google">Google Kalender</option>
-            <option value="microsoft">Outlook / Microsoft 365</option>
-          </select>
-        </label>
-      )}
+      <ul className="mcp-list">
+        {connections.map((c) => (
+          <li key={c.connectionId}>
+            <span>
+              <strong>{c.accountName}</strong>
+              <small className="muted">
+                OneDrive
+                {c.calendar
+                  ? " · Outlook freigegeben"
+                  : " · Outlook nicht freigegeben"}
+              </small>
+            </span>
+            {!meetingOnly && (
+              <button
+                className="btn"
+                disabled={busy}
+                aria-label={`Microsoft-Verbindung ${c.accountName} entfernen`}
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      `Microsoft-Verbindung „${c.accountName}“ für diesen Arbeitsbereich auf allen Geräten entfernen?\n\nOneDrive${c.calendar ? " und Outlook-Kalender" : ""} sind danach über diese Verbindung nicht erreichbar. Noch laufende Uploads und Verarbeitungen können anhalten. Speicher- und Kalenderzuordnungen bleiben bestehen; es gibt keinen Wechsel zu Google.\n\nDateien und Anmeldemethoden werden nicht gelöscht. Dies widerruft nicht generell die App-Berechtigungen im Microsoft-Konto. Für bestehende Meetings dasselbe Konto erneut verbinden.`,
+                    )
+                  )
+                    return;
+                  void act(async () => {
+                    await disconnectMicrosoft(c.connectionId);
+                    setConnections(cachedMicrosoftConnections());
+                    setChecked(true);
+                    setCurrent(null);
+                    setMessage(
+                      `Verbindung „${c.accountName}“ entfernt. Für bestehende Zuordnungen dasselbe Microsoft-Konto erneut verbinden.`,
+                    );
+                  });
+                }}
+              >
+                Verbindung entfernen
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
       <p>
         <strong>
           {home
             ? `OneDrive · ${home.rootName}`
-            : "Kein OneDrive-Standardspeicher ausgewählt"}
+            : meetingOnly
+              ? "Für dieses Meeting ist Google Drive gewählt"
+              : "Kein OneDrive-Standardspeicher ausgewählt"}
         </strong>
       </p>
+      {home && !connectedHome && (
+        <p className="notice" role="status">
+          {checked
+            ? "Der gewählte OneDrive-Speicher ist nicht verbunden. Verbinde dasselbe Microsoft-Konto erneut oder wähle bewusst einen anderen Speicher für künftige Meetings. Bestehende Meetings wechseln nicht den Anbieter."
+            : "Die Verbindung zum gewählten OneDrive-Speicher ist noch nicht bestätigt."}
+        </p>
+      )}
       <div className="actions">
         {meetingOnly && (
           <button
             className="btn"
             disabled={busy}
+            aria-pressed={!home}
             onClick={() => void act(() => select(null))}
           >
             Google Drive wählen
@@ -214,24 +227,36 @@ export default function MicrosoftSettings({
         )}
         {connections.length > 0 && (
           <>
-            <select
-              className="field"
-              aria-label="Microsoft-Verbindung"
-              value={connection}
-              onChange={(e) => {
-                setConnection(e.target.value);
-                setCurrent(null);
-              }}
-            >
-              {connections.map((c) => (
-                <option value={c.connectionId} key={c.connectionId}>
-                  {c.accountName}
-                </option>
-              ))}
-            </select>
+            <label className="form-field">
+              <span>Microsoft-Konto für die Ordnerauswahl</span>
+              <select
+                className="field"
+                value={connection}
+                disabled={busy}
+                onChange={(e) => {
+                  setConnection(e.target.value);
+                  setCurrent(null);
+                }}
+              >
+                <option value="">Microsoft-Konto wählen</option>
+                {connection &&
+                  !connections.some((c) => c.connectionId === connection) && (
+                    <option value={connection}>
+                      Gewähltes Konto nicht verbunden
+                    </option>
+                  )}
+                {connections.map((c) => (
+                  <option value={c.connectionId} key={c.connectionId}>
+                    {c.accountName}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
               className="btn"
-              disabled={busy || !connection}
+              disabled={
+                busy || !connections.some((c) => c.connectionId === connection)
+              }
               onClick={() => void act(() => browse())}
             >
               OneDrive-Ordner auswählen
@@ -244,10 +269,13 @@ export default function MicrosoftSettings({
           <h3>{current.name || "OneDrive"}</h3>
           <button
             className="btn"
-            disabled={busy || defaultSelectionDisabled}
+            disabled={busy || defaultSelectionDisabled || !ready}
+            aria-pressed={
+              home?.connectionId === connection && home?.rootId === current.id
+            }
             onClick={() =>
-              void act(async () => {
-                await select({
+              void act(() =>
+                select({
                   provider: "microsoft",
                   connectionId: connection,
                   driveId: current.parentReference!.driveId,
@@ -256,11 +284,13 @@ export default function MicrosoftSettings({
                   ...(current.webUrl && safeMicrosoftLink(current.webUrl)
                     ? { webUrl: current.webUrl }
                     : {}),
-                });
-              })
+                }),
+              )
             }
           >
-            Diesen Ordner verwenden
+            {meetingOnly
+              ? "Diesen Ordner für dieses Meeting wählen"
+              : "Diesen Ordner als Standard verwenden"}
           </button>
           {trail.length > 0 && (
             <button
@@ -269,8 +299,7 @@ export default function MicrosoftSettings({
               onClick={() =>
                 void act(async () => {
                   const next = [...trail];
-                  const parent = next.pop()!;
-                  await browse(parent);
+                  await browse(next.pop()!);
                   setTrail(next);
                 })
               }
@@ -296,12 +325,17 @@ export default function MicrosoftSettings({
               </li>
             ))}
           </ul>
+          {folders.length === 0 && (
+            <p className="muted small">
+              Keine Unterordner. Du kannst diesen Ordner verwenden.
+            </p>
+          )}
         </div>
       )}
       {!meetingOnly && home && (
         <button
           className="btn"
-          disabled={busy}
+          disabled={busy || !connectedHome}
           onClick={() =>
             void act(async () => {
               const result = await restoreMicrosoftArchive(home, setMessage);
@@ -319,6 +353,23 @@ export default function MicrosoftSettings({
       {error && (
         <p role="alert" className="notice">
           {error}
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              void act(async () => {
+                setConnections(await loadMicrosoftConnections());
+                setChecked(true);
+                if (!meetingOnly) {
+                  const settings = await loadProviderSettings();
+                  setHome(settings.meetingHome);
+                  setReady(true);
+                }
+              })
+            }
+          >
+            Verbindungen erneut laden
+          </button>
         </p>
       )}
     </section>

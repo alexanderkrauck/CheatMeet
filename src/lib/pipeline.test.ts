@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const ReportConflictError = vi.hoisted(() => class extends Error {
+  constructor() { super("Neuere Fassung laden"); this.name = "ReportConflictError"; }
+});
 const account = vi.hoisted(() => ({ currentUser: { uid: "user-1" } }));
 const remote = vi.hoisted(() => ({ available: vi.fn(), submit: vi.fn(), list: vi.fn(), get: vi.fn() }));
 const microsoftToken = vi.hoisted(() => vi.fn(async () => ({accessToken:"microsoft",connectionId:"c"})));
+const calendar = vi.hoisted(() => ({grant:vi.fn(),sync:vi.fn()}));
+vi.mock('./calendar',()=>({hasAnyCalendarGrant:calendar.grant}));
+vi.mock('./calendarSync',()=>({syncReportToCalendar:calendar.sync}));
+vi.mock('./meetingDefaults',()=>({calendarSyncEnabled:()=>true}));
 vi.mock("./microsoft",()=>({ensureMicrosoftToken:microsoftToken}));
-vi.mock("./serverProcessing", () => ({ processingAvailable: remote.available, submitServerProcessing: remote.submit, listServerProcessing: remote.list, getServerProcessing: remote.get }));
+vi.mock("./serverProcessing", () => ({ processingAvailable: remote.available, submitServerProcessing: remote.submit, listServerProcessing: remote.list, getServerProcessing: remote.get, discoverServerProcessing: (job:any)=>remote.get(job.reportId) }));
 vi.mock("./firebase", () => ({ auth: account }));
 const captureState = vi.hoisted(() => ({ active: false, busy: "" }));
 vi.mock("./capture", () => ({ isCapturing: () => captureState.active, captureSnapshot: () => ({ busy: captureState.busy }) }));
@@ -32,6 +39,7 @@ vi.mock("./reports", () => ({
   saveReport: (...args: unknown[]) => saveReport(...args),
 }));
 vi.mock("./local", () => ({
+  ReportConflictError,
   putDraft: (...args: unknown[]) => putDraft(...args),
   getDraft: (...args: unknown[]) => getDraft(...args),
   listDrafts: (...args: unknown[]) => listDrafts(...args),
@@ -65,11 +73,15 @@ const run = (analyze = true) =>
 
 describe("processing pipeline", () => {
   beforeEach(() => {
+    calendar.grant.mockReset().mockReturnValue(false);
+    calendar.sync.mockReset().mockResolvedValue({calendarSyncedAt:'new-success'});
     vi.stubGlobal("navigator", { locks: { request: async (_key: string, _options: unknown, callback: (lock: object) => unknown) => callback({}) } });
     captureState.active = false;
     captureState.busy = "";
     putDraft.mockReset().mockResolvedValue(undefined);
-    getDraft.mockReset().mockResolvedValue(undefined);
+    let pendingDraft:any;
+    putDraft.mockImplementation(async (_owner,next)=>{pendingDraft=next;});
+    getDraft.mockReset().mockImplementation(async()=>pendingDraft);
     listDrafts.mockReset().mockResolvedValue([]);
     getLocal.mockReset().mockResolvedValue(undefined);
     ensureDriveToken.mockReset().mockResolvedValue("drive-token");
@@ -89,14 +101,201 @@ describe("processing pipeline", () => {
       acceptRemoteReport,
     ])
       spy.mockReset();
-    saveReport.mockResolvedValue(null);
+    let stored: any;
+    getLocal.mockReset().mockImplementation(async () => stored && structuredClone(stored));
+    putLocal.mockImplementation(async (_owner, next, dirty = true, expected) => {
+      if (expected !== undefined && expected !== (stored?.report.updatedAt ?? null)) throw new ReportConflictError();
+      stored = { report: structuredClone(next), dirty };
+    });
+    saveReport.mockImplementation(async (next, options) => {
+      await putLocal("user-1", { ...next, updatedAt: new Date(Math.max(Date.now(), (Date.parse(next.updatedAt || "") || 0) + 1)).toISOString() }, true, options?.expectedUpdatedAt);
+      return null;
+    });
     backupDraft.mockResolvedValue(report);
-    analyzeDraft.mockResolvedValue({ ...report, status: "completed" });
-    syncReport.mockResolvedValue({ report, warning: null });
-    putLocal.mockResolvedValue(undefined);
+    analyzeDraft.mockImplementation(async d => ({ ...d.report, status: "completed" }));
+    syncReport.mockImplementation(async next => ({ report: next, warning: null }));
     deleteDraft.mockResolvedValue(undefined);
   });
-  afterEach(() => clearJob(report.id));
+  afterEach(() => { account.currentUser = {uid:'user-1'}; clearJob(report.id); });
+
+  it.each(['source-ready','fresh','browser'].flatMap(gate=>[true,false].map(connected=>({gate,connected}))))('uses linked A, never default B, at the $gate calendar gate (A=$connected)',async ({gate,connected})=>{
+    remote.available.mockResolvedValue(gate!=='browser');
+    calendar.grant.mockImplementation((_provider,connection)=>connection==='A'?connected:!connected);
+    const linked={...report,calendarEventId:'event',calendarProvider:'microsoft' as const,calendarConnectionId:'A'};
+    await startProcessing({owner:'user-1',draft:{...draft,report:linked,processing:{analyze:true,sourceReady:gate==='source-ready'}},token:'t',analyze:true});
+    expect(calendar.grant).toHaveBeenCalledWith('microsoft','A');
+    if(gate==='browser') {
+      if(connected)expect(calendar.sync).toHaveBeenCalledWith(expect.objectContaining({calendarConnectionId:'A'}),{create:false});
+      else expect(calendar.sync).not.toHaveBeenCalled();
+    } else expect(remote.submit).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({calendarSync:connected}));
+  });
+  it('does not reuse or clean a distinct same-ID namespace from list metadata',async()=>{
+    remote.available.mockResolvedValue(true);
+    remote.list.mockResolvedValue({jobs:[{reportId:report.id,state:'done',storage:'google',updatedAt:'sibling'}]});
+    const ms={...report,home:{provider:'microsoft' as const,connectionId:'c',driveId:'d',rootId:'r',rootName:'Meetings',folderId:'f',reportId:'j'}};
+    await startProcessing({owner:'user-1',draft:{...draft,report:ms},analyze:true});
+    expect(deleteDraft).not.toHaveBeenCalled();
+    expect(remote.submit).not.toHaveBeenCalled();
+    expect(jobFor(report.id,ms)).toMatchObject({stage:'error'});
+    expect(jobFor(report.id,report)).toBeUndefined();
+    clearJob(report.id,report);
+    expect(jobFor(report.id,ms)).toBeDefined();
+    clearJob(report.id,ms);
+  });
+  it('hydrates Google discovery without consuming a Microsoft sibling draft',async()=>{
+    remote.available.mockResolvedValue(true);
+    const done={reportId:report.id,state:'done',storage:'google',updatedAt:'source-bound-cleanup'};
+    remote.list.mockResolvedValue({jobs:[done]});remote.get.mockResolvedValue({job:done,report});
+    getDraft.mockResolvedValue({...draft,report:{...report,home:{provider:'microsoft',connectionId:'c',driveId:'d',rootId:'r',rootName:'Meetings'}}});
+    await pollServerProcessing('user-1');
+    expect(acceptRemoteReport).toHaveBeenCalledWith('user-1',report);
+    expect(deleteDraft).not.toHaveBeenCalled();
+    expect(getLocal).toHaveBeenCalledWith('user-1',report.id,{index:'reports'});
+  });
+  it.each([false,true])('cleans terminal drafts only for the exact same pinned source (same=%s)',async same=>{
+    remote.available.mockResolvedValue(true);
+    const pinned={...report,driveFolderId:'folder',driveReportId:'json'};
+    const done={reportId:report.id,state:'done',storage:'google',updatedAt:`cleanup-${same}`};
+    remote.list.mockResolvedValue({jobs:[done]});remote.get.mockResolvedValue({job:done,report:pinned});
+    getDraft.mockResolvedValue({...draft,report:{...pinned,driveFolderId:same?'folder':'sibling',rawAudioUrl:'consumed-audio'}});
+    await pollServerProcessing('user-1');
+    if(same)expect(deleteDraft).toHaveBeenCalledWith('user-1',report.id,{index:'reports'});
+    else expect(deleteDraft).not.toHaveBeenCalled();
+  });
+
+  it('refuses a different pinned local source even at an equal revision before journaling',async()=>{
+    const pinned={...report,driveFolderId:'folder',driveReportId:'json',updatedAt:'2026-11-01T00:00:00Z'};
+    getLocal.mockResolvedValue({report:{...pinned,driveFolderId:'sibling'},dirty:false});
+    await startProcessing({owner:'user-1',draft:{...draft,report:pinned},token:'t',analyze:true});
+    expect(putDraft).not.toHaveBeenCalled();expect(putLocal).not.toHaveBeenCalled();
+    expect(remote.submit).not.toHaveBeenCalled();
+  });
+  it.each([false, true])("retains human work after late browser analysis (failure=%s)", async (fail) => {
+    let stored: any;
+    getLocal.mockImplementation(async () => stored && structuredClone(stored));
+    putLocal.mockImplementation(async (_owner, next, dirty = true, expected) => {
+      if (expected !== undefined && expected !== (stored?.report.updatedAt ?? null)) throw new ReportConflictError();
+      stored = { report: structuredClone(next), dirty };
+    });
+    saveReport.mockImplementation(async (next, options) => {
+      await putLocal("user-1", { ...next, updatedAt: "2026-11-01T00:00:00.000Z" }, true, options?.expectedUpdatedAt);
+      return null;
+    });
+    let release!: (value?: unknown) => void;
+    analyzeDraft.mockImplementationOnce(() => {
+      const snapshot = structuredClone(stored.report);
+      return new Promise((resolve, reject) => { release = fail ? () => reject(new Error("KI ausgefallen")) : () => resolve({ ...snapshot, summary: "Spätes Modell", status: "completed" }); });
+    });
+    const raceId = `browser-race-${fail}`;
+    const pending = startProcessing({ owner: "user-1", draft: { ...draft, report: { ...report, id: raceId } }, token: "drive-token", analyze: true });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    const newer = { ...stored.report, title: "Mensch gewinnt", transcription: "Manuell korrigiert", updatedAt: "2099-01-01T00:00:00.000Z" };
+    stored = { report: newer, dirty: true };
+    release();
+    await pending;
+    expect(stored).toEqual({ report: newer, dirty: true });
+    expect(syncReport).not.toHaveBeenCalled();
+    expect(deleteDraft).not.toHaveBeenCalled();
+    expect(jobFor(raceId)).toMatchObject({ stage: "error", error: expect.stringMatching(/Fassung|geändert/) });
+    clearJob(raceId);
+  });
+
+  it.each(["submission", "terminal hydration"])("keeps later human edits dirty after server %s", async (phase) => {
+    const submitted = { ...report, updatedAt: "2026-11-01T00:00:00.000Z" };
+    let stored = { report: submitted, dirty: true };
+    getLocal.mockImplementation(async () => structuredClone(stored));
+    putLocal.mockImplementation(async (_owner, next, dirty = true, expected) => {
+      if (expected !== undefined && expected !== stored.report.updatedAt) throw new ReportConflictError();
+      stored = { report: structuredClone(next), dirty };
+    });
+    let release!: (value: unknown) => void;
+    if (phase === "submission") {
+      remote.submit.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    } else {
+      remote.submit.mockResolvedValueOnce({ job: { reportId: report.id, state: "done" } });
+      remote.get.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    }
+    const pending = handoffServerProcessing("user-1", submitted, { analyze: true });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    const newer = { ...submitted, title: "Menschliche Korrektur", transcription: "Korrigiertes Transkript", updatedAt: "2026-11-02T00:00:00.000Z" };
+    stored = { report: newer, dirty: true };
+    release({ job: { reportId: report.id, state: "queued", message: "Akzeptiert" } });
+    await expect(pending).rejects.toMatchObject({ name: "ReportConflictError" });
+    expect(stored).toEqual({ report: newer, dirty: true });
+    expect(acceptRemoteReport).not.toHaveBeenCalled();
+  });
+
+  it("observes the durable final-save revision rather than a stale workflow return revision", async () => {
+    const input = { ...report, updatedAt: "2026-11-01T00:00:00.000Z" };
+    getLocal.mockResolvedValue({ report: { ...input, updatedAt: "2026-11-01T00:00:00.001Z" }, dirty: true });
+    putLocal.mockResolvedValue(undefined);
+    await handoffServerProcessing("user-1", input, { analyze: true });
+    expect(putLocal).toHaveBeenCalledWith("user-1", expect.objectContaining({ updatedAt: "2026-11-01T00:00:00.001Z" }), true, "2026-11-01T00:00:00.001Z");
+  });
+
+  it("carries meeting identity and backup-only intent into job progress without an extra listener", async () => {
+    remote.available.mockResolvedValue(true);
+    await handoffServerProcessing("user-1", report, { analyze: false });
+    expect(jobFor(report.id)).toMatchObject({ title: "Weekly Sync", date: report.date, analyze: false });
+  });
+
+  it("discards terminal hydration already in flight when the meeting's recovery job is cleared", async () => {
+    remote.available.mockResolvedValue(true);
+    const done = { reportId: report.id, state: "done", message: "Fertig", updatedAt: "deleted-in-flight" };
+    remote.list.mockResolvedValue({ jobs: [done] });
+    let release!: (value: unknown) => void;
+    remote.get.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    const polling = pollServerProcessing("user-1");
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    clearJob(report.id);
+    release({ job: done, report });
+    await polling;
+    expect(acceptRemoteReport).not.toHaveBeenCalled();
+    expect(jobFor(report.id)).toBeUndefined();
+  });
+
+  it("invalidates a delayed terminal response when exact-source deletion clears an unbound discovery", async () => {
+    remote.available.mockResolvedValue(true);
+    const pinned = { ...report, driveFolderId: "folder", driveReportId: "json" };
+    const queued = { reportId: report.id, state: "queued", message: "Server", updatedAt: "unbound-discovery" };
+    remote.list.mockResolvedValue({ jobs: [queued] });
+    await pollServerProcessing("user-1");
+    expect(jobFor(report.id)).toMatchObject({ serverOwned: true });
+    expect(jobFor(report.id, pinned)).toBeUndefined();
+    getLocal.mockResolvedValue({ report: pinned, dirty: false });
+    const done = { ...queued, state: "done", updatedAt: "unbound-terminal" };
+    remote.list.mockResolvedValue({ jobs: [done] });
+    let release!: (value: unknown) => void;
+    remote.get.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    const polling = pollServerProcessing("user-1");
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    // The exact-source server forget has succeeded; deleteReport uses this
+    // clear before removing the index/local entry. Delivery is still pending.
+    clearJob(report.id, pinned);
+    getLocal.mockResolvedValue(undefined);
+    release({ job: done, report: pinned });
+    await polling;
+    expect(acceptRemoteReport).not.toHaveBeenCalled();
+    expect(deleteDraft).not.toHaveBeenCalled();
+    expect(jobFor(report.id, pinned)).toBeUndefined();
+  });
+
+  it("retains a bound sibling source while permitting exact-source job removal", async () => {
+    const pinned = { ...report, driveFolderId: "folder", driveReportId: "json" };
+    await handoffServerProcessing("user-1", pinned, { analyze: true });
+    clearJob(report.id, { ...pinned, driveFolderId: "sibling" });
+    expect(jobFor(report.id, pinned)).toBeDefined();
+    clearJob(report.id, pinned);
+    expect(jobFor(report.id, pinned)).toBeUndefined();
+  });
+
+  it("continues past a forgotten job from an instance's briefly stale list", async () => {
+    remote.available.mockResolvedValue(true);
+    remote.list.mockResolvedValue({ jobs: [{ reportId: report.id, state: "done", updatedAt: "forgotten" }] });
+    remote.get.mockRejectedValue(Object.assign(new Error("Auftrag nicht gefunden"), { status: 404 }));
+    await expect(pollServerProcessing("user-1")).resolves.toBe(false);
+    expect(acceptRemoteReport).not.toHaveBeenCalled();
+  });
 
   it("observes idle every five minutes and wakes on accepted work without publish recursion", async () => {
     vi.useFakeTimers();
@@ -115,7 +314,8 @@ describe("processing pipeline", () => {
       await handoffServerProcessing('user-1',report,{analyze:true});
       await vi.advanceTimersByTimeAsync(0);
       expect(remote.list).toHaveBeenCalledTimes(3);
-      remote.list.mockResolvedValue({jobs:[{reportId:report.id,state:'queued',message:'Server',updatedAt:'observer-active'}]});
+      const queued={reportId:report.id,state:'queued',message:'Server',updatedAt:'observer-active'};
+      remote.list.mockResolvedValue({jobs:[queued]});remote.get.mockResolvedValue({job:queued});
       await vi.advanceTimersByTimeAsync(4999);
       expect(remote.list).toHaveBeenCalledTimes(3);
       await vi.advanceTimersByTimeAsync(1);
@@ -166,15 +366,18 @@ describe("processing pipeline", () => {
   it("pins the Microsoft source and never asks Google for its credential", async () => {
     remote.available.mockResolvedValue(true);
     const ms = {...report, home:{provider:"microsoft" as const,connectionId:"c",driveId:"d",rootId:"root",rootName:"Meetings",folderId:"f",audioId:"a",reportId:"j"}};
+    remote.submit.mockResolvedValue({job:{reportId:report.id,state:'queued',storage:'microsoft'}});
     syncReport.mockResolvedValue({report:ms,warning:null});
     await startProcessing({owner:"user-1",draft:{...draft,report:ms},analyze:false});
     expect(ensureDriveToken).not.toHaveBeenCalled();expect(microsoftToken).toHaveBeenCalledWith("c");
     expect(remote.submit).toHaveBeenCalledWith(expect.objectContaining({home:ms.home}),expect.objectContaining({analyze:false}));
+    clearJob(report.id,ms);
   });
 
   it("persists explicit intent before any network work", async () => {
-    saveReport.mockImplementationOnce(async () => {
+    saveReport.mockImplementationOnce(async (next, options) => {
       expect(putDraft).toHaveBeenCalledWith("user-1", expect.objectContaining({ processing: { analyze: false } }));
+      await putLocal("user-1", { ...next, updatedAt: "2026-11-01T00:00:00.000Z" }, true, options?.expectedUpdatedAt);
       return null;
     });
     await run(false);
@@ -227,7 +430,9 @@ describe("processing pipeline", () => {
 
   it("does not upload again for an accepted job, even on an explicit retry", async () => {
     remote.available.mockResolvedValue(true);
-    remote.list.mockResolvedValue({ jobs: [{ reportId: report.id, state: "queued", message: "Server", updatedAt: "accepted" }] });
+    const job={ reportId: report.id, state: "queued", message: "Server", updatedAt: "accepted" };
+    remote.list.mockResolvedValue({ jobs: [job] });
+    remote.get.mockResolvedValue({job});
     listDrafts.mockResolvedValue([{ ...draft, processing: { analyze: true } }]);
     await pollServerProcessing("user-1");
     await run();
@@ -333,7 +538,7 @@ describe("processing pipeline", () => {
     remote.submit.mockResolvedValueOnce({ job });
     remote.get.mockResolvedValueOnce({ job, report: finished });
     await run();
-    expect(remote.get).toHaveBeenCalledWith(report.id);
+    expect(remote.get).toHaveBeenCalledWith(report.id, expect.objectContaining({id:report.id}));
     expect(acceptRemoteReport).toHaveBeenCalledWith("user-1", finished);
     expect(analyzeDraft).not.toHaveBeenCalled();
   });
@@ -343,11 +548,11 @@ describe("processing pipeline", () => {
     await run();
     expect(backupDraft).toHaveBeenCalledBefore(syncReport);
     expect(syncReport).toHaveBeenCalledBefore(remote.submit);
-    expect(finalTranscript).toHaveBeenCalledWith(expect.objectContaining(draft), "drive-token", { batch: false });
+    expect(finalTranscript).toHaveBeenCalledWith(expect.objectContaining({ report: expect.objectContaining({ id: report.id }) }), "drive-token", { batch: false, expectedUpdatedAt: expect.any(String) });
     expect(analyzeDraft).not.toHaveBeenCalled();
     expect(remote.submit).toHaveBeenCalledWith(expect.objectContaining({ id: report.id }), expect.objectContaining({ analyze: true }));
     expect(jobFor(report.id)).toMatchObject({ serverOwned: true, stage: "analyzing" });
-    expect(deleteDraft).toHaveBeenCalledWith("user-1", report.id);
+    expect(deleteDraft).toHaveBeenCalledWith("user-1", report.id, { index: "reports" });
   });
 
   it("does not silently switch to browser AI after an uncertain server handoff", async () => {
@@ -372,7 +577,7 @@ describe("processing pipeline", () => {
     expect(saveReport).toHaveBeenCalledBefore(backupDraft);
     expect(backupDraft).toHaveBeenCalledBefore(analyzeDraft);
     expect(analyzeDraft).toHaveBeenCalledBefore(syncReport);
-    expect(deleteDraft).toHaveBeenCalledWith("user-1", report.id);
+    expect(deleteDraft).toHaveBeenCalledWith("user-1", report.id, { index: "reports" });
   });
 
   it("skips analysis when only a Drive backup was requested", async () => {
@@ -401,7 +606,10 @@ describe("processing pipeline", () => {
   });
 
   it("surfaces a cloud-index warning without failing the job", async () => {
-    saveReport.mockResolvedValueOnce("Firebase antwortet nicht.");
+    saveReport.mockImplementationOnce(async (next, options) => {
+      await putLocal("user-1", { ...next, updatedAt: "2026-11-01T00:00:00.000Z" }, true, options?.expectedUpdatedAt);
+      return "Firebase antwortet nicht.";
+    });
     await run(false);
     expect(jobFor(report.id)).toMatchObject({
       stage: "done",

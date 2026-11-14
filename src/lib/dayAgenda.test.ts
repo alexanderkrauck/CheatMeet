@@ -7,7 +7,10 @@ import {
 } from "./dayAgenda";
 import type { CalendarEvent } from "./calendar";
 import type { ReportSummary } from "./meetingMeta";
-import { recordHref } from '../components/EventRow';
+import EventRow, { recordHref } from "../components/EventRow";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
 
 const at = (h: number, m = 0, day = 16) =>
   new Date(2026, 8, day, h, m).getTime();
@@ -37,17 +40,78 @@ const report = (over: Partial<ReportSummary> = {}): ReportSummary =>
   }) as ReportSummary;
 
 describe("recordedEventIds", () => {
-  it('keeps provider/account/calendar identity when matching identical event IDs',()=>{
-    const recorded=recordedEventIds([report({calendarProvider:'microsoft',calendarConnectionId:'work',calendarId:'calendar',calendarEventId:'e1'})]);
-    const work=event({provider:'microsoft',connectionId:'work',calendarId:'calendar'});
-    const personal=event({provider:'microsoft',connectionId:'personal',calendarId:'calendar'});
-    const otherCalendar=event({provider:'microsoft',connectionId:'work',calendarId:'another'});
-    const remaining=buildAgenda([], [work,personal,otherCalendar,event()],recorded);
-    expect(remaining.filter(e=>e.kind==='event').map(e=>e.kind==='event'&&e.event)).toEqual([personal,otherCalendar,event()]);
+  it("keeps provider/account/calendar identity when matching identical event IDs", () => {
+    const recorded = recordedEventIds([
+      report({
+        calendarProvider: "microsoft",
+        calendarConnectionId: "work",
+        calendarId: "calendar",
+        calendarEventId: "e1",
+      }),
+    ]);
+    const work = event({
+      provider: "microsoft",
+      connectionId: "work",
+      calendarId: "calendar",
+    });
+    const personal = event({
+      provider: "microsoft",
+      connectionId: "personal",
+      calendarId: "calendar",
+    });
+    const otherCalendar = event({
+      provider: "microsoft",
+      connectionId: "work",
+      calendarId: "another",
+    });
+    const remaining = buildAgenda(
+      [],
+      [work, personal, otherCalendar, event()],
+      recorded,
+    );
+    expect(
+      remaining
+        .filter((e) => e.kind === "event")
+        .map((e) => e.kind === "event" && e.event),
+    ).toEqual([personal, otherCalendar, event()]);
   });
-  it('carries the Outlook event binding from the calendar row to recording preselection',()=>{
-    const url=new URL(recordHref(event({provider:'microsoft',connectionId:'work',calendarId:'calendar'})),'https://cheatmeet.test');
-    expect(Object.fromEntries(url.searchParams)).toMatchObject({provider:'microsoft',connection:'work',calendar:'calendar',event:'e1'});
+  it("carries the Outlook event binding from the calendar row to recording preselection", () => {
+    const url = new URL(
+      recordHref(
+        event({
+          provider: "microsoft",
+          connectionId: "work",
+          calendarId: "calendar",
+        }),
+      ),
+      "https://cheatmeet.test",
+    );
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({
+      provider: "microsoft",
+      connection: "work",
+      calendar: "calendar",
+      event: "e1",
+    });
+    const markup = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(EventRow, {
+          event: event({
+            provider: "microsoft",
+            connectionId: "work",
+            calendarId: "calendar",
+            htmlLink: "https://outlook.office.com/calendar/item/e1",
+          }),
+        }),
+      ),
+    );
+    expect(markup).toContain('class="calendar-source-link"');
+    expect(markup).toContain(
+      'href="https://outlook.office.com/calendar/item/e1"',
+    );
+    expect(markup).toContain('rel="noopener noreferrer"');
+    expect(markup).toContain("provider=microsoft");
   });
   it("collects only the reports that are linked to an event", () => {
     const ids = recordedEventIds([
@@ -61,7 +125,10 @@ describe("recordedEventIds", () => {
 describe("scheduledByDay", () => {
   it("buckets by local day", () => {
     const days = scheduledByDay(
-      [event(), event({ id: "e2", startMs: at(9, 0, 17), endMs: at(10, 0, 17) })],
+      [
+        event(),
+        event({ id: "e2", startMs: at(9, 0, 17), endMs: at(10, 0, 17) }),
+      ],
       new Set(),
     );
     expect([...days.keys()].sort()).toEqual(["2026-09-16", "2026-09-17"]);
@@ -78,9 +145,9 @@ describe("buildAgenda", () => {
     const morning = event({ id: "m", startMs: at(8), endMs: at(9) });
     const evening = event({ id: "v", startMs: at(20), endMs: at(22) });
     const entries = buildAgenda([report()], [evening, morning], new Set());
-    expect(entries.map((e) => (e.kind === "report" ? e.report.id : e.event.id))).toEqual(
-      ["m", "r1", "v"],
-    );
+    expect(
+      entries.map((e) => (e.kind === "report" ? e.report.id : e.event.id)),
+    ).toEqual(["m", "r1", "v"]);
   });
 
   it("lets the report replace the event it recorded", () => {
@@ -94,10 +161,18 @@ describe("buildAgenda", () => {
   });
 
   it("leads the day with a whole-day entry instead of sorting it to midnight", () => {
-    const allDay = event({ id: "g", allDay: true, startMs: at(0), endMs: at(0, 0, 17) });
+    const allDay = event({
+      id: "g",
+      allDay: true,
+      startMs: at(0),
+      endMs: at(0, 0, 17),
+    });
     const early = event({ id: "e", startMs: at(8), endMs: at(9) });
     const entries = buildAgenda([], [early, allDay], new Set());
-    expect(entries.map((e) => (e.kind === "event" ? e.event.id : ""))).toEqual(["g", "e"]);
+    expect(entries.map((e) => (e.kind === "event" ? e.event.id : ""))).toEqual([
+      "g",
+      "e",
+    ]);
   });
 
   it("keeps a whole-day entry on its own day rather than at the top of the month", () => {
@@ -110,9 +185,16 @@ describe("buildAgenda", () => {
       startMs: at(0, 0, 28),
       endMs: at(0, 0, 29),
     });
-    const meeting = event({ id: "m", startMs: at(9, 0, 16), endMs: at(10, 0, 16) });
+    const meeting = event({
+      id: "m",
+      startMs: at(9, 0, 16),
+      endMs: at(10, 0, 16),
+    });
     const entries = buildAgenda([], [holiday, meeting], new Set());
-    expect(entries.map((e) => (e.kind === "event" ? e.event.id : ""))).toEqual(["m", "h"]);
+    expect(entries.map((e) => (e.kind === "event" ? e.event.id : ""))).toEqual([
+      "m",
+      "h",
+    ]);
   });
 
   it("tells each entry which day it belongs to", () => {
@@ -121,7 +203,11 @@ describe("buildAgenda", () => {
   });
 
   it("marks an entry with nobody in it as quiet rather than hiding it", () => {
-    const karaoke = event({ id: "k", attendees: [], title: "ROX Karaoke Night" });
+    const karaoke = event({
+      id: "k",
+      attendees: [],
+      title: "ROX Karaoke Night",
+    });
     const [entry] = buildAgenda([], [karaoke], new Set());
     expect(entry.kind === "event" && entry.quiet).toBe(true);
     const [meeting] = buildAgenda([], [event()], new Set());
@@ -130,20 +216,72 @@ describe("buildAgenda", () => {
 });
 
 describe("dayAgenda", () => {
+  it("shows every occupied local date, clips visible buckets, and excludes the exact midnight end", () => {
+    const overnight = event({
+      id: "night",
+      startMs: at(23, 0, 15),
+      endMs: at(1, 0, 16),
+    });
+    const workshop = event({
+      id: "workshop",
+      allDay: true,
+      startMs: at(0, 0, 15),
+      endMs: at(0, 0, 17),
+    });
+    const events = [overnight, workshop];
+    const days = scheduledByDay(events, new Set());
+    expect([...days.keys()]).toEqual(["2026-09-15", "2026-09-16"]);
+    expect(
+      dayAgenda("2026-09-16", [], events, new Set()).map(
+        (e) => e.kind === "event" && e.event.id,
+      ),
+    ).toEqual(["workshop", "night"]);
+    expect(dayAgenda("2026-09-17", [], events, new Set())).toEqual([]);
+    expect([
+      ...scheduledByDay(events, new Set(), {
+        fromMs: at(0),
+        toMs: at(0, 0, 17),
+      }).keys(),
+    ]).toEqual(["2026-09-16"]);
+    expect(
+      dayAgenda("2026-09-16", [], events, new Set(["workshop"])),
+    ).toHaveLength(1);
+    for (const [start, end, expected] of [
+      ["2026-03-28", "2026-03-31", ["2026-03-28", "2026-03-29", "2026-03-30"]],
+      ["2026-10-24", "2026-10-27", ["2026-10-24", "2026-10-25", "2026-10-26"]],
+      ["2026-02-28", "2026-03-02", ["2026-02-28", "2026-03-01"]],
+    ] as const) {
+      const span = event({
+        allDay: true,
+        startMs: new Date(`${start}T00:00:00`).getTime(),
+        endMs: new Date(`${end}T00:00:00`).getTime(),
+      });
+      expect([...scheduledByDay([span], new Set()).keys()]).toEqual(expected);
+    }
+  });
   it("keeps only what belongs to that day, from both sides", () => {
-    const other = event({ id: "o", startMs: at(9, 0, 17), endMs: at(10, 0, 17) });
+    const other = event({
+      id: "o",
+      startMs: at(9, 0, 17),
+      endMs: at(10, 0, 17),
+    });
     const entries = dayAgenda(
       "2026-09-16",
-      [report(), report({ id: "r2", date: new Date(at(11, 0, 17)).toISOString() })],
+      [
+        report(),
+        report({ id: "r2", date: new Date(at(11, 0, 17)).toISOString() }),
+      ],
       [event(), other],
       new Set(),
     );
-    expect(entries.map((e) => (e.kind === "report" ? e.report.id : e.event.id))).toEqual(
-      ["e1", "r1"],
-    );
+    expect(
+      entries.map((e) => (e.kind === "report" ? e.report.id : e.event.id)),
+    ).toEqual(["e1", "r1"]);
   });
 
   it("ignores a report with no usable date", () => {
-    expect(dayAgenda("2026-09-16", [report({ date: "" })], [], new Set())).toHaveLength(0);
+    expect(
+      dayAgenda("2026-09-16", [report({ date: "" })], [], new Set()),
+    ).toHaveLength(0);
   });
 });

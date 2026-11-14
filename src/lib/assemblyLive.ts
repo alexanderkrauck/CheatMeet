@@ -56,7 +56,8 @@ export function startAssemblyLive(
   languages: string[],
   singleSpeakerSources: Partial<Record<"mic" | "system", boolean>> = {},
 ): LiveTranscription {
-  const owner = auth.currentUser?.uid;
+  const user = auth.currentUser;
+  const owner = user?.uid;
   const microphoneName = ownSpeakerName(auth.currentUser?.displayName);
   const events: AssemblyEvents[] = [];
   let warning = "",
@@ -67,8 +68,8 @@ export function startAssemblyLive(
     pending = 0;
   let session = 0;
   let contexts: AudioContext[] = [];
-  let connections: { close: () => Promise<void> }[] = [];
-  const reconnects = new Set<ReturnType<typeof setTimeout>>();
+  let connections: { source: "mic" | "system"; close: () => Promise<void>; drop: () => void }[] = [];
+  const reconnects = new Map<ReturnType<typeof setTimeout>, "mic" | "system">();
   const owned = () => Boolean(owner && auth.currentUser?.uid === owner);
   const names: Record<string, string> = {};
   let speakerCount = 0;
@@ -129,6 +130,7 @@ export function startAssemblyLive(
     sequence: number,
     attempt = 0,
   ) {
+    if (dropped.has(source) || stopped || paused || !owned() || epoch !== generation) return;
     const requestedAt = now();
     let context: AudioContext | undefined, socket: WebSocket | undefined;
     let closed = false,
@@ -168,7 +170,7 @@ export function startAssemblyLive(
       singleSpeakerSources[source] ? `${source}:single` : undefined);
     events.push(reducer);
     const watch = () => {
-      if (closed || terminating || !begun || paused || stopped || epoch !== generation)
+      if (closed || terminating || !begun || paused || stopped || dropped.has(source) || epoch !== generation)
         return;
       const at = now();
       if (at - lastMessageAt > WATCHDOG.silenceMs) return interrupted("watchdog-silent");
@@ -198,6 +200,7 @@ export function startAssemblyLive(
     };
     const close = async () => {
       if (closed) return;
+      if (!owned() || dropped.has(source)) { drop(); return; }
       if (terminating) return ended;
       terminating = true;
       node?.port.postMessage({ active: false });
@@ -210,6 +213,14 @@ export function startAssemblyLive(
         socket.send(JSON.stringify({ type: "Terminate" }));
         await ended;
       } else dispose();
+    };
+    const drop = () => {
+      if (closed) return;
+      terminating = true;
+      node?.port.postMessage({ active: false });
+      if (socket?.readyState === WebSocket.OPEN && begun)
+        socket.send(JSON.stringify({ type: "Terminate" }));
+      dispose();
     };
     let retryScheduled = false;
     /** The one path every failure takes: a socket that closed, errored, was ended
@@ -225,6 +236,7 @@ export function startAssemblyLive(
         terminating ||
         stopped ||
         paused ||
+        dropped.has(source) ||
         !owned() ||
         epoch !== generation
       )
@@ -244,12 +256,12 @@ export function startAssemblyLive(
       const streak = begun && now() - beganAt >= HEALTHY_MS ? 0 : attempt;
       const retry = setTimeout(() => {
         reconnects.delete(retry);
-        if (!stopped && !paused && owned() && epoch === generation)
+        if (!stopped && !paused && !dropped.has(source) && owned() && epoch === generation)
           void startSource(source, stream, epoch, session++, streak + 1);
       }, backoff(streak));
-      reconnects.add(retry);
+      reconnects.set(retry, source);
     }
-    const handle = { close };
+    const handle = { source, close, drop };
     connections.push(handle);
     watchers.add(watch);
     setState(source, states.has(source) ? "reconnecting" : "connecting");
@@ -266,7 +278,8 @@ export function startAssemblyLive(
       await context.audioWorklet.addModule(
         new URL("./pcmWorklet.js", import.meta.url),
       );
-      const token = await auth.currentUser?.getIdToken();
+      if (!owned() || epoch !== generation || closed || dropped.has(source)) { dispose(); return; }
+      const token = await user?.getIdToken();
       if (!owned() || epoch !== generation || closed) {
         dispose();
         return;
@@ -345,6 +358,7 @@ export function startAssemblyLive(
                 terminating ||
                 paused ||
                 stopped ||
+                dropped.has(source) ||
                 epoch !== generation ||
                 !owned()
               )
@@ -379,7 +393,7 @@ export function startAssemblyLive(
             // Roll over before the provider's three-hour limit, without replay.
             expiry = setTimeout(() => {
               void close().then(() => {
-                if (!stopped && !paused && owned() && epoch === generation)
+                if (!stopped && !paused && !dropped.has(source) && owned() && epoch === generation)
                   void startSource(source, stream, epoch, session++);
               });
             }, 10740 * 1000);
@@ -423,7 +437,7 @@ export function startAssemblyLive(
   };
   const closeAll = async () => {
     ++generation;
-    for (const timer of reconnects) clearTimeout(timer);
+    for (const timer of reconnects.keys()) clearTimeout(timer);
     reconnects.clear();
     const current = connections;
     connections = [];
@@ -451,6 +465,15 @@ export function startAssemblyLive(
     /** The device behind a source ended; stop paying for its connection. */
     dropSource(source: "mic" | "system") {
       dropped.add(source);
+      for (const [timer, retrySource] of reconnects) {
+        if (retrySource !== source) continue;
+        clearTimeout(timer);
+        reconnects.delete(timer);
+      }
+      for (const connection of [...connections])
+        if (connection.source === source) connection.drop();
+      authFailures.delete(source);
+      setState(source, undefined);
     },
     pause: () => {
       paused = true;

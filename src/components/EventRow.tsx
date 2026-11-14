@@ -1,16 +1,26 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Mic, Users } from "lucide-react";
+import { ExternalLink, Mic, Users } from "lucide-react";
 import type { CalendarEvent } from "../lib/calendar";
-import { guestLabel, isRecordable, timeLabel } from "../lib/upcoming";
+import {
+  guestLabel,
+  isRecordable,
+  providerEventUrl,
+  timeLabel,
+} from "../lib/upcoming";
 
 /** The drag payload a meeting row writes, and the only one this row accepts. */
 export const MIME = "application/x-cheatmeet-report";
 
 export const recordHref = (event: CalendarEvent) => {
-  const base=`/record?new=1&event=${encodeURIComponent(event.id)}`;
-  if(event.provider!=='microsoft'&&event.calendarId==='primary')return base;
-  const binding=new URLSearchParams({provider:event.provider||'google',calendar:event.calendarId,...(event.connectionId?{connection:event.connectionId}:{})});
+  const base = `/record?new=1&event=${encodeURIComponent(event.id)}`;
+  if (event.provider !== "microsoft" && event.calendarId === "primary")
+    return base;
+  const binding = new URLSearchParams({
+    provider: event.provider || "google",
+    calendar: event.calendarId,
+    ...(event.connectionId ? { connection: event.connectionId } : {}),
+  });
   return `${base}&${binding}`;
 };
 
@@ -32,11 +42,11 @@ export default function EventRow({
   onDropReport?: (reportId: string) => void;
 }) {
   const guests = guestLabel(event);
+  const source = providerEventUrl(event);
   const [over, setOver] = useState(false);
   // Only the app's own payload counts: a dragged file or link must not look
   // droppable here.
-  const carriesReport = (types: readonly string[]) =>
-    types.includes(MIME);
+  const carriesReport = (types: readonly string[]) => types.includes(MIME);
 
   // A birthday or an out-of-office block is not a sitting anyone recorded.
   const droppable = onDropReport && isRecordable(event);
@@ -51,7 +61,8 @@ export default function EventRow({
         onDragLeave: (drag: React.DragEvent) => {
           // dragleave also fires when the pointer crosses into a child, which
           // made the highlight flicker off over the title and the button.
-          if (drag.currentTarget.contains(drag.relatedTarget as Node | null)) return;
+          if (drag.currentTarget.contains(drag.relatedTarget as Node | null))
+            return;
           setOver(false);
         },
         onDrop: (drag: React.DragEvent) => {
@@ -71,7 +82,21 @@ export default function EventRow({
     >
       <span className="event-time">{timeLabel(event)}</span>
       <span className="event-body">
-        <strong title={event.title}>{event.title}</strong>
+        <strong title={event.title}>
+          {source ? (
+            <a
+              className="calendar-source-link"
+              href={source}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`${event.title} beim Kalenderanbieter öffnen (neuer Tab)`}
+            >
+              {event.title} <ExternalLink size={12} aria-hidden="true" />
+            </a>
+          ) : (
+            event.title
+          )}
+        </strong>
         {guests && (
           <small>
             <Users size={12} aria-hidden="true" />

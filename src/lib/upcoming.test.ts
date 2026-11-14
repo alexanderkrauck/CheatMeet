@@ -10,6 +10,7 @@ import {
   isRecordable,
   isRunning,
   timeLabel,
+  providerEventUrl,
 } from "./upcoming";
 import type { CalendarEvent } from "./calendar";
 
@@ -35,7 +36,9 @@ const now = at(8, 0);
 describe("hasGuests", () => {
   it("separates a meeting from a personal block", () => {
     expect(hasGuests(event())).toBe(true);
-    expect(hasGuests(event({ title: "krauckie gym", attendees: [] }))).toBe(false);
+    expect(hasGuests(event({ title: "krauckie gym", attendees: [] }))).toBe(
+      false,
+    );
   });
 });
 
@@ -93,7 +96,12 @@ describe("imminentMeeting", () => {
   it("alerts for an entry without attendees — guests rank, they do not gate", () => {
     // The regression this exists to prevent: a calendar whose meetings carry
     // no attendee list produced no alert at all, and read as broken.
-    const solo = event({ id: "s", attendees: [], startMs: at(8, 10), endMs: at(9) });
+    const solo = event({
+      id: "s",
+      attendees: [],
+      startMs: at(8, 10),
+      endMs: at(9),
+    });
     expect(imminentMeeting([solo], now)?.id).toBe("s");
   });
 
@@ -117,13 +125,46 @@ describe("imminentMeeting", () => {
   });
 
   it("takes the soonest, then prefers one with people in it", () => {
-    const solo = event({ id: "s", attendees: [], startMs: at(8, 20), endMs: at(9) });
+    const solo = event({
+      id: "s",
+      attendees: [],
+      startMs: at(8, 20),
+      endMs: at(9),
+    });
     expect(imminentMeeting([solo, call], now)?.id).toBe("c");
-    const sooner = event({ id: "x", attendees: [], startMs: at(8, 5), endMs: at(9) });
+    const sooner = event({
+      id: "x",
+      attendees: [],
+      startMs: at(8, 5),
+      endMs: at(9),
+    });
     expect(imminentMeeting([sooner, call], now)?.id).toBe("x");
   });
 });
 
+it("opens only an existing HTTPS event link from the matching provider", () => {
+  expect(
+    providerEventUrl(
+      event({ htmlLink: "https://calendar.google.com/calendar/event?eid=x" }),
+    ),
+  ).toContain("eid=x");
+  expect(
+    providerEventUrl(
+      event({
+        provider: "microsoft",
+        htmlLink: "https://outlook.office.com/calendar/item/x",
+      }),
+    ),
+  ).toContain("/item/x");
+  for (const htmlLink of [
+    "javascript:alert(1)",
+    "https://calendar.google.com.evil.test/x",
+    "https://outlook.office.com/calendar/item/x",
+    "https://user:pass@calendar.google.com/x",
+  ])
+    expect(providerEventUrl(event({ htmlLink }))).toBeUndefined();
+  expect(providerEventUrl(event())).toBeUndefined();
+});
 describe("eventLine", () => {
   it("gives the range and the guests, where the picker used to show a bare start", () => {
     expect(eventLine(event())).toBe("09:30–10:30 · Maik Retzlaff");
@@ -180,10 +221,16 @@ describe("countdownLabel", () => {
     const tomorrow = event({ startMs: at(9, 0, 17), endMs: at(10, 0, 17) });
     expect(countdownLabel(tomorrow, now)).toBe("morgen 09:00");
     const later = event({ startMs: at(9, 0, 19), endMs: at(10, 0, 19) });
-    expect(countdownLabel(later, now)).toMatch(/^(Mo|Di|Mi|Do|Fr|Sa|So)\.? 09:00$/);
+    expect(countdownLabel(later, now)).toMatch(
+      /^(Mo|Di|Mi|Do|Fr|Sa|So)\.? 09:00$/,
+    );
   });
   it("drops the clock time for an all-day entry", () => {
-    const allDay = event({ allDay: true, startMs: at(0, 0, 17), endMs: at(0, 0, 18) });
+    const allDay = event({
+      allDay: true,
+      startMs: at(0, 0, 17),
+      endMs: at(0, 0, 18),
+    });
     expect(countdownLabel(allDay, now)).toBe("morgen");
   });
 });
@@ -191,9 +238,9 @@ describe("countdownLabel", () => {
 describe("guestLabel", () => {
   it("names a small group and counts a large one", () => {
     expect(guestLabel(event({ attendees: ["Anna", "Ben"] }))).toBe("Anna, Ben");
-    expect(guestLabel(event({ attendees: ["Anna", "Ben", "Clara", "Dora"] }))).toBe(
-      "Anna, Ben +2",
-    );
+    expect(
+      guestLabel(event({ attendees: ["Anna", "Ben", "Clara", "Dora"] })),
+    ).toBe("Anna, Ben +2");
   });
   it("is empty for a solo block", () => {
     expect(guestLabel(event({ attendees: [] }))).toBe("");
@@ -213,7 +260,11 @@ describe("events that cross midnight or fill a day", () => {
     expect(timeLabel(event())).toBe("09:30–10:30");
   });
   it("never counts an all-day entry down to midnight", () => {
-    const allDay = event({ allDay: true, startMs: at(0, 0, 17), endMs: at(0, 0, 18) });
+    const allDay = event({
+      allDay: true,
+      startMs: at(0, 0, 17),
+      endMs: at(0, 0, 18),
+    });
     // 23:50 the night before: the minute branch would have said "in 10 Min".
     expect(countdownLabel(allDay, at(23, 50))).toBe("morgen");
     expect(countdownLabel(allDay, at(14, 0))).toBe("morgen");

@@ -1,3 +1,6 @@
+import { canReleaseCapture } from "./capture";
+import { activeJobs } from "./pipeline";
+
 /**
  * PWA install and update state, held outside React so the banner and the
  * settings page see the same thing. `beforeinstallprompt` fires once, early —
@@ -79,12 +82,29 @@ export async function runInstall() {
   }
 }
 
+export function canApplyUpdate() {
+  return canReleaseCapture() && !activeJobs().some(job => !job.serverOwned);
+}
+
+let requestedUpdate: ServiceWorker | null = null;
+let activatedUpdate: ServiceWorker | null = null;
 export function applyUpdate() {
-  // The user opts in; an auto-update must never discard an unsaved recording.
+  // Recheck at the click, not only during render: capture can start elsewhere.
+  const update = state.update;
+  if (!update || !canApplyUpdate()) return;
+  if (activatedUpdate === update || update.state === "activated") {
+    window.location.reload();
+    return;
+  }
+  if (requestedUpdate === update) return;
+  requestedUpdate = update;
   navigator.serviceWorker.addEventListener(
     "controllerchange",
-    () => window.location.reload(),
+    () => {
+      activatedUpdate = update;
+      if (canApplyUpdate()) window.location.reload();
+    },
     { once: true },
   );
-  state.update?.postMessage({ type: "SKIP_WAITING" });
+  update.postMessage({ type: "SKIP_WAITING" });
 }

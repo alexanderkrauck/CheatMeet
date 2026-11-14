@@ -14,12 +14,31 @@ import {
   listServerProcessing,
   resetProcessingConfig,
 } from "./serverProcessing";
+import { processingSourceKey } from '../../shared/processing';
 
 beforeEach(() => {
   mocks.auth.currentUser = { uid: "alice", getIdToken: async () => "identity" };
   mocks.fetch.mockReset();
   vi.stubGlobal("fetch", mocks.fetch);
   resetProcessingConfig();
+});
+it("safely refuses forgetting a job after an owner switch and dispatches the authenticated terminal-job forget API", async () => {
+  mocks.fetch.mockResolvedValue(Response.json({ forgotten: true }));
+  const { forgetServerProcessing } = await import("./serverProcessing");
+  await forgetServerProcessing("alice", "m1");
+  expect(mocks.fetch).toHaveBeenCalledWith("/api/processing/m1/forget", expect.objectContaining({ method: "POST", body: "{}" }));
+  await expect(forgetServerProcessing("bob", "m1")).rejects.toThrow("Konto");
+  expect(mocks.fetch).toHaveBeenCalledTimes(1);
+});
+it('pins expected lookup and forget without leaking transcript and rejects a sibling result',async()=>{
+  const r={id:'m1',date:'2026-11-13',title:'Meeting',summary:'',transcription:'private',todos:[],takeaways:[],driveFolderId:'folder',driveReportId:'json'};
+  mocks.fetch.mockResolvedValue(Response.json({job:{reportId:'m1',state:'done',storage:'google'},report:{...r,driveFolderId:'sibling'}}));
+  await expect(getServerProcessing('m1',r)).rejects.toThrow(/Speicherort/);
+  expect(mocks.fetch.mock.calls[0][0]).toContain(encodeURIComponent(processingSourceKey(r)));
+  mocks.fetch.mockResolvedValue(Response.json({forgotten:true}));
+  const {forgetServerProcessing}=await import('./serverProcessing');
+  await forgetServerProcessing('alice','m1',r);
+  expect(JSON.parse(mocks.fetch.mock.calls[1][1].body)).toEqual({source:processingSourceKey(r)});
 });
 it("only caches a successful configuration response", async () => {
   mocks.fetch.mockRejectedValueOnce(new TypeError("offline"));
@@ -64,7 +83,7 @@ it("submits durable references, not transcript/audio or Google credentials", asy
 it("submits Microsoft home refs with the new-consumer header, never legacy Google IDs", async () => {
   mocks.fetch.mockResolvedValue(
     Response.json(
-      { job: { reportId: "ms", state: "queued" } },
+      { job: { reportId: "ms", state: "queued", storage: "microsoft" } },
       { status: 202 },
     ),
   );

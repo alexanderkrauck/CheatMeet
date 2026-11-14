@@ -18,8 +18,8 @@ import { objectors, type ConsentDecision, type ConsentSource, type ConsentStance
  *
  * Two columns on purpose: the notice and the box that rewrites it sit
  * together, so it is obvious what the typing changes, and everything that is
- * merely a setting moves out of the reading path. Nothing scrolls — the step
- * has to be readable at a glance while someone is waiting on the call.
+ * merely a setting moves out of the reading path. On small screens the notice
+ * stays keyboard-scrollable while someone is waiting on the call.
  *
  * The notice is not editable free text: hand-editing would let the retention
  * promise or the processors be deleted out of it, which is exactly the
@@ -93,6 +93,8 @@ export function ArmedMeeting({
         {options.map(([option, caption]) => (
           <button
             key={String(option)}
+            type="button"
+            aria-pressed={decision[field] === option}
             className={decision[field] === option ? "is-selected" : ""}
             onClick={() => onDecision({ [field]: option } as Partial<ConsentDecision>)}
           >
@@ -118,11 +120,12 @@ export function ArmedMeeting({
             </button>
           )}
         </div>
-        <p className="consent-text">{text}</p>
+        <p className="consent-text" tabIndex={0} role="region" aria-label="Einwilligungstext zum Vorlesen">{text}</p>
 
         <div className="consent-ask">
           <input
             value={instruction}
+            aria-label="Hinweis zum Umformulieren der Einwilligung"
             placeholder="Wer ist dabei, worum geht es? Dann formuliere ich es passend."
             maxLength={500}
             disabled={drafting}
@@ -187,7 +190,7 @@ export function ArmedMeeting({
           {decision.participants.map((entry) => (
             <div className="consent-person" key={entry.name}>
               <strong>{entry.name}</strong>
-              <div className="consent-choice">
+              <div className="consent-choice" role="group" aria-label={`Zustimmung von ${entry.name}`}>
                 {(
                   [
                     ["agreed", "Ja"],
@@ -197,9 +200,11 @@ export function ArmedMeeting({
                 ).map(([stance, caption]) => (
                   <button
                     key={stance}
+                    type="button"
+                    aria-pressed={entry.stance === stance}
                     className={entry.stance === stance ? `is-${stance}` : ""}
                     onClick={() => setStance(entry.name, stance)}
-                    aria-label={`${entry.name}: ${caption}`}
+                    aria-label={`${entry.name}: ${stance === "silent" ? "Noch nicht zugestimmt" : caption}`}
                   >
                     {caption}
                   </button>
@@ -236,13 +241,14 @@ export function ArmedMeeting({
           <div className="consent-add">
             <input
               value={person}
+              aria-label="Name der hinzuzufügenden Person"
               list={PEOPLE_LIST_ID}
               placeholder="Name hinzufügen"
               maxLength={80}
               onChange={(event) => setPerson(event.target.value)}
               onKeyDown={(event) => event.key === "Enter" && addPerson()}
             />
-            <button onClick={addPerson} disabled={!person.trim()}>
+            <button type="button" aria-label="Person hinzufügen" onClick={addPerson} disabled={!person.trim()}>
               <Plus size={16} />
             </button>
           </div>

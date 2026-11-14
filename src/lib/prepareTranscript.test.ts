@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   putDraft: vi.fn(),
   getDraft: vi.fn(),
   putLocal: vi.fn(),
+  getLocal: vi.fn(),
   fetch: vi.fn(),
 }));
 vi.mock("./firebase", () => ({ auth: mocks.auth, db: {} }));
@@ -16,6 +17,8 @@ vi.mock("firebase/firestore", () => ({
   getDoc: async () => ({ exists: () => false }),
 }));
 vi.mock("./local", () => ({
+  ReportConflictError: class extends Error { constructor() { super("Neuere Fassung laden"); this.name = "ReportConflictError"; } },
+  getLocal: mocks.getLocal,
   putDraft: mocks.putDraft,
   getDraft: mocks.getDraft,
   putLocal: mocks.putLocal,
@@ -74,12 +77,37 @@ beforeEach(() => {
   mocks.fetch.mockReset();
   mocks.putDraft.mockReset();
   mocks.getDraft.mockReset();
-  mocks.putLocal.mockReset();
+  let stored: any;
+  mocks.putLocal.mockReset().mockImplementation(async (_owner, next, _dirty = true, expected) => {
+    if (expected !== undefined && expected !== (stored?.report.updatedAt ?? null)) throw Object.assign(new Error("Neuere Fassung laden"), { name: "ReportConflictError" });
+    stored = { report: structuredClone(next), dirty: true };
+  });
+  mocks.getLocal.mockReset().mockImplementation(async () => stored && structuredClone(stored));
   vi.stubGlobal("fetch", mocks.fetch);
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+it("does not replace a human transcript with a late ASR checkpoint", async () => {
+  const d = draft();
+  d.retranscribe = true;
+  d.report.updatedAt = "2026-11-01T00:00:00.000Z";
+  let stored = structuredClone(d.report);
+  mocks.getLocal.mockImplementation(async () => ({ report: structuredClone(stored), dirty: true }));
+  mocks.putLocal.mockImplementation(async (_owner, next, _dirty, expected) => {
+    if (expected !== undefined && expected !== stored.updatedAt) throw Object.assign(new Error("Neuere Fassung laden"), { name: "ReportConflictError" });
+    stored = structuredClone(next);
+  });
+  mocks.fetch.mockImplementation(async () => {
+    stored = { ...stored, title: "Menschliche Korrektur", transcription: "Exakt korrigiert", updatedAt: "2026-11-02T00:00:00.000Z" };
+    return Response.json(final());
+  });
+  await expect(prepareTranscript(d)).rejects.toMatchObject({ name: "ReportConflictError" });
+  expect(stored).toMatchObject({ title: "Menschliche Korrektur", transcription: "Exakt korrigiert" });
+  expect(mocks.putDraft).not.toHaveBeenCalled();
+  expect(d.retranscribe).toBe(true);
 });
 
 it("checkpoints the final transcript before summarizing, and ignores the summary model's echoed transcript", async () => {
@@ -362,10 +390,12 @@ it("shares a locally finalized live transcript with concurrent callers without a
   mocks.getDraft.mockImplementation(async () => first);
   const one = prepareTranscript(first);
   const two = prepareTranscript(second);
+  await vi.advanceTimersByTimeAsync(0);
   release();
   await Promise.all([one, two]);
   expect(second.report.speech?.phase).toBe("final");
   expect(second.report.transcriptionOrigin).toBe("live");
+  expect(second.report.updatedAt).toBe(first.report.updatedAt);
   expect(mocks.fetch).not.toHaveBeenCalled();
 });
 

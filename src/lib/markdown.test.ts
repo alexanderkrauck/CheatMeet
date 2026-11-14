@@ -59,6 +59,18 @@ describe("reportToMarkdown", () => {
       "Invalid Date",
     );
   });
+
+  it("links a OneDrive archive without turning opaque item IDs into Google audio links", () => {
+    const md = reportToMarkdown(report({
+      home: { provider: "microsoft", connectionId: "account", driveId: "drive", rootId: "root", rootName: "QA",
+        folderId: "folder", audioId: "opaque-audio", transcriptId: "opaque-text", consentId: "opaque-consent",
+        webUrl: "https://qa.sharepoint.com/QA/Meeting%20(review)" },
+      rawAudioUrl: "legacy-id", driveTranscriptId: "legacy-text", driveConsentId: "legacy-consent",
+    }));
+    expect(md).toContain("[Dateiarchiv in OneDrive](https://qa.sharepoint.com/QA/Meeting%20%28review%29)");
+    expect(md).not.toContain("drive.google.com");
+    expect(md).not.toContain("opaque-audio");
+  });
 });
 
 const consent = (

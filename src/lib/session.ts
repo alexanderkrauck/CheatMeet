@@ -1,11 +1,11 @@
 import {
   GoogleAuthProvider,
   getAdditionalUserInfo,
-  linkWithCredential,
   linkWithPopup,
+  reload,
   reauthenticateWithPopup,
-  signInWithCredential,
   signInWithPopup,
+  unlink,
 } from "firebase/auth";
 import { auth, provider } from "./firebase";
 import {markIdentitySetup} from './identitySetup';
@@ -134,6 +134,8 @@ export function subscribeDriveSession(onChange: () => void) {
 
 let serverAuth: Promise<boolean> | null = null;
 let inFlight: Promise<string | null> | null = null;
+let grantRevision = 0;
+const revokingOwners = new Set<string>();
 let refresher: number | undefined;
 
 /**
@@ -174,6 +176,7 @@ function reportRevoked(message: string) {
 export async function ensureDriveToken(
   minValidityMs = RENEW_MARGIN_MS,
 ): Promise<string | null> {
+  if (auth.currentUser && revokingOwners.has(auth.currentUser.uid)) return null;
   const cached = driveToken(minValidityMs);
   if (cached) return cached;
   const user = auth.currentUser;
@@ -181,7 +184,9 @@ export async function ensureDriveToken(
   // Pin the identity before the first await: the signed-in account can change
   // while this runs, and a token minted for one user must never reach another.
   const owner = user.uid;
+  const revision = grantRevision;
   if (!(await serverAuthAvailable())) return driveToken(minValidityMs);
+  if (auth.currentUser?.uid !== owner || revision !== grantRevision) return null;
   // One request at a time: several uploads starting together must not each
   // mint their own token.
   const mint = (inFlight ||= (async () => {
@@ -193,7 +198,7 @@ export async function ensureDriveToken(
         signal: AbortSignal.timeout(20_000),
       });
       const data = await response.json().catch(() => ({}));
-      if (auth.currentUser?.uid !== owner) return null;
+      if (auth.currentUser?.uid !== owner || revision !== grantRevision) return null;
       if (response.status === 403 && data.reauth) {
         if(data.reason==='no_grant')rememberToken(undefined);
         else reportRevoked(data.error || "Google Drive ist nicht mehr freigegeben.");
@@ -233,29 +238,52 @@ export function stopDriveTokenRefresh() {
 }
 
 /**
- * Drops the server-held grant. Google revokes for the whole OAuth client, so
- * this ends Drive access on every device — which is why it is an explicit
- * action in settings and never a side effect of signing out.
+ * Explicitly contain local credentials and request provider-wide revocation.
+ * Resolve only on confirmed provider success; partial/unknown results throw a
+ * German warning. Ordinary sign-out never calls this action.
  */
 export async function revokeDriveGrant(): Promise<void> {
-  if (!auth.currentUser) throw new Error("Bitte zuerst anmelden.");
-  if (!(await serverAuthAvailable()))
-    throw new Error(
-      "Diese Installation verwaltet den Drive-Zugriff nicht serverseitig. Bitte den Zugriff direkt im Google-Konto entziehen.",
-    );
-  const idToken = await auth.currentUser.getIdToken().catch(() => null);
-  if (!idToken) throw new Error("Bitte erneut anmelden.");
-  // Swallowing this told the user their access was revoked everywhere when it
-  // may not have been revoked anywhere.
-  const response = await fetch("/api/auth/revoke", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${idToken}` },
-    signal: AbortSignal.timeout(10_000),
-  }).catch(() => null);
-  if (!response || !response.ok)
-    throw new Error(
-      "Der Zugriff konnte bei Google nicht widerrufen werden. Bitte im Google-Konto unter „Drittanbieter-Apps“ prüfen.",
-    );
+  const user = auth.currentUser;
+  if (!user) throw new Error("Bitte zuerst anmelden.");
+  const owner = user.uid;
+  if (revokingOwners.has(owner)) throw Error("Die Google-Verbindung wird bereits getrennt.");
+  revokingOwners.add(owner);
+  const check = () => { if (auth.currentUser?.uid !== owner) throw Error("Das angemeldete Konto hat sich geändert."); };
+  // Also discard a mint already in flight; deleting storage alone lets its late
+  // response put the old credential back. No sign-out or provider revoke on logout.
+  grantRevision++;
+  stopDriveTokenRefresh();
+  rememberToken(undefined);
+  try {
+    if (!(await serverAuthAvailable()))
+      throw new Error(
+        "Diese Installation verwaltet den Drive-Zugriff nicht serverseitig. Bitte den Zugriff direkt im Google-Konto entziehen.",
+      );
+    check();
+    const idToken = await user.getIdToken().catch(() => null);
+    check();
+    if (!idToken) throw new Error("Bitte erneut anmelden.");
+    // A failed provider call is not confirmed provider-wide revocation.
+    const response = await fetch("/api/auth/revoke", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${idToken}` },
+      signal: AbortSignal.timeout(30_000),
+    }).catch(() => null);
+    check();
+    const data = await response?.json().catch(() => ({}));
+    check();
+    if (!response?.ok || data?.revoked !== true)
+      throw new Error(
+        typeof data?.warning === "string" ? data.warning : "Der lokale Google-Zugriff wurde in diesem Tab beendet. Der Widerruf bei Google ist nicht bestätigt. Bitte im Google-Konto unter „Drittanbieter-Apps“ den Drive-/Kalender-Zugriff prüfen; laufende Verarbeitung kann unterbrochen werden.",
+      );
+  } finally {
+    revokingOwners.delete(owner);
+    if (auth.currentUser?.uid === owner) {
+      grantRevision++;
+      inFlight = null;
+      rememberToken(undefined);
+    }
+  }
 }
 
 /** The Google account id inside an unverified id_token, for comparison only. */
@@ -271,10 +299,10 @@ function googleSubjectOf(idToken: string): string {
 }
 
 /** Runs the server's consent flow in a popup and resolves the Google id_token. */
-function consentPopup(): Promise<string> {
+function consentPopup(url = "/api/auth/google/start"): Promise<string> {
   return new Promise((resolve, reject) => {
     const popup = window.open(
-      "/api/auth/google/start",
+      url,
       "cheatmeet-oauth",
       "width=520,height=640",
     );
@@ -292,7 +320,7 @@ function consentPopup(): Promise<string> {
       fn();
     };
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
+      if (event.origin !== window.location.origin || event.source !== popup) return;
       const data = event.data as { source?: string; idToken?: string; error?: string };
       if (data?.source !== "cheatmeet-oauth") return;
       if (data.idToken) done(() => resolve(data.idToken!));
@@ -325,26 +353,67 @@ export async function linkGoogleIdentity():Promise<void>{
   const result=await linkWithPopup(user,new GoogleAuthProvider());
   if(auth.currentUser?.uid!==owner||result.user.uid!==owner)throw Error('Das angemeldete Konto hat sich geändert. Die Verknüpfung wurde nicht übernommen.');
 }
+/** Remove only a login method, never provider files, grants or workspace data. */
+export async function unlinkGoogleIdentity(): Promise<void> {
+  const user = auth.currentUser;
+  if (!user) throw Error("Bitte zuerst mit dem bestehenden Konto anmelden.");
+  const owner = user.uid;
+  const check = () => {
+    if (auth.currentUser?.uid !== owner) throw Error("Das angemeldete Konto hat sich geändert.");
+    if (!user.providerData.some(p => p.providerId === "google.com")) throw Error("Google ist nicht als Anmeldung verknüpft.");
+    if (!user.providerData.some(p => p.providerId === "microsoft.com")) throw Error("Die letzte Anmeldemethode kann nicht entfernt werden. Bitte zuerst eine weitere Anmeldung verknüpfen.");
+  };
+  try {
+    await reload(user);
+    check();
+    const identity = await user.getIdToken(true);
+    check();
+    const response = await fetch("/api/auth/google/preserve", {method: "POST", headers: {Authorization: `Bearer ${identity}`}, signal: AbortSignal.timeout(30_000)});
+    check();
+    const data = await response.json().catch(() => ({}));
+    check();
+    if (!response.ok || data.preserved !== true) throw Error(typeof data.error === "string" ? data.error : "Der Google-Zugriff konnte nicht sicher vom Login getrennt werden. Bitte später erneut versuchen. Die Anmeldung bleibt verknüpft.");
+    await reload(user);
+    check();
+    await unlink(user, "google.com");
+    if (auth.currentUser?.uid !== owner) throw Error("Das angemeldete Konto hat sich geändert.");
+    await user.getIdToken(true);
+    if (auth.currentUser?.uid !== owner) throw Error("Das angemeldete Konto hat sich geändert.");
+  } catch (error) {
+    if ((error as {code?: string})?.code === "auth/requires-recent-login") throw Error("Bitte erneut anmelden und die Anmeldemethode danach entfernen. Die Verknüpfung wurde nicht entfernt.");
+    throw error;
+  }
+}
 export async function connectGoogle(): Promise<string> {
   const startingUser=auth.currentUser;
   const owner=startingUser?.uid;
+  if (!startingUser) throw Error("Bitte zuerst anmelden. Google-Datenzugriff und Anmeldung sind getrennt.");
   const check=()=>{if(auth.currentUser?.uid!==owner)throw new Error("Das angemeldete Konto hat sich geändert.");};
   if (await serverAuthAvailable()) {
     check();
-    // One consent screen: the server keeps the refresh token and hands back the
-    // identity, which Firebase then adopts.
+    // Data consent is bound to the existing UID; it never adopts/adds a login.
     const previous = auth.currentUser?.providerData.find(
       (p) => p.providerId === "google.com",
     )?.uid;
-    const idToken = await consentPopup();
+    const identity = await startingUser.getIdToken();
+    check();
+    const start = await fetch("/api/auth/google/start", {method:"POST",headers:{Authorization:`Bearer ${identity}`},signal:AbortSignal.timeout(20_000)});
+    check();
+    const data = await start.json().catch(() => ({}));
+    check();
+    if (!start.ok || typeof data.url !== "string") throw Error("Google-Verbindung konnte nicht gestartet werden. Bitte erneut versuchen.");
+    const target = new URL(data.url);
+    if (target.origin !== "https://accounts.google.com") throw Error("Ungültige Google-Anmeldeadresse.");
+    const idToken = await consentPopup(target.href);
     check();
     const granted = googleSubjectOf(idToken);
     if (previous && previous !== granted)
       throw new Error(
         "Bitte dasselbe Google-Konto wie bei der Anmeldung verwenden.",
       );
-    if(startingUser && !previous) await linkWithCredential(startingUser,GoogleAuthProvider.credential(idToken));
-    else await signInWithCredential(auth, GoogleAuthProvider.credential(idToken));
+    grantRevision++;
+    inFlight = null;
+    rememberToken(undefined);
     const token = await ensureDriveToken(0);
     if (!token)
       throw new Error(
@@ -354,13 +423,12 @@ export async function connectGoogle(): Promise<string> {
     return token;
   }
   check();
-  const result = startingUser
-    ? startingUser.providerData?.some(p=>p.providerId==="google.com")
-      ? await reauthenticateWithPopup(startingUser, provider)
-      : await linkWithPopup(startingUser,provider)
-    : await signInWithPopup(auth, provider);
+  if (!startingUser.providerData?.some(p=>p.providerId==="google.com"))
+    throw Error("Google-Datenzugriff ohne zusätzliche Anmeldung benötigt die serverseitige Google-Verbindung. Bitte die Einrichtung dieser Installation prüfen. Es wurde keine Anmeldemethode hinzugefügt.");
+  const result = await reauthenticateWithPopup(startingUser, provider);
+  check();
   const token = GoogleAuthProvider.credentialFromResult(result)?.accessToken;
-  rememberToken(token);
+  rememberToken(token, TOKEN_LIFETIME_MS, owner);
   if (!token)
     throw new Error(
       "Google Drive wurde nicht freigegeben. Bitte erneut verbinden.",

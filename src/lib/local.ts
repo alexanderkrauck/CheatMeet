@@ -10,7 +10,7 @@ import {
   getMany,
 } from "idb-keyval";
 import { asTodos } from "../../shared/analysis";
-import { isRecoveredProcessingStub, mergeRemoteReport } from "./reportProjection";
+import { isRecoveredProcessingStub, mergeRemoteReport, transcriptRevisionOf } from "./reportProjection";
 import type { Draft, ReportData } from "../types";
 import {archiveAudioId,archiveReportId,archiveSyncedAt} from "../../shared/storage";
 const store = createStore("cheatmeet", "workspace");
@@ -50,8 +50,24 @@ export function watchDrafts(uid: string, onChange: () => void) {
   draftListeners.add(listener);
   return () => { draftListeners.delete(listener); };
 }
-export async function putLocal(uid: string, report: ReportData, dirty = true) {
-  await set(key(report.home ? `${uid}:microsoft` : uid, report.id), { report, dirty }, store);
+export class ReportConflictError extends Error {
+  constructor() {
+    super("Dieses Meeting wurde inzwischen geändert. Bitte die neuere Fassung laden; deine Änderungen wurden nicht überschrieben.");
+    this.name = "ReportConflictError";
+  }
+}
+function versioned(report: ReportData): ReportData {
+  const revision = transcriptRevisionOf(report);
+  return revision ? { ...report, transcriptRevision: revision } : report;
+}
+export async function putLocal(uid: string, report: ReportData, dirty = true, expectedUpdatedAt?: string | null) {
+  const target = key(report.home ? `${uid}:microsoft` : uid, report.id);
+  const next = { report: versioned(report), dirty };
+  if (expectedUpdatedAt === undefined) await set(target, next, store);
+  else await update<LocalReport>(target, existing => {
+    if ((existing?.report.updatedAt ?? null) !== expectedUpdatedAt) throw new ReportConflictError();
+    return next;
+  }, store);
   emit(uid);
 }
 // Check and update in one IndexedDB transaction: an older cloud response must not
@@ -74,7 +90,7 @@ export async function acceptRemoteReport(uid: string, report: ReportData) {
       // revision it would otherwise replace the full copy on the very device
       // that recorded it.
       return {
-        report: mergeRemoteReport(existing?.report, report),
+        report: versioned(mergeRemoteReport(existing?.report, report)),
         dirty: false,
       };
     },
@@ -88,15 +104,38 @@ const normalise = (value: LocalReport): LocalReport => ({
   report: { ...value.report, todos: asTodos(value.report.todos) },
 });
 
-/** Removes this device's copy of one report. */
-export async function dropLocal(uid: string, id: string) {
-  await del(key(uid, id), store);
-  await del(key(`${uid}:microsoft`, id), store);
-  emit(uid);
+/** Removes this device's copy. An authoritative index snapshot may only drop
+ * the exact clean revision it observed, never an edit saved during its read. */
+export async function dropLocal(uid: string, id: string, options?: { onlyIfClean?: boolean; index?: "reports" | "meetings"; expectedUpdatedAt?: string | null }) {
+  if (!options?.index) {
+    const selected = await getLocal(uid, id);
+    if (!selected) return;
+    options = {
+      expectedUpdatedAt: selected.report.updatedAt ?? null,
+      ...options,
+      index: selected.report.home ? "meetings" : "reports",
+    };
+  }
+  let changed = false;
+  const namespaces = options.index === "reports" ? [uid] : options.index === "meetings" ? [`${uid}:microsoft`] : [uid, `${uid}:microsoft`];
+  for (const namespace of namespaces) await update<LocalReport | undefined>(key(namespace, id), existing => {
+    if (!existing || (options.onlyIfClean && existing.dirty) || (options.expectedUpdatedAt !== undefined && (existing.report.updatedAt ?? null) !== options.expectedUpdatedAt)) return existing;
+    changed = true;
+    // An empty slot removes all report content in the same IDB transaction.
+    // A subsequent separate delete would race and could erase a newer edit.
+    return undefined;
+  }, store);
+  if (changed) emit(uid);
 }
 
-export const getLocal = async (uid: string, id: string) => {
-  const found = await get<LocalReport>(key(`${uid}:microsoft`, id), store) || await get<LocalReport>(key(uid, id), store);
+/** A pinned index reads only that namespace; bare IDs must be unambiguous. */
+export const getLocal = async (uid: string, id: string, options?: { index: "reports" | "meetings" }) => {
+  const values = options
+    ? [await get<LocalReport>(key(options.index === "meetings" ? `${uid}:microsoft` : uid, id), store)]
+    : await getMany<LocalReport>([key(uid, id), key(`${uid}:microsoft`, id)], store);
+  const matches = values.filter(Boolean);
+  if (matches.length > 1) throw new Error("Diese Meeting-ID ist mehrdeutig. Bitte den gewünschten Bericht über die Übersicht öffnen.");
+  const found = matches[0];
   return found && normalise(found);
 };
 /**
@@ -288,7 +327,9 @@ export async function getDraft(
 ): Promise<Draft | undefined> {
   if (!namespaceOnly) {
     const drafts=await Promise.all([getDraft(`${uid}:microsoft`,id,true),getDraft(uid,id,true)]);
-    return drafts.filter((d):d is Draft=>!!d).sort((a,b)=>(b.report.updatedAt || b.report.date).localeCompare(a.report.updatedAt || a.report.date))[0];
+    const matches = drafts.filter((d): d is Draft => !!d);
+    if (id && matches.length > 1) throw new Error("Diese Meeting-ID ist mehrdeutig. Bitte den gewünschten Bericht über die Übersicht öffnen.");
+    return matches.sort((a,b)=>(b.report.updatedAt || b.report.date).localeCompare(a.report.updatedAt || a.report.date))[0];
   }
   await migrateDraft(uid);
   const selected = id || (await get<string>(activeDraftKey(uid), store));
@@ -305,10 +346,11 @@ export async function getDraft(
   return (await listDrafts(uid, {}, true))[0];
 }
 
-export async function deleteDraft(uid: string, id?: string) {
-  const draft = await getDraft(uid, id);
+export async function deleteDraft(uid: string, id?: string, options?: { index: "reports" | "meetings" }) {
+  if (options?.index === "meetings") uid = `${uid}:microsoft`;
+  const draft = await getDraft(uid, id, !!options);
   if (!draft) return;
-  if(draft.report.home) uid=`${uid}:microsoft`;
+  if (!options && draft.report.home) uid = `${uid}:microsoft`;
   const storedKeys = await keys<string>(store);
   await delMany(
     [

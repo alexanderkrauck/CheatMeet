@@ -46,6 +46,17 @@ describe("fileGrantStore", () => {
     expect(await fileGrantStore(root).get("sub-1")).toBe("refresh-abc");
   });
 
+  it("retains a credential-free revocation cutoff across restart and same-token recreation", async () => {
+    await fileGrantStore(root).set("sub-1","same-token");
+    await fileGrantStore(root).remove("sub-1");
+    const tombstone=await fileGrantStore(root).read!("sub-1");
+    expect(tombstone).toMatchObject({refreshToken:null,revokedAt:expect.any(Number)});
+    await fileGrantStore(root).set("sub-1","same-token");
+    const recreated=await fileGrantStore(root).read!("sub-1");
+    expect(recreated.revokedAt).toBe(tombstone.revokedAt);
+    expect(recreated.version).not.toBe(tombstone.version);
+  });
+
   it("never writes the account id into a filename", async () => {
     await fileGrantStore(root).set("user@example.com", "a");
     const [name] = await readdir(root);

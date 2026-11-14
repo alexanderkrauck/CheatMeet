@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { FileText, Mic, SearchX, X } from "lucide-react";
 import AttentionQueue from "../components/AttentionQueue";
-import MeetingRow from "../components/MeetingRow";
+import MeetingRow, { isArchivedWithoutReport } from "../components/MeetingRow";
 import NextMeeting from "../components/NextMeeting";
 import { Busy, Notice, dateLabel } from "../components/UI";
 import {
@@ -11,9 +11,10 @@ import {
   knownSpeakers,
   matchesQuery,
   plural,
+  type ReportSummary,
 } from "../lib/meetingMeta";
 import { rememberPeople } from "../lib/people";
-import { uid } from "../lib/reports";
+import { reportHref, uid } from "../lib/reports";
 import { useReports } from "../lib/useReports";
 
 const FILTERS = [
@@ -23,8 +24,8 @@ const FILTERS = [
 
 type Filter = (typeof FILTERS)[number]["id"];
 
-const inFilter = (status: string, filter: Filter) =>
-  filter === "all" || status !== "completed";
+const inFilter = (report: ReportSummary, filter: Filter, running = false) =>
+  filter === "all" || running || report.status !== "completed" && !isArchivedWithoutReport(report);
 
 export default function Dashboard() {
   const workspace = useReports();
@@ -32,7 +33,14 @@ export default function Dashboard() {
   const [params, setParams] = useSearchParams();
   const query = (params.get("q") || "").trim().toLowerCase();
   const [filter, setFilter] = useState<Filter>("all");
-  const [removalWarning, setRemovalWarning] = useState("");
+  const location = useLocation();
+  const [removalWarning, setRemovalWarning] = useState<string>(() =>
+    location.state?.deleteOutcome?.warnings?.join(" ") || "",
+  );
+  useEffect(() => {
+    if (location.state?.deleteOutcome?.warnings?.length)
+      setRemovalWarning(location.state.deleteOutcome.warnings.join(" "));
+  }, [location.key]);
 
   // The archive is the address book: every name already typed becomes a
   // suggestion the next time a speaker needs naming.
@@ -55,17 +63,17 @@ export default function Dashboard() {
   const counts = useMemo(
     () => ({
       all: found.length,
-      open: found.filter((r) => r.status !== "completed").length,
+      open: found.filter((r) => inFilter(r, "open", running.has(reportHref(r)))).length,
     }),
-    [found],
+    [found, running],
   );
   const groups = useMemo(
     () =>
       groupByMonth(
-        found.filter((report) => inFilter(report.status, filter)),
+        found.filter((report) => inFilter(report, filter, running.has(reportHref(report)))),
         new Date(),
       ),
-    [found, filter],
+    [found, filter, running],
   );
   const shown = groups.reduce((sum, group) => sum + group.reports.length, 0);
 
@@ -129,17 +137,17 @@ export default function Dashboard() {
 
       {loading ? (
         <Busy text="Meetings laden …" />
-      ) : error ? null : shown ? (
+      ) : shown ? (
         <div className="meeting-list">
           {groups.map((group) => (
             <section key={group.key || "undated"}>
               <h2 className="group-heading">{group.label}</h2>
               {group.reports.map((report) => (
                 <MeetingRow
-                  key={report.id}
+                  key={reportHref(report)}
                   report={report}
-                  dirty={dirty.includes(report.id)}
-                  running={running.has(report.id)}
+                  dirty={dirty.includes(reportHref(report))}
+                  running={running.has(reportHref(report))}
                   query={query}
                   onWarning={setRemovalWarning}
                 />
@@ -147,7 +155,7 @@ export default function Dashboard() {
             </section>
           ))}
         </div>
-      ) : (
+      ) : error ? null : (
         /* Three different reasons for an empty list, three different answers.
            None of them is shown while loading failed: the attention queue is
            already explaining that. */

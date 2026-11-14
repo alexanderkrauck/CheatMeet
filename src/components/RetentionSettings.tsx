@@ -25,19 +25,16 @@ export function RetentionSettings() {
     setSavedRetention(next);
   };
 
-  const row = (
-    field: keyof RetentionPolicy,
-    label: string,
-    hint: string,
-  ) => (
-    <label className="form-field">
-      <span>{label}</span>
+  const row = (field: keyof RetentionPolicy, label: string, hint: string) => (
+    <fieldset className="form-field">
+      <legend>{label}</legend>
       <div className="consent-choice">
         {CHOICES.map((choice) => (
           <button
             key={choice.label}
             type="button"
             className={policy[field] === choice.days ? "is-selected" : ""}
+            aria-pressed={policy[field] === choice.days}
             onClick={() => choose({ [field]: choice.days })}
           >
             {choice.label}
@@ -45,11 +42,15 @@ export function RetentionSettings() {
         ))}
       </div>
       <small className="muted">{hint}</small>
-    </label>
+    </fieldset>
   );
 
   return (
-    <section className="panel" aria-labelledby="retention-title">
+    <section
+      id="aufbewahrung"
+      className="panel"
+      aria-labelledby="retention-title"
+    >
       <div>
         <span className="eyebrow">AUFBEWAHRUNG</span>
         <h2 id="retention-title">Wie lange Aufnahmen bleiben</h2>
@@ -65,17 +66,17 @@ export function RetentionSettings() {
       )}
       <p className="muted">
         Transkript und Zusammenfassung werden nicht gelöscht. Sie sind das
-        Archiv — auch für spätere Recherche durch dich oder deine
-        KI-Werkzeuge — und der Einwilligungstext sagt genau das.
+        Archiv — auch für spätere Recherche durch dich oder deine KI-Werkzeuge —
+        und der Einwilligungstext sagt genau das.
       </p>
       <p className="muted small">
         Gelöscht wird, während CheatMeet auf einem deiner Geräte geöffnet ist:
-        es gibt keinen Server, der in deinem Drive aufräumt. Gelöschte Dateien
-        landen im Papierkorb von Google Drive und sind dort noch eine Weile
-        wiederherstellbar. Die Einstellung gilt nur für neue Meetings — jedes
-        bereits aufgenommene Meeting hält den Zeitraum ein, der in seiner
-        eigenen Einwilligung genannt wurde. Gespeichert wird sie auf diesem
-        Gerät.
+        der Zugriff auf den jeweiligen Speicher muss dafür verfügbar sein.
+        Audiodateien werden in den Papierkorb von Google Drive oder OneDrive
+        verschoben; dessen Aufbewahrung richtet sich nach dem Anbieter. Die
+        Einstellung gilt nur für neue Meetings — jedes bereits aufgenommene
+        Meeting hält den Zeitraum ein, der in seiner eigenen Einwilligung
+        genannt wurde. Gespeichert wird sie auf diesem Gerät.
       </p>
     </section>
   );

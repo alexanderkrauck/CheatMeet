@@ -5,8 +5,10 @@ import { assignReportToEvent } from "../lib/assignEvent";
 import { uid } from "../lib/reports";
 import { errorMessage } from "../lib/session";
 import { eventLine } from "../lib/upcoming";
+import { eventKey } from "../lib/dayAgenda";
 import type { CalendarEvent } from "../lib/calendar";
 import type { ReportSummary } from "../lib/meetingMeta";
+import { reportIndexCollection } from "../../shared/storage";
 
 /**
  * Connects a finished recording to the calendar entry it was held for, and
@@ -34,6 +36,7 @@ export default function AssignEvent({
   const [picked, setPicked] = useState<CalendarEvent | null>(event ?? null);
   const [writeBack, setWriteBack] = useState(true);
   const [busy, setBusy] = useState(false);
+  const committing = useRef(false);
   const [error, setError] = useState("");
 
   // Both call sites pass an inline arrow, so keying the open on onClose would
@@ -50,7 +53,8 @@ export default function AssignEvent({
   }, []);
 
   async function confirm() {
-    if (!picked) return;
+    if (!picked || committing.current) return;
+    committing.current = true;
     setBusy(true);
     setError("");
     try {
@@ -58,7 +62,7 @@ export default function AssignEvent({
         uid(),
         report.id,
         picked,
-        { writeBack },
+        { writeBack, index: reportIndexCollection(report) },
       );
       if (!assigned) {
         // Nothing was written; the dialog stays open and can be retried.
@@ -72,18 +76,37 @@ export default function AssignEvent({
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
+      committing.current = false;
       setBusy(false);
     }
   }
 
-  const relinking = report.calendarEventId && report.calendarEventId !== picked?.id;
+  const relinking =
+    report.calendarEventId &&
+    picked &&
+    eventKey({
+      id: report.calendarEventId,
+      calendarId: report.calendarId || "primary",
+      provider: report.calendarProvider,
+      connectionId: report.calendarConnectionId,
+    }) !== eventKey(picked);
 
   return createPortal(
-    <dialog className="confirm" ref={dialog} aria-labelledby={`assign-${report.id}`}>
+    <dialog
+      className="confirm"
+      ref={dialog}
+      aria-labelledby={`assign-${report.id}`}
+      aria-busy={busy}
+      onCancel={(e) => {
+        if (committing.current) e.preventDefault();
+      }}
+    >
       <h2 id={`assign-${report.id}`}>Termin zuordnen</h2>
       <p className="muted">
         „{report.title || "Unbenanntes Meeting"}“
-        {picked ? ` wird dem Termin „${picked.title}“ zugeordnet.` : " gehört zu welchem Termin?"}
+        {picked
+          ? ` wird dem Termin „${picked.title}“ zugeordnet.`
+          : " gehört zu welchem Termin?"}
       </p>
 
       {/* A drop already decided the target; the menu route keeps choosing. */}
@@ -98,7 +121,11 @@ export default function AssignEvent({
         <CalendarMatch
           atMs={Date.parse(report.date) || Date.now()}
           selectedId={picked?.id}
-          onPick={setPicked}
+          selectedEvent={picked || undefined}
+          disabled={busy}
+          onPick={(next) => {
+            if (!committing.current) setPicked(next);
+          }}
         />
       )}
 
@@ -106,13 +133,15 @@ export default function AssignEvent({
         <input
           type="checkbox"
           checked={writeBack}
+          disabled={busy}
           onChange={(e) => setWriteBack(e.target.checked)}
         />
         <span>
           <strong>Zusammenfassung in die Terminnotizen schreiben</strong>
           <small>
             Ergänzt die Notizen des Termins um Zusammenfassung, To-Dos und den
-            Drive-Link. Bestehender Text bleibt erhalten.
+            Archiv-Link. Bestehender Text bleibt erhalten; bei gleichzeitigen
+            Änderungen wird nicht überschrieben.
           </small>
         </span>
       </label>
@@ -124,6 +153,16 @@ export default function AssignEvent({
         </p>
       )}
 
+      <p className="calendar-archive-note muted small">
+        Die Zuordnung wird im Meeting gespeichert. Eine bestehende Archivdatei
+        muss danach über den Bericht aktualisiert werden.
+      </p>
+      {busy && (
+        <p className="calendar-assignment-pending muted small" role="status">
+          Die Zuordnung wird gespeichert. Der Vorgang kann jetzt nicht
+          abgebrochen werden.
+        </p>
+      )}
       {error && (
         <p className="notice" role="alert">
           {error}
@@ -131,7 +170,14 @@ export default function AssignEvent({
       )}
 
       <div className="confirm-actions">
-        <button type="button" className="btn" onClick={() => dialog.current?.close()}>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() => {
+            if (!committing.current) dialog.current?.close();
+          }}
+        >
           Abbrechen
         </button>
         <button
