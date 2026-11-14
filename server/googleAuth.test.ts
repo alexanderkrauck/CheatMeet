@@ -155,14 +155,20 @@ it("R10-S1 refuses stale revocation if the alias is replaced after its snapshot"
 });
 
 it("does not claim local disconnection when a new consent completes during failed provider revoke", async () => {
+  const clock=vi.spyOn(Date,"now").mockReturnValue(1000);
   const f=await fixture();
   await consent(f,"google-H","R1");
   const entered=deferred<void>();const failed=deferred<Response>();
   f.transport.mockImplementationOnce(async()=>{entered.resolve();return failed.promise;});
   const revoke=f.call("/auth/revoke",{});
   await entered.promise;
-  await consent(f,"google-H","R2");
-  failed.resolve(new Response("",{status:500}));
+  try {
+    const contained=await f.store.read!(uidGrantKey("owner"));
+    expect(contained.revokedAt).toBe(1000);
+    clock.mockReturnValue(contained.revokedAt!+1); // Fresh consent starts strictly after the cutoff.
+    await consent(f,"google-H","R2");
+  }
+  finally { failed.resolve(new Response("",{status:500})); }
   const response=await revoke;
   expect(await response.json()).toMatchObject({revoked:false,localDisconnected:false});
   expect(await f.store.get(uidGrantKey("owner"))).toBe("R2");
